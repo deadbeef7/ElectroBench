@@ -74,13 +74,15 @@ void renderScene() {
     unsigned int timet = SDL_GetTicks();
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glLoadIdentity();
-    glClearColor(0.25, 0.25, 0.25, 1.0);
+    glClearColor(1.0, 0.5, 0.001, 1.0);
 
 
     int rows = 9;
     int cols = 10;
 
     float spacing = 0.14f;
+
+    float active_scale = current_scroll * zoom_per_scroll;
 
     pos_z = -1.18f;
     float camera_shift_x = -0.6f;
@@ -96,7 +98,7 @@ void renderScene() {
 
             glRotatef(angle_x + (i + j) * 10.0f, 1.0f, 0.0f, 0.0f);
             glRotatef(angle_y + (i + j) * 15.0f, 0.0f, 1.0f, 0.0f);
-
+            glScalef(active_scale, active_scale, active_scale);
             model.draw();
 
             glPopMatrix();
@@ -197,6 +199,20 @@ void handleMouseEvent(SDL_Event &event) {
        is_holding_mouse = false;
      }
    }
+  else if (event.type == SDL_MOUSEWHEEL) {
+    if (event.wheel.y > 0) {
+      // Scroll Up: Increase zoom steps
+      current_scroll++;
+    }
+    else if (event.wheel.y < 0) {
+      // Scroll Down: Decrease zoom steps
+      current_scroll--;
+      // Prevent scrolling into negative sizes or inversion
+      if (current_scroll < 1) {
+        current_scroll = 1;
+      }
+    }
+  }
 }
 
 

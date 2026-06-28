@@ -1,8 +1,0 @@
-[requires]
-glew/2.2.0
-sdl/2.30.4
-opengl/system
-
-[generators]
-CMakeDeps
-CMakeToolchain
