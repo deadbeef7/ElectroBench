@@ -31,7 +31,7 @@ make
 
 Contributions are welcome, just post a PR / issue.
 
-**PS** : Sorry guys there are some heavy files I used to fix my tablet, until they're hosted in another repo they'll stay stuck here. :(
+**PS** : Sorry guys there are some heavy files I used to fix my tablet, until they're hosted in another repo they'll stay stuck here. :( (nvm when you clone only a symlink exists not the 3.6gb files cus it's LFS files)
 
 # Donating
 
