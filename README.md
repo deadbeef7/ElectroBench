@@ -13,6 +13,25 @@ You can move the camera by long-clicking and moving the mouse.
 
 <img width="1366" height="768" alt="screenshot-20260815-151152" src="https://github.com/user-attachments/assets/81cc2bcf-45fd-4bb9-b2fd-ecf357a5e0ff" />
 
+# PS1.4 Sea benchmark (3DMark2001 SE "Nature" recreation)
+
+The `ps14-sea-benchmark` branch adds a second, heavier benchmark written in **OpenGL 3.3 core** that recreates the pixel shader 1.4 workload from 3DMark2001 SE: an ocean under a cloudy sky with real-time reflections.
+
+What it renders :
+- A procedural **sky dome** with two layers of drifting fBm clouds, captured every frame into a **cubemap** (the PS1.4-era trick for dynamic reflections)
+- A **256x256 ocean grid** displaced on the GPU by a 6-octave wave function
+- Water shading structured like an asm `ps_1_4` shader: ripple-gradient **addressing** phase, a **dependent read** into the environment cubemap for reflections, then fresnel blending, sun **glitter**, foam crests and distance haze
+- The same score formula as the main benchmark, over a 45 second run
+
+Build and run it with :
+
+```sh
+make ps14
+./ElectroBenchPS14
+```
+
+Controls : `F` toggles the automatic fly-over camera, long-click + move orbits the camera, mouse wheel zooms, arrow keys look around, `ESC` quits.
+
 # How the score is calculated ?
 The score is calculated using this formula : ```fps*2/(1.01/fps)```
 
