@@ -18,7 +18,7 @@ The score is calculated using this formula : ```fps*2/(1.01/fps)```
 
 # How to run ?
 
-Make sure you have `clang and glew, libglvnd-dev and sdl2` installed and then run the following
+Make sure you have `clang and glew, libglvnd-dev and sdl2 and glu` installed and then run the following
 command on your machine after cloning repo:
 
 
