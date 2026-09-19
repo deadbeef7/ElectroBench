@@ -43,7 +43,7 @@
 
 static const int kSeaResolution = 256;   // vertices per side of the ocean grid
 static const float kSeaSize = 1024.0f;   // world size of the ocean patch
-static const int kEnvMapSize = 256;      // cubemap face resolution
+static const int kEnvMapSize = 224;      // cubemap face resolution
 static const int kNoiseSize = 256;       // fBm noise texture size
 static const int kRippleSize = 256;      // ripple gradient texture size
 static const int kFoamSize = 256;        // foam texture size
@@ -414,7 +414,7 @@ static void BuildSeaMesh() {
 }
 
 static void BuildDomeMesh() {
-  const int seg = 96, rings = 48; // fine tessellation: sun disc + full sphere
+  const int seg = 72, rings = 36; // full sphere; enough for the sun disc
   std::vector<float> verts;
   std::vector<unsigned int> idx;
   for (int r = 0; r <= rings; r++) {
@@ -464,7 +464,7 @@ static GLuint gEnvCube = 0, gEnvFbo = 0, gEnvDepth = 0;
 
 static Vec3 gSunDir = {0.87f, 0.12f, 0.47f};   // low sun on the fly-over path: yellow disc + orange glow visible, glitter path towards the camera
 
-static Vec3 gCamPos = {0.0f, 6.0f, 0.0f};
+static Vec3 gCamPos = {0.0f, 7.0f, 0.0f};
 static float gCamYaw = 0.0f, gCamPitch = -0.05f;
 static bool gAutoCam = true;
 
@@ -517,7 +517,7 @@ static Vec3 OrbitCamPos() {
   pos.x = gCamPos.x + std::sin(cy) * std::cos(cx) * d;
   pos.y = gCamPos.y + std::sin(cx) * d + 3.0f;
   pos.z = gCamPos.z + std::cos(cy) * std::cos(cx) * d;
-  if (pos.y < 1.5f) pos.y = 1.5f; // never dive under the waves
+  if (pos.y < 2.5f) pos.y = 2.5f; // never dive under the bigger swell
   return pos;
 }
 
@@ -569,9 +569,11 @@ static void DrawSkyToEnvMap(const Mat4 &proj) {
     glUniformMatrix4fv(gSkyProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
     glUniform3f(gSkyProg.loc("uSunDir"), gSunDir.x, gSunDir.y, gSunDir.z);
     glUniform1f(gSkyProg.loc("uTime"), (float)NowSeconds());
-    glUniform3f(gSkyProg.loc("uZenithColor"), 0.18f, 0.36f, 0.68f);
-    glUniform3f(gSkyProg.loc("uHorizonColor"), 0.66f, 0.74f, 0.84f);
-    glUniform3f(gSkyProg.loc("uSunColor"), 1.05f, 0.78f, 0.42f);
+    // Sunset palette (HDR, linear): dark blue zenith, orange mid, golden horizon.
+    glUniform3f(gSkyProg.loc("uZenithColor"), 0.06f, 0.11f, 0.40f);
+    glUniform3f(gSkyProg.loc("uMidColor"), 1.75f, 0.50f, 0.14f);
+    glUniform3f(gSkyProg.loc("uHorizonColor"), 2.60f, 1.02f, 0.28f);
+    glUniform3f(gSkyProg.loc("uSunColor"), 1.05f, 0.72f, 0.35f);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, gNoiseTex);
     glUniform1i(gSkyProg.loc("uNoiseTex"), 0);
@@ -732,8 +734,8 @@ static void DrawSea(const Mat4 &view, double timeSec, const Vec3 &eye) {
   glUniform1f(gSeaProg.loc("uTime"), (float)timeSec);
   glUniform3f(gSeaProg.loc("uEyePos"), eye.x, eye.y, eye.z);
   glUniform3f(gSeaProg.loc("uSunDir"), gSunDir.x, gSunDir.y, gSunDir.z);
-  glUniform3f(gSeaProg.loc("uHorizonColor"), 0.66f, 0.74f, 0.84f);
-  glUniform3f(gSeaProg.loc("uWaterColor"), 0.055f, 0.21f, 0.25f); // deep water must stay legible against the glitter path (near-black body read as "black spots")
+  glUniform3f(gSeaProg.loc("uHorizonColor"), 2.30f, 1.00f, 0.32f); // warm sunset haze, melts into the sky band
+  glUniform3f(gSeaProg.loc("uWaterColor"), 0.040f, 0.110f, 0.155f); // dark blue-teal body, still legible against the glitter path
   glActiveTexture(GL_TEXTURE0);
   glBindTexture(GL_TEXTURE_2D, gRippleTex);
   glUniform1i(gSeaProg.loc("uRippleTex"), 0);

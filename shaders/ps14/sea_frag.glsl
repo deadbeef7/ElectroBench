@@ -25,14 +25,15 @@ out vec4 fragColor;
 const float PI = 3.14159265359;
 
 // Must stay in sync with waveHeight() in sea_vert.glsl
+// Chop everywhere: short wavelengths so several crests are always on screen.
 float waveHeight(vec2 p, float t) {
     float h = 0.0;
-    h += sin(dot(p, vec2( 0.98,  0.20)) * 0.055 + t * 1.05) * 1.55;
-    h += sin(dot(p, vec2(-0.64,  0.77)) * 0.083 + t * 1.35) * 1.05;
-    h += sin(dot(p, vec2( 0.36, -0.93)) * 0.121 + t * 1.75) * 0.65;
-    h += sin(dot(p, vec2(-0.91, -0.42)) * 0.187 + t * 2.30) * 0.38;
-    h += sin(dot(p, vec2( 0.59,  0.81)) * 0.283 + t * 2.90) * 0.22;
-    h += sin(dot(p, vec2(-0.20,  0.98)) * 0.421 + t * 3.60) * 0.12;
+    h += sin(dot(p, vec2( 0.98,  0.20)) * 0.170 + t * 1.30) * 0.68;
+    h += sin(dot(p, vec2(-0.64,  0.77)) * 0.240 + t * 1.60) * 0.46;
+    h += sin(dot(p, vec2( 0.36, -0.93)) * 0.380 + t * 2.10) * 0.34;
+    h += sin(dot(p, vec2(-0.91, -0.42)) * 0.540 + t * 2.70) * 0.22;
+    h += sin(dot(p, vec2( 0.59,  0.81)) * 0.860 + t * 3.40) * 0.14;
+    h += sin(dot(p, vec2(-0.20,  0.98)) * 1.450 + t * 4.40) * 0.08;
     return h;
 }
 
@@ -70,7 +71,7 @@ void main() {
 
     // ---- water body: deep colour + foam detail in the crests ----
     vec3 body = uWaterColor + uHorizonColor * 0.06;
-    float crest = smoothstep(0.9, 2.6, hC);
+    float crest = smoothstep(0.55, 1.25, hC);
     float foam = texture(uFoamTex, vUV * 23.0 + vec2(uTime * 0.010, 0.0)).r;
     foam *= texture(uFoamTex, vUV * 41.0 - vec2(0.0, uTime * 0.013)).g;
     body += vec3(0.75) * crest * foam * 0.85;

@@ -38,7 +38,7 @@ Headless visual-test flags (used to verify the render output in CI-like environm
 ./ElectroBenchPS14 --width 960 --screenshot /tmp/shot.ppm --shot-times 6,20,38
 ```
 
-The scene at 12s into the run (sky, clouds, reflective sea):
+The sunset scene at 35s into the run (golden horizon, dark blue sky away from the sun, yellow sun with glitter reflection, choppy seas):
 
 ![PS1.4 sea benchmark](docs/ps14_visual_test.png)
 

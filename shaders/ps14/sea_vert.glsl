@@ -13,14 +13,16 @@ out vec3 vWorld;
 out vec2 vUV;
 
 // Must stay in sync with waveHeight() in sea_frag.glsl
+// Chop everywhere: short wavelengths so several crests are always on screen
+// (grid is 1024m across at 256x256, i.e. ~4m per quad).
 float waveHeight(vec2 p, float t) {
     float h = 0.0;
-    h += sin(dot(p, vec2( 0.98,  0.20)) * 0.055 + t * 1.05) * 1.55;
-    h += sin(dot(p, vec2(-0.64,  0.77)) * 0.083 + t * 1.35) * 1.05;
-    h += sin(dot(p, vec2( 0.36, -0.93)) * 0.121 + t * 1.75) * 0.65;
-    h += sin(dot(p, vec2(-0.91, -0.42)) * 0.187 + t * 2.30) * 0.38;
-    h += sin(dot(p, vec2( 0.59,  0.81)) * 0.283 + t * 2.90) * 0.22;
-    h += sin(dot(p, vec2(-0.20,  0.98)) * 0.421 + t * 3.60) * 0.12;
+    h += sin(dot(p, vec2( 0.98,  0.20)) * 0.170 + t * 1.30) * 0.68;
+    h += sin(dot(p, vec2(-0.64,  0.77)) * 0.240 + t * 1.60) * 0.46;
+    h += sin(dot(p, vec2( 0.36, -0.93)) * 0.380 + t * 2.10) * 0.34;
+    h += sin(dot(p, vec2(-0.91, -0.42)) * 0.540 + t * 2.70) * 0.22;
+    h += sin(dot(p, vec2( 0.59,  0.81)) * 0.860 + t * 3.40) * 0.14;
+    h += sin(dot(p, vec2(-0.20,  0.98)) * 1.450 + t * 4.40) * 0.08;
     return h;
 }
 
