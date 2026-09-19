@@ -56,16 +56,20 @@ void main() {
 
     vec3 sky = mix(uHorizonColor, uZenithColor, pow(h, 0.62));
 
-    // warm glow around the sun
+    // orange glow + yellow sun around/above the clouds. HDR values are chosen
+    // so that after the Reinhard tonemap + gamma they come out saturated:
+    // additive terms get crushed to white, replace-style mixes keep their hue.
     vec3 sd = normalize(uSunDir);
     float sunAmount = max(dot(dir, sd), 0.0);
-    sky += uSunColor * pow(sunAmount, 8.0) * 0.55;
-    sky += uSunColor * pow(sunAmount, 220.0) * 4.0;   // sun disc halo
-
-    // clouds composite over the gradient
     vec3 c = clouds(dir);
     float shade = 0.72 + 0.28 * smoothstep(0.0, 0.45, dir.y);
     sky = mix(sky, c * shade, clamp(c.r * 0.7 + c.g * 0.7, 0.0, 0.88));
+
+    float glowMask = clamp(pow(sunAmount, 10.0) * 0.75 + pow(sunAmount, 40.0) * 0.55, 0.0, 0.95);
+    sky = mix(sky, vec3(3.2, 1.0, 0.18), glowMask);   // -> ~(225,186,110) orange
+
+    float disc = smoothstep(0.9955, 0.9985, sunAmount);
+    sky = mix(sky, vec3(9.0, 2.6, 0.25), disc);       // -> ~(243,220,123) yellow
 
     // HDR-ish output for the env map (tone mapping happens in the sea shader)
     fragColor = vec4(sky, 1.0);

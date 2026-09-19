@@ -414,11 +414,14 @@ static void BuildSeaMesh() {
 }
 
 static void BuildDomeMesh() {
-  const int seg = 32, rings = 12;
+  const int seg = 96, rings = 48; // fine tessellation: sun disc + full sphere
   std::vector<float> verts;
   std::vector<unsigned int> idx;
   for (int r = 0; r <= rings; r++) {
-    float phi = (float)r / rings * 3.14159265f * 0.5f; // 0..pi/2 (upper half)
+    // full sphere 0..pi: the lower hemisphere carries the horizon gradient so
+    // the cubemap has no black -Y face (it used to bleed black into grazing
+    // reflections, showing as dark spots on the water)
+    float phi = (float)r / rings * 3.14159265f;
     for (int s = 0; s <= seg; s++) {
       float th = (float)s / seg * 3.14159265f * 2.0f;
       float cp = std::cos(phi);
@@ -459,7 +462,7 @@ static Program gSeaProg, gSkyProg, gSkyViewProg, gHudProg;
 static GLuint gRippleTex = 0, gNoiseTex = 0, gFoamTex = 0, gFontTex = 0;
 static GLuint gEnvCube = 0, gEnvFbo = 0, gEnvDepth = 0;
 
-static Vec3 gSunDir = {-0.45f, 0.28f, -0.85f}; // low sun -> golden path on water
+static Vec3 gSunDir = {0.87f, 0.12f, 0.47f};   // low sun on the fly-over path: yellow disc + orange glow visible, glitter path towards the camera
 
 static Vec3 gCamPos = {0.0f, 6.0f, 0.0f};
 static float gCamYaw = 0.0f, gCamPitch = -0.05f;
@@ -481,6 +484,8 @@ static const char *gScreenshotPath = nullptr; // current capture target
 static std::vector<float> gShotTimes;         // seconds at which to capture
 static size_t gNextShot = 0;
 static int gWindowWidthOverride = 0;          // --width, 0 = full resolution
+static bool gDumpEnv = false;                 // --dump-env: write cubemap faces to /tmp once
+static bool gDumpEnvDone = false;
 
 static const int kHudTexW = 512, kHudTexH = 64;
 static GLuint gHudVao = 0, gHudVbo = 0;
@@ -576,6 +581,34 @@ static void DrawSkyToEnvMap(const Mat4 &proj) {
   glEnable(GL_CULL_FACE);
 }
 
+static void DumpEnvFacesOnce() {
+  if (!gDumpEnv || gDumpEnvDone) return;
+  gDumpEnvDone = true;
+  static const GLenum faces[6] = {GL_TEXTURE_CUBE_MAP_POSITIVE_X, GL_TEXTURE_CUBE_MAP_NEGATIVE_X,
+                                  GL_TEXTURE_CUBE_MAP_POSITIVE_Y, GL_TEXTURE_CUBE_MAP_NEGATIVE_Y,
+                                  GL_TEXTURE_CUBE_MAP_POSITIVE_Z, GL_TEXTURE_CUBE_MAP_NEGATIVE_Z};
+  static const char names[6] = {'x','X','y','Y','z','Z'};
+  glBindFramebuffer(GL_FRAMEBUFFER, gEnvFbo);
+  glViewport(0, 0, kEnvMapSize, kEnvMapSize);
+  std::vector<unsigned char> rgb((size_t)kEnvMapSize * kEnvMapSize * 3);
+  for (int i = 0; i < 6; i++) {
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, faces[i], gEnvCube, 0);
+    glReadPixels(0, 0, kEnvMapSize, kEnvMapSize, GL_RGB, GL_UNSIGNED_BYTE, rgb.data());
+    char path[64];
+    std::snprintf(path, sizeof(path), "/tmp/env_%c.ppm", names[i]);
+    FILE *f = std::fopen(path, "wb");
+    if (f) {
+      std::fprintf(f, "P6\n%d %d\n255\n", kEnvMapSize, kEnvMapSize);
+      for (int row = kEnvMapSize - 1; row >= 0; row--) // GL rows are bottom-up
+        std::fwrite(&rgb[(size_t)row * kEnvMapSize * 3], 1, (size_t)kEnvMapSize * 3, f);
+      std::fclose(f);
+    }
+  }
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  std::printf("env faces dumped\n");
+  std::fflush(stdout);
+}
+
 // ------------------------------------------------------------------- HUD
 static void BuildFontAtlas() {
   // 96 glyphs, 16 columns x 6 rows, 8x8 each, packed in a 128x48 region.
@@ -587,7 +620,7 @@ static void BuildFontAtlas() {
     for (int y = 0; y < 8; y++) {
       unsigned char bits = kFontData[g][y];
       for (int x = 0; x < 8; x++) {
-        if (bits & (0x80 >> x)) {
+        if (bits & (1u << x)) { // LSB = leftmost column; MSB-first drew mirrored glyphs
           int px_x = gx + x, px_y = gy + y;
           size_t o = ((size_t)px_y * kHudTexW + px_x) * 4;
           px[o] = 255; px[o + 1] = 255; px[o + 2] = 255; px[o + 3] = 255;
@@ -700,7 +733,7 @@ static void DrawSea(const Mat4 &view, double timeSec, const Vec3 &eye) {
   glUniform3f(gSeaProg.loc("uEyePos"), eye.x, eye.y, eye.z);
   glUniform3f(gSeaProg.loc("uSunDir"), gSunDir.x, gSunDir.y, gSunDir.z);
   glUniform3f(gSeaProg.loc("uHorizonColor"), 0.66f, 0.74f, 0.84f);
-  glUniform3f(gSeaProg.loc("uWaterColor"), 0.015f, 0.10f, 0.12f);
+  glUniform3f(gSeaProg.loc("uWaterColor"), 0.055f, 0.21f, 0.25f); // deep water must stay legible against the glitter path (near-black body read as "black spots")
   glActiveTexture(GL_TEXTURE0);
   glBindTexture(GL_TEXTURE_2D, gRippleTex);
   glUniform1i(gSeaProg.loc("uRippleTex"), 0);
@@ -758,7 +791,7 @@ static void WriteScreenshotPPM(const char *path);
 
 static void RenderScene() {
   double now = NowSeconds();
-  float t = (float)now;
+  float t = (float)(now - gStartTime); // camera time is benchmark-relative so --shot-times are deterministic
 
   // ---- camera ----
   if (gAutoCam) {
@@ -783,6 +816,7 @@ static void RenderScene() {
   Mat4 envProj;
   Mat4Perspective(envProj, 90.0f, 1.0f, 0.1f, 20.0f);
   DrawSkyToEnvMap(envProj);
+  DumpEnvFacesOnce();
 
   // ---- pass 2: main framebuffer ----
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -926,6 +960,8 @@ int main(int argc, char **argv) {
       }
     } else if (!std::strcmp(argv[i], "--width") && i + 1 < argc) {
       gWindowWidthOverride = std::atoi(argv[++i]);
+    } else if (!std::strcmp(argv[i], "--dump-env")) {
+      gDumpEnv = true;
     } else {
       std::fprintf(stderr, "Unknown or incomplete option: %s\n", argv[i]);
       return EXIT_FAILURE;

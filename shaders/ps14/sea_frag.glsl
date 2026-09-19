@@ -56,9 +56,11 @@ void main() {
     // ---- phase 2: dependent read - perturbed reflection of the sky ----
     vec3 V = normalize(uEyePos - vWorld);             // towards the eye
     vec3 R = reflect(-V, N);
-    R.y = abs(R.y);                                   // never look below the horizon
-    // add ripple perturbation in tangent space
+    // add ripple perturbation in tangent space, THEN clamp: clamping before the
+    // perturbation let downward-perturbed rays sample the never-rendered -Y
+    // cubemap face (black band at the horizon + black spots on the water).
     R = normalize(R + vec3(pert.x, 0.0, pert.y) * 2.2);
+    R.y = abs(R.y);                                   // never look below the horizon
 
     vec3 reflColor = texture(uSkyEnvTex, R).rgb;
 
