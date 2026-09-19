@@ -12,7 +12,7 @@ in vec3 vWorld;
 in vec2 vUV;
 
 uniform sampler2D uRippleTex;    // two-channel ripple gradient (RG16F)
-uniform sampler2D uSkyEnvTex;    // equirectangular sky environment (RGBA16F)
+uniform samplerCube uSkyEnvTex;  // sky environment cubemap (RGBA16F)
 uniform sampler2D uFoamTex;      // tileable foam / caustic detail
 uniform float uTime;
 uniform vec3  uEyePos;
@@ -60,8 +60,7 @@ void main() {
     // add ripple perturbation in tangent space
     R = normalize(R + vec3(pert.x, 0.0, pert.y) * 2.2);
 
-    vec2 envUV = vec2(atan(R.z, R.x) * (0.5 / PI) + 0.5, R.y * 0.5 + 0.5);
-    vec3 reflColor = texture(uSkyEnvTex, envUV).rgb;
+    vec3 reflColor = texture(uSkyEnvTex, R).rgb;
 
     // ---- fresnel: sea is a mirror at grazing angles, glass straight down ----
     float NdV = max(dot(N, V), 0.0);

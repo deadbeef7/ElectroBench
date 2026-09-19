@@ -26,11 +26,21 @@ What it renders :
 Build and run it with :
 
 ```sh
-make ps14
+make ps14-gcc
 ./ElectroBenchPS14
 ```
 
 Controls : `F` toggles the automatic fly-over camera, long-click + move orbits the camera, mouse wheel zooms, arrow keys look around, `ESC` quits.
+
+Headless visual-test flags (used to verify the render output in CI-like environments):
+
+```sh
+./ElectroBenchPS14 --width 960 --screenshot /tmp/shot.ppm --shot-times 6,20,38
+```
+
+The scene at 12s into the run (sky, clouds, reflective sea):
+
+![PS1.4 sea benchmark](docs/ps14_visual_test.png)
 
 # How the score is calculated ?
 The score is calculated using this formula : ```fps*2/(1.01/fps)```
