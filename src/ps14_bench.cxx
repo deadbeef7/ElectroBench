@@ -16,6 +16,11 @@
 //
 // Controls: long-click + move to orbit the camera, mouse wheel to zoom,
 // F to toggle the fly-through camera path, ESC to quit.
+//
+// Debug flags:
+//   --screenshot FILE   capture the framebuffer to FILE (PPM) at the times in
+//                       --shot-times (default "4,20") and exit; used by the
+//                       headless visual test (llvmpipe has no real GPU sync).
 
 #include <array>
 #include <cmath>
@@ -471,6 +476,12 @@ static double gSmoothFps = 0.0;
 
 static bool gQuit = false;
 
+// Headless visual-test state (see the debug flags in the header comment).
+static const char *gScreenshotPath = nullptr; // current capture target
+static std::vector<float> gShotTimes;         // seconds at which to capture
+static size_t gNextShot = 0;
+static int gWindowWidthOverride = 0;          // --width, 0 = full resolution
+
 static const int kHudTexW = 512, kHudTexH = 64;
 static GLuint gHudVao = 0, gHudVbo = 0;
 static int gHudQuadCount = 0;
@@ -596,6 +607,9 @@ static void BuildFontAtlas() {
 
 static void RenderText(float x, float y, const char *text) {
   // Append one quad per glyph to a streaming buffer (position xy + uv).
+  // Glyph quads are CCW in pixel space; the HUD vertex shader maps that to CW
+  // in clip space (y-down pixel -> y-up NDC), so face culling must be off
+  // while drawing text or every glyph is discarded.
   static std::vector<float> buf;
   buf.clear();
   float pen = x;
@@ -630,9 +644,11 @@ static void RenderText(float x, float y, const char *text) {
   glEnable(GL_BLEND);
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
   glDisable(GL_DEPTH_TEST);
+  glDisable(GL_CULL_FACE); // glyph quads are CW in clip space
   glBindVertexArray(gHudVao);
   glDrawArrays(GL_TRIANGLES, 0, gHudQuadCount);
   glBindVertexArray(0);
+  glEnable(GL_CULL_FACE);
   glEnable(GL_DEPTH_TEST);
   glDisable(GL_BLEND);
 }
@@ -738,6 +754,8 @@ static void RenderHUD() {
 }
 
 // Renders the scene and calculates FPS (same pattern as the original bench).
+static void WriteScreenshotPPM(const char *path);
+
 static void RenderScene() {
   double now = NowSeconds();
   float t = (float)now;
@@ -772,11 +790,21 @@ static void RenderScene() {
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
   DrawSkyView();
-  DrawSea(view, now, eye);
+  DrawSea(view, now, eye);    RenderHUD();
 
-  RenderHUD();
+    // Visual-test captures: read the framebuffer back before the swap so the
+    // pixels we analyse are exactly what this frame rendered.
+    if (gScreenshotPath && gNextShot < gShotTimes.size() &&
+        now - gStartTime >= (double)gShotTimes[gNextShot]) {
+      WriteScreenshotPPM(gScreenshotPath);
+      gNextShot++;
+      if (gNextShot >= gShotTimes.size()) {
+        SDL_Quit();
+        std::exit(0);
+      }
+    }
 
-  SDL_GL_SwapWindow(gWindow);
+    SDL_GL_SwapWindow(gWindow);
 
   // ---- fps + benchmark timer ----
   gFrame++;
@@ -852,10 +880,57 @@ static void ChangeSize(int w, int h) {
   glViewport(0, 0, w, h);
 }
 
+// -------------------------------------------------------- visual-test support
+static bool ParseShotTimes(const char *arg) {
+  gShotTimes.clear();
+  const char *p = arg;
+  while (*p) {
+    char *end = nullptr;
+    double v = std::strtod(p, &end);
+    if (end == p) return false;
+    gShotTimes.push_back((float)v);
+    p = end;
+    if (*p == ',') p++;
+    else if (*p != '\0') return false;
+  }
+  return !gShotTimes.empty();
+}
+
+static void WriteScreenshotPPM(const char *path) {
+  const int w = gWindowWidth, h = gWindowHeight;
+  std::vector<unsigned char> rgb((size_t)w * h * 3);
+  glPixelStorei(GL_PACK_ALIGNMENT, 1);
+  glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, rgb.data());
+  FILE *f = std::fopen(path, "wb");
+  if (!f) {
+    std::fprintf(stderr, "Cannot write screenshot %s\n", path);
+    return;
+  }
+  std::fprintf(f, "P6\n%d %d\n255\n", w, h);
+  for (int y = h - 1; y >= 0; y--) // GL rows are bottom-up; PPM is top-down
+    std::fwrite(&rgb[(size_t)y * w * 3], 1, (size_t)w * 3, f);
+  std::fclose(f);
+  std::printf("Screenshot written: %s\n", path);
+  std::fflush(stdout);
+}
+
 // ------------------------------------------------------------------- main
 int main(int argc, char **argv) {
-  (void)argc;
-  (void)argv;
+  for (int i = 1; i < argc; i++) {
+    if (!std::strcmp(argv[i], "--screenshot") && i + 1 < argc) {
+      gScreenshotPath = argv[++i];
+    } else if (!std::strcmp(argv[i], "--shot-times") && i + 1 < argc) {
+      if (!ParseShotTimes(argv[++i])) {
+        std::fprintf(stderr, "Bad --shot-times list: %s\n", argv[i]);
+        return EXIT_FAILURE;
+      }
+    } else if (!std::strcmp(argv[i], "--width") && i + 1 < argc) {
+      gWindowWidthOverride = std::atoi(argv[++i]);
+    } else {
+      std::fprintf(stderr, "Unknown or incomplete option: %s\n", argv[i]);
+      return EXIT_FAILURE;
+    }
+  }
 
   if (SDL_Init(SDL_INIT_VIDEO) < 0) {
     std::fprintf(stderr, "SDL could not initialize! SDL_Error: %s\n", SDL_GetError());
@@ -868,8 +943,20 @@ int main(int argc, char **argv) {
   SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
   SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
 
-  gWindow = SDL_CreateWindow(NAME, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, WIDTH, HEIGHT,
+  int winW = WIDTH, winH = HEIGHT;
+  if (gWindowWidthOverride > 0) {
+    // Test mode: fixed-width window, height follows the 16:9 benchmark aspect.
+    winW = gWindowWidthOverride;
+    winH = (gWindowWidthOverride * HEIGHT + WIDTH / 2) / WIDTH;
+  }
+
+  gWindow = SDL_CreateWindow(NAME, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, winW, winH,
                              SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
+  if (gWindowWidthOverride > 0) {
+    gWindowWidth = winW;   // a headless WM may never send a RESIZED event
+    gWindowHeight = winH;
+    glViewport(0, 0, winW, winH);
+  }
   if (!gWindow) {
     std::fprintf(stderr, "Window could not be created! SDL_Error: %s\n", SDL_GetError());
     return EXIT_FAILURE;
