@@ -1,0 +1,13 @@
+# CMake build trees
+build/
+build-*/
+
+# Compiled binaries (CMake targets)
+/ElectroBench
+/ElectroBenchPS14
+*.o
+*.so
+
+# Local test artifacts
+*.ppm
+scratch_*.py

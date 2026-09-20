@@ -35,6 +35,8 @@
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_opengl.h>
 
+#include "../lib/asset_path.hxx"
+
 // ------------------------------------------------------------------ constants
 #define NAME "ElectroBench - PS1.4 Sea (Nature-like)"
 #define WIDTH 1366
@@ -710,10 +712,10 @@ static void Setup() {
   gFoamTex = CreateFoamTexture();
   CreateEnvResources();
 
-  gSeaProg = LinkProgram("shaders/ps14/sea_vert.glsl", "shaders/ps14/sea_frag.glsl");
-  gSkyProg = LinkProgram("shaders/ps14/sky_vert.glsl", "shaders/ps14/sky_frag.glsl");
-  gSkyViewProg = LinkProgram("shaders/ps14/skyview_vert.glsl", "shaders/ps14/skyview_frag.glsl");
-  gHudProg = LinkProgram("shaders/ps14/hud_vert.glsl", "shaders/ps14/hud_frag.glsl");
+  gSeaProg = LinkProgram(resolveAssetPath("shaders/ps14/sea_vert.glsl").c_str(), resolveAssetPath("shaders/ps14/sea_frag.glsl").c_str());
+  gSkyProg = LinkProgram(resolveAssetPath("shaders/ps14/sky_vert.glsl").c_str(), resolveAssetPath("shaders/ps14/sky_frag.glsl").c_str());
+  gSkyViewProg = LinkProgram(resolveAssetPath("shaders/ps14/skyview_vert.glsl").c_str(), resolveAssetPath("shaders/ps14/skyview_frag.glsl").c_str());
+  gHudProg = LinkProgram(resolveAssetPath("shaders/ps14/hud_vert.glsl").c_str(), resolveAssetPath("shaders/ps14/hud_frag.glsl").c_str());
 
   glEnable(GL_DEPTH_TEST);
   glDepthFunc(GL_LEQUAL);

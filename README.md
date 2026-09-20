@@ -26,8 +26,9 @@ What it renders :
 Build and run it with :
 
 ```sh
-make ps14-gcc
-./ElectroBenchPS14
+cmake -S . -B build
+cmake --build build
+./build/ElectroBenchPS14
 ```
 
 Controls : `F` toggles the automatic fly-over camera, long-click + move orbits the camera, mouse wheel zooms, arrow keys look around, `ESC` quits.
@@ -35,7 +36,7 @@ Controls : `F` toggles the automatic fly-over camera, long-click + move orbits t
 Headless visual-test flags (used to verify the render output in CI-like environments):
 
 ```sh
-./ElectroBenchPS14 --width 960 --screenshot /tmp/shot.ppm --shot-times 6,20,38
+./build/ElectroBenchPS14 --width 960 --screenshot /tmp/shot.ppm --shot-times 6,20,38
 ```
 
 The sunset scene at 35s into the run (golden horizon, dark blue sky away from the sun, yellow sun with glitter reflection, choppy seas):
@@ -47,14 +48,17 @@ The score is calculated using this formula : ```fps*2/(1.01/fps)```
 
 # How to run ?
 
-Make sure you have `clang and glew, libglvnd-dev and sdl2 and glu` installed and then run the following
+Make sure you have `cmake, glew, libglvnd-dev, sdl2 and glu` installed and then run the following
 command on your machine after cloning repo:
 
 
 ```sh
-make
-./ElectroBench
+cmake -S . -B build
+cmake --build build
+./build/ElectroBench
 ```
+
+Controls (original GL 2.1 benchmark) : long-click + move orbits the camera, mouse wheel zooms (smooth, clamped so you never clip into the scene), `ESC` quits. The 90 UZIs stand on a shadow-mapped concrete floor lit by a warm sun.
 
 # Contributions
 

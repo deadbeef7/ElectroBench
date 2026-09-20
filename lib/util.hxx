@@ -267,6 +267,8 @@ public:
 
 public:
   float pos_x, pos_y, pos_z;
+  // Axis-aligned bounding box of the raw model vertices
+  float min_x, min_y, min_z, max_x, max_y, max_z;
 
   void load(const char *filename) {
     std::string tmp = filename;
@@ -293,6 +295,8 @@ public:
     char str[40];
 
     pos_x = pos_y = 0.0f;
+    min_x = min_y = min_z = 1e9f;
+    max_x = max_y = max_z = -1e9f;
 
     float sum_x = 0.0f, sum_y = 0.0f, sum_z = 0.0f;
 
@@ -315,6 +319,12 @@ public:
           pos_x += a;
           pos_y += b;
           vertices.push_back(new float[3]{a, b, c});
+          if (a < min_x) min_x = a;
+          if (b < min_y) min_y = b;
+          if (c < min_z) min_z = c;
+          if (a > max_x) max_x = a;
+          if (b > max_y) max_y = b;
+          if (c > max_z) max_z = c;
         } else if (line[1] == 't') {
           sscanf(line.c_str(), "vt %f %f", &a, &b);
           texcoords.push_back(new float[2]{a, b});

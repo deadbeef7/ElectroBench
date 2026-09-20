@@ -2,6 +2,8 @@ name: CI
 
 on:
   pull_request:
+  push:
+    branches: [master]
 
 permissions:
   contents: read
@@ -16,20 +18,16 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libsdl2-dev libglew-dev libglu1-mesa-dev libgl1-mesa-dev libgl1-mesa-dri xvfb mesa-utils
+          sudo apt-get install -y cmake libsdl2-dev libglew-dev libglu1-mesa-dev libgl1-mesa-dev libgl1-mesa-dri xvfb mesa-utils
 
-      - name: Build PS1.4 sea benchmark
-        run: |
-          make ps14
-          file ElectroBenchPS14
+      - name: Configure (CMake)
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 
-      - name: Build original GL 2.1 benchmark
-        run: |
-          make
-          file ElectroBench
+      - name: Build both benchmarks
+        run: cmake --build build -j"$(nproc)"
 
       - name: Headless runtime smoke test (45 s benchmark on llvmpipe)
         run: |
-          LIBGL_ALWAYS_SOFTWARE=1 timeout 240 xvfb-run -a -s "-screen 0 1366x768x24" ./ElectroBenchPS14 2>&1 | tee run.log
+          LIBGL_ALWAYS_SOFTWARE=1 timeout 240 xvfb-run -a -s "-screen 0 1366x768x24" ./build/ElectroBenchPS14 2>&1 | tee run.log
           grep -q "Benchmark Results" run.log
           cat run.log
