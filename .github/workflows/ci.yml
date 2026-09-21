@@ -18,13 +18,10 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake libsdl2-dev libglew-dev libglu1-mesa-dev libgl1-mesa-dev libgl1-mesa-dri xvfb mesa-utils
-
-      - name: Configure (CMake)
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          sudo apt-get install -y make libsdl2-dev libglew-dev libglu1-mesa-dev libgl1-mesa-dev libgl1-mesa-dri xvfb mesa-utils
 
       - name: Build both benchmarks
-        run: cmake --build build -j"$(nproc)"
+        run: make legacy ps14
 
       - name: Headless runtime smoke test (45 s benchmark on llvmpipe)
         run: |
