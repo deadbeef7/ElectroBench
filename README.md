@@ -41,7 +41,7 @@ Headless visual-test flags (used to verify the render output in CI-like environm
 
 The sunset scene at 35s into the run (golden horizon, dark blue sky away from the sun, yellow sun with glitter reflection, choppy seas):
 
-![PS1.4 sea benchmark](docs/ps14_visual_test.png)
+![PS1.4 sea benchmark](docs/screenshots/ps14_dusk_t36.png)
 
 # How the score is calculated ?
 The score is calculated using this formula : ```fps*2/(1.01/fps)```
