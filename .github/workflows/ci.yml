@@ -21,10 +21,10 @@ jobs:
           sudo apt-get install -y make libsdl2-dev libglew-dev libglu1-mesa-dev libgl1-mesa-dev libgl1-mesa-dri xvfb mesa-utils
 
       - name: Build both benchmarks
-        run: make legacy ps14
+        run: make
 
       - name: Headless runtime smoke test (45 s benchmark on llvmpipe)
         run: |
-          LIBGL_ALWAYS_SOFTWARE=1 timeout 240 xvfb-run -a -s "-screen 0 1366x768x24" ./build/ElectroBenchPS14 2>&1 | tee run.log
+          LIBGL_ALWAYS_SOFTWARE=1 timeout 240 xvfb-run -a -s "-screen 0 1366x768x24" ./build/PS14SeaBenchmark.exe 2>&1 | tee run.log
           grep -q "Benchmark Results" run.log
           cat run.log
