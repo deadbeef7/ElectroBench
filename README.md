@@ -11,7 +11,13 @@ You can move the camera by long-clicking and moving the mouse.
 
 # Screenshots
 
-<img width="1366" height="768" alt="screenshot-20260815-151152" src="https://github.com/user-attachments/assets/81cc2bcf-45fd-4bb9-b2fd-ecf357a5e0ff" />
+The 90 UZIs lying on the shadow-mapped concrete floor — every gun now casts its own compact shadow anchored at its contact point (warm sun from the upper left):
+
+![Original GL 2.1 benchmark: 90 UZIs on a shadow-mapped concrete floor](docs/screenshots/uzi_wide.png)
+
+Close-up — mags resting on the ground, shadows clearly visible under each gun:
+
+![Close-up: UZIs with mags on the ground and per-gun shadows](docs/screenshots/uzi_close.png)
 
 # PS1.4 Sea benchmark (3DMark2001 SE "Nature" recreation)
 
