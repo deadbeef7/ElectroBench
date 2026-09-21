@@ -518,9 +518,11 @@ void setup() {
     max_dim = ext_z;
   gun_scale = 0.55f / max_dim;
 
-  // fixed warm sun, low in the sky from the left-front: the flat-lying guns
-  // cast long, clearly visible shadows across the floor to the right
-  float sd[3] = {-0.85f, 0.38f, 0.35f};
+  // fixed warm sun from the upper left-front. Elevation is high enough that
+  // each gun's shadow (~0.47 units, ~0.7x its height) stays compact and stays
+  // attached to its own contact point instead of sliding under the next row
+  // of guns, so every UZI shows its own shadow on the floor.
+  float sd[3] = {-0.62f, 0.68f, 0.35f};
   float len = sqrtf(sd[0] * sd[0] + sd[1] * sd[1] + sd[2] * sd[2]);
   sun_dir_world[0] = sd[0] / len;
   sun_dir_world[1] = sd[1] / len;
