@@ -106,6 +106,32 @@ cmake --build build
 
 Running from the shell matters: the SDL2/GLEW/GLU DLLs live in `C:\msys64\ucrt64\bin`, which is only on `PATH` inside that shell. To launch from Explorer instead, copy `SDL2.dll`, `glew32.dll`, `glu32.dll` (and `zlib1.dll` if it complains) next to the exe.
 
+**If `cmake` dies with `Illegal instruction`** — modern MSYS2 `mingw64`/`ucrt64` packages (including `cmake.exe` itself) are built for the x86-64-v2 microarchitecture (SSE4.2 + POPCNT), so they crash on older CPUs that lack those instructions (e.g. Core 2 Duo era laptops). If that happens, skip CMake entirely and build directly with g++, which the compiler will happily target at the baseline ISA:
+
+```sh
+g++ -std=c++17 -O2 -march=x86-64 -mtune=generic \
+    src/main.cxx \
+    -o build/ElectroBench.exe \
+    $(pkg-config --cflags --libs sdl2) \
+    -lglew32 \
+    -lglu32 \
+    -lopengl32
+
+# PS1.4 sea benchmark (GL 3.3, no GLU needed)
+g++ -std=c++17 -O2 -march=x86-64 -mtune=generic \
+    src/ps14_bench.cxx \
+    -o build/ElectroBenchPS14.exe \
+    $(pkg-config --cflags --libs sdl2) \
+    -lglew32 \
+    -lopengl32
+```
+
+Notes for the direct g++ build :
+- `-march=x86-64 -mtune=generic` is the key: it emits baseline x86-64 code that runs on any 64-bit CPU, so the resulting exe won't illegal-instruction even where the prebuilt MSYS2 tools do.
+- Keep `-lglew32` before `-lSDL2`, and `-lopengl32` last — link order matters on MinGW.
+- Run the exe from the repo root (or copy `SDL2.dll` / `glew32.dll` from `C:\msys64\<env>\bin` next to it) so the DLLs resolve.
+- This was verified end-to-end on a Toshiba Satellite P200 (Core 2 Duo, pre-x86-64-v2) — all three shader programs compiled and linked on hardware.
+
 Notes :
 - The headless screenshot flags work too — just use a Windows-style path: `./build/ElectroBenchPS14.exe --width 960 --screenshot shot.ppm --shot-times 6,20,38`
 - Any GPU with drivers from ~2010 onward handles both targets (PS14 needs GL 3.3; the main bench's GL 2.1 request gets a compatibility context — drivers ignore the profile hint below 3.2, per spec).
