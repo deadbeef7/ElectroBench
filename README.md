@@ -1,13 +1,9 @@
 
 # ElectroBench
 ElectroBench is a 45-second long benchmark specifiacally designed to run on old and modern PCs, don't critise it by it using OpenGL 2.1, and GLSL 1.2, Even office PCs have low scores at it.
-It uses OpenGL 2.1, and C++, and uses make for compilation. It is designed to be a replacement for glmark (even though it is great and I used it before).
+It uses OpenGL 2.1/3.3, and C++, and uses make for compilation. It is designed to be a replacement for glmark (even though it is great and I used it before).
 
-# Effects
 
-In this benchmark, we are using realistic lighting techniques, thanks to the shaders (with some limitations, of course), then we load 90 UZIs (!!) with 6 textures each onto the screen.
-
-You can move the camera by long-clicking and moving the mouse.
 
 # Screenshots
 
@@ -32,9 +28,7 @@ What it renders :
 Build and run it with :
 
 ```sh
-cmake -S . -B build
-cmake --build build
-./build/ElectroBenchPS14
+make
 ```
 
 Controls : `F` toggles the automatic fly-over camera, long-click + move orbits the camera, mouse wheel zooms, arrow keys look around, `ESC` quits.
@@ -45,7 +39,7 @@ Headless visual-test flags (used to verify the render output in CI-like environm
 ./build/ElectroBenchPS14 --width 960 --screenshot /tmp/shot.ppm --shot-times 6,20,38
 ```
 
-The sunset scene at 35s into the run (golden horizon, dark blue sky away from the sun, yellow sun with glitter reflection, choppy seas):
+The sunset scene at 35s into the run (golden horizon, dark blue sky away from the sun, yellow sun with glitter reflection, choppy seas): (small bug, the sea isnt filling the entire screen, will be fixed soon)
 
 ![PS1.4 sea benchmark](docs/screenshots/ps14_dusk_t36.png)
 
@@ -59,9 +53,7 @@ command on your machine after cloning repo:
 
 
 ```sh
-cmake -S . -B build
-cmake --build build
-./build/ElectroBench
+make legacy
 ```
 
 Controls (original GL 2.1 benchmark) : long-click + move orbits the camera, mouse wheel zooms (smooth, clamped so you never clip into the scene), `ESC` quits. The 90 UZIs stand on a shadow-mapped concrete floor lit by a warm sun.
