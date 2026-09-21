@@ -16,21 +16,28 @@ varying vec3 vViewPos;
 varying vec3 vNormalView;
 varying vec4 vShadowCoord;
 
-// 3x3 PCF shadow lookup, returns 0 (shadowed) .. 1 (lit)
+// rotated 12-tap poisson PCF shadow lookup, returns 0 (shadowed) .. 1 (lit)
 float shadowFactor() {
     vec3 p = vShadowCoord.xyz / vShadowCoord.w;
-    p = p * 0.5 + 0.5;
+    // uLightMatrix already includes the bias (world -> [0,1]); the half
+    // offset must NOT be applied again here (see ground_frag.glsl).
     if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z >= 1.0)
         return 1.0;
     float bias = 0.0022;
+    const vec2 pois[12] = vec2[12](
+        vec2(-0.326, -0.406), vec2(-0.840, -0.074), vec2(-0.696,  0.457),
+        vec2(-0.203,  0.621), vec2( 0.963, -0.195), vec2( 0.473, -0.480),
+        vec2( 0.519,  0.767), vec2( 0.185, -0.893), vec2( 0.507,  0.064),
+        vec2( 0.896,  0.412), vec2(-0.322, -0.933), vec2(-0.792, -0.598));
+    float ang = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453) * 6.28318;
+    vec2 dir = vec2(cos(ang), sin(ang));
+    mat2 rot = mat2(dir.x, -dir.y, dir.y, dir.x);
     float sum = 0.0;
-    for (int dy = -1; dy <= 1; dy++) {
-        for (int dx = -1; dx <= 1; dx++) {
-            float d = texture2D(uShadowMap, p.xy + vec2(dx, dy) * uShadowTexel).r;
-            sum += step(p.z - bias, d);
-        }
+    for (int i = 0; i < 12; i++) {
+        vec2 off = rot * pois[i] * uShadowTexel * 2.0;
+        sum += step(p.z - bias, texture2D(uShadowMap, p.xy + off).r);
     }
-    return sum / 9.0;
+    return sum / 12.0;
 }
 
 void main() {
