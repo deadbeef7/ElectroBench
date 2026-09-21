@@ -8,6 +8,7 @@ layout(location = 1) in vec2 aUV; // large-scale water UV
 
 uniform mat4 uViewProj;
 uniform float uTime;
+uniform vec2 uSeaCenter; // camera-following sea origin (snapped to 64m)
 
 out vec3 vWorld;
 out vec2 vUV;
@@ -27,8 +28,10 @@ float waveHeight(vec2 p, float t) {
 }
 
 void main() {
-    vec3 pos = vec3(aXZ.x, waveHeight(aXZ, uTime), aXZ.y);
+    vec2 xz = aXZ + uSeaCenter; // the grid travels with the camera
+    vec3 pos = vec3(xz.x, waveHeight(xz, uTime), xz.y);
     vWorld = pos;
-    vUV = aUV;
+    vUV = aXZ / 1024.0; // world-anchored water UVs so waves/foam do not swim
+    gl_Position = uViewProj * vec4(pos, 1.0);
     gl_Position = uViewProj * vec4(pos, 1.0);
 }

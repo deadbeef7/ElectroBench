@@ -44,7 +44,9 @@
 #define BENCH_MILLISECONDS 45000 // 45 s like the original ElectroBench
 
 static const int kSeaResolution = 256;   // vertices per side of the ocean grid
-static const float kSeaSize = 1024.0f;   // world size of the ocean patch
+static const float kSeaSize = 8192.0f;   // world size of the ocean patch (graded:
+                                         // reaches far past the 2500 far plane so
+                                         // the sea fills everywhere to the horizon)
 static const int kEnvMapSize = 224;      // cubemap face resolution
 static const int kNoiseSize = 256;       // fBm noise texture size
 static const int kRippleSize = 256;      // ripple gradient texture size
@@ -383,8 +385,13 @@ static void BuildSeaMesh() {
   idx.reserve((size_t)quads * quads * 6);
   for (int z = 0; z < res; z++) {
     for (int x = 0; x < res; x++) {
-      float fx = ((float)x / (float)quads - 0.5f) * size;
-      float fz = ((float)z / (float)quads - 0.5f) * size;
+      // Power-graded spacing: dense quads near the center (detail under the
+      // camera) that stretch quadratically towards the rim so the patch
+      // extends to ~4km — well past the far plane — in every direction.
+      float u = (float)x / (float)quads * 2.0f - 1.0f;
+      float v = (float)z / (float)quads * 2.0f - 1.0f;
+      float fx = (u < 0.0f ? -1.0f : 1.0f) * std::fabs(u) * std::fabs(u) * (size * 0.5f);
+      float fz = (v < 0.0f ? -1.0f : 1.0f) * std::fabs(v) * std::fabs(v) * (size * 0.5f);
       verts.push_back(fx);
       verts.push_back(fz);
       verts.push_back(x / (float)quads); // uv
@@ -735,6 +742,10 @@ static void DrawSea(const Mat4 &view, double timeSec, const Vec3 &eye) {
   glBindVertexArray(gSeaMesh.vao);
   glUniformMatrix4fv(gSeaProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
   glUniform1f(gSeaProg.loc("uTime"), (float)timeSec);
+  // The grid follows the camera (snapped to a coarse quantum so vertices do
+  // not swim) — the sea is effectively infinite.
+  glUniform2f(gSeaProg.loc("uSeaCenter"), std::floor(eye.x / 64.0f) * 64.0f,
+              std::floor(eye.z / 64.0f) * 64.0f);
   glUniform3f(gSeaProg.loc("uEyePos"), eye.x, eye.y, eye.z);
   glUniform3f(gSeaProg.loc("uSunDir"), gSunDir.x, gSunDir.y, gSunDir.z);
   glUniform3f(gSeaProg.loc("uHorizonColor"), 0.30f, 0.20f, 0.30f); // dark mauve haze, melts into the sky band
