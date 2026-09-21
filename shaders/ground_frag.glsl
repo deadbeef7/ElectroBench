@@ -39,7 +39,9 @@ void main() {
     float shadow = shadowFactor();
 
     vec3 sunColor = vec3(1.0, 0.93, 0.82);
-    vec3 lighting = floorColor * (sunColor * NdotL * shadow + vec3(0.30, 0.32, 0.38));
+    // strong sun / low ambient so the gun shadows clearly stand out
+    vec3 lighting = floorColor * (sunColor * (NdotL * 1.7 * shadow) +
+                                  vec3(0.14, 0.15, 0.19));
 
     float r = length(vWorldPos.xz);
     float fog = smoothstep(9.0, 22.0, r);

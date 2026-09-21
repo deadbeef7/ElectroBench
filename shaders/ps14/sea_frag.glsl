@@ -85,13 +85,14 @@ void main() {
 
     // ---- phase 3: address + blend - sun glitter path ----
     vec3 H = normalize(L + V);
-    float glint = pow(max(dot(N, H), 0.0), 720.0);
-    float glintWide = pow(max(dot(N, H), 0.0), 48.0) * 0.14;
-    color += vec3(1.0, 0.92, 0.75) * (glint * 2.2 + glintWide) * max(L.y, 0.0);
+    float glint = pow(max(dot(N, H), 0.0), 300.0);
+    float glintWide = pow(max(dot(N, H), 0.0), 24.0) * 0.22;
+    color += vec3(1.0, 0.87, 0.62) * (glint * 4.5 + glintWide) * max(L.y, 0.0) * 1.4;
 
-    // slight aerial haze so distant water melts into the sky
+    // gentle aerial haze so distant water melts into the sky but the dark
+    // water and glitter stay readable most of the way out (dark reference)
     float haze = 1.0 - exp(-dist * 0.00052);
-    color = mix(color, uHorizonColor, haze * 0.65);
+    color = mix(color, uHorizonColor, haze * 0.30);
 
     // HDR tone map + gamma
     color = color / (color + vec3(1.0));

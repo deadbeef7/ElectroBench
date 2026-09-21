@@ -44,9 +44,9 @@ vec3 clouds(vec3 dir) {
     float cover = smoothstep(0.12, 0.58, t1 * 0.9 + t2 * 0.35 + 0.02);
     float wisp  = smoothstep(0.30, 0.75, t2 + t1 * 0.5) * 0.55;
 
-    // dusk clouds: dim blue-gray away from the sun, warm lining near it
+    // dusk clouds: dark charcoal-mauve masses, warm under-lit lining near the sun
     float sunAmount = max(dot(normalize(dir), normalize(uSunDir)), 0.0);
-    vec3 base = mix(vec3(0.44, 0.52, 0.82), uSunColor * 1.5, pow(sunAmount, 10.0) * 0.6);
+    vec3 base = mix(vec3(0.16, 0.14, 0.22), uSunColor * 1.5, pow(sunAmount, 12.0) * 0.6);
     vec3 c = base * (cover * 0.85 + wisp);
     return c;
 }
@@ -70,12 +70,15 @@ void main() {
     float shade = 0.55 + 0.35 * smoothstep(0.0, 0.50, dir.y);
     sky = mix(sky, c * shade, clamp(c.r * 0.7 + c.g * 0.7, 0.0, 0.70));
 
-    // tight falloff: warm only within ~10-15 deg of the sun, dark blue elsewhere
-    float glowMask = clamp(pow(sunAmount, 45.0) * 0.9 + pow(sunAmount, 160.0) * 0.55, 0.0, 0.95);
-    sky = mix(sky, vec3(3.2, 1.0, 0.18), glowMask);   // -> ~(225,186,110) orange
+    // broad warm glow hugging the horizon around the sun; the rest of the sky
+    // stays dark charcoal-mauve like the dusk reference
+    float glowMask = clamp(pow(sunAmount, 22.0) * 0.75 + pow(sunAmount, 80.0) * 0.6, 0.0, 0.95);
+    glowMask *= 1.0 - smoothstep(0.04, 0.42, h);      // glow hugs the horizon
+    sky = mix(sky, vec3(4.5, 1.6, 0.5), glowMask);    // warm amber glow
 
+    // big bright disc sitting just above the horizon
     float disc = smoothstep(0.9955, 0.9985, sunAmount);
-    sky = mix(sky, vec3(9.0, 2.2, 0.15), disc);       // -> ~(243,215,101) golden yellow
+    sky = mix(sky, vec3(9.0, 5.0, 2.2), disc);        // -> warm white core, soft edge
 
     // HDR-ish output for the env map (tone mapping happens in the sea shader)
     fragColor = vec4(sky, 1.0);

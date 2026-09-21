@@ -464,7 +464,7 @@ static Program gSeaProg, gSkyProg, gSkyViewProg, gHudProg;
 static GLuint gRippleTex = 0, gNoiseTex = 0, gFoamTex = 0, gFontTex = 0;
 static GLuint gEnvCube = 0, gEnvFbo = 0, gEnvDepth = 0;
 
-static Vec3 gSunDir = {0.87f, 0.12f, 0.47f};   // low sun on the fly-over path: yellow disc + orange glow visible, glitter path towards the camera
+static Vec3 gSunDir = {0.80f, 0.07f, 0.49f};   // sun just above the horizon (dusk reference): bright disc + glitter path enter view in the second half of the run
 
 static Vec3 gCamPos = {0.0f, 7.0f, 0.0f};
 static float gCamYaw = 0.0f, gCamPitch = -0.05f;
@@ -571,11 +571,12 @@ static void DrawSkyToEnvMap(const Mat4 &proj) {
     glUniformMatrix4fv(gSkyProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
     glUniform3f(gSkyProg.loc("uSunDir"), gSunDir.x, gSunDir.y, gSunDir.z);
     glUniform1f(gSkyProg.loc("uTime"), (float)NowSeconds());
-    // Sunset palette (HDR, linear): dark blue zenith, orange mid, golden horizon.
-    glUniform3f(gSkyProg.loc("uZenithColor"), 0.06f, 0.11f, 0.40f);
-    glUniform3f(gSkyProg.loc("uMidColor"), 1.75f, 0.50f, 0.14f);
-    glUniform3f(gSkyProg.loc("uHorizonColor"), 2.60f, 1.02f, 0.28f);
-    glUniform3f(gSkyProg.loc("uSunColor"), 1.05f, 0.72f, 0.35f);
+    // Dusk palette (HDR, linear): dark charcoal-mauve sky, warm glow only
+    // around the low sun (matches the dark reference photo).
+    glUniform3f(gSkyProg.loc("uZenithColor"), 0.030f, 0.042f, 0.110f);
+    glUniform3f(gSkyProg.loc("uMidColor"), 0.045f, 0.028f, 0.055f);
+    glUniform3f(gSkyProg.loc("uHorizonColor"), 0.22f, 0.12f, 0.15f);
+    glUniform3f(gSkyProg.loc("uSunColor"), 1.30f, 0.85f, 0.55f);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, gNoiseTex);
     glUniform1i(gSkyProg.loc("uNoiseTex"), 0);
@@ -736,8 +737,8 @@ static void DrawSea(const Mat4 &view, double timeSec, const Vec3 &eye) {
   glUniform1f(gSeaProg.loc("uTime"), (float)timeSec);
   glUniform3f(gSeaProg.loc("uEyePos"), eye.x, eye.y, eye.z);
   glUniform3f(gSeaProg.loc("uSunDir"), gSunDir.x, gSunDir.y, gSunDir.z);
-  glUniform3f(gSeaProg.loc("uHorizonColor"), 2.30f, 1.00f, 0.32f); // warm sunset haze, melts into the sky band
-  glUniform3f(gSeaProg.loc("uWaterColor"), 0.040f, 0.110f, 0.155f); // dark blue-teal body, still legible against the glitter path
+  glUniform3f(gSeaProg.loc("uHorizonColor"), 0.30f, 0.20f, 0.30f); // dark mauve haze, melts into the sky band
+  glUniform3f(gSeaProg.loc("uWaterColor"), 0.048f, 0.030f, 0.070f); // dark purple body like the dusk reference
   glActiveTexture(GL_TEXTURE0);
   glBindTexture(GL_TEXTURE_2D, gRippleTex);
   glUniform1i(gSeaProg.loc("uRippleTex"), 0);

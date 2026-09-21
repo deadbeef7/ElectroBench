@@ -137,7 +137,7 @@ static const float cam_target[3] = {0.0f, 0.45f, 0.0f};
 
 // Scene layout: the 90 UZIs stand on the floor in a 10x9 grid
 int grid_rows = 9, grid_cols = 10;
-float grid_spacing = 0.68f;
+float grid_spacing = 0.62f;
 float gun_scale = 1.0f;
 float sun_dir_world[3];
 
@@ -226,7 +226,7 @@ void drawFloor() {
   glEnd();
 }
 
-// Draws the 90 UZIs standing on the floor in a grid
+// Draws the 90 UZIs standing upright on the floor in a tight grid
 void drawGuns() {
   for (int i = 0; i < grid_rows; i++) {
     for (int j = 0; j < grid_cols; j++) {
@@ -238,10 +238,13 @@ void drawGuns() {
 
       glTranslatef(gridX, 0.0f, gridZ);
       glRotatef(yaw, 0.0f, 1.0f, 0.0f);
-      // centre the model on its bounding box and rest it on the floor
+      // stand the gun vertically: muzzle up, grip towards the viewer
+      glRotatef(90.0f, 0.0f, 0.0f, 1.0f);
+      // after the rotation the model's local X points up, so rest its lowest
+      // point (raw min_x) on the floor and centre the thickness (raw y mean)
       glTranslatef(model.pos_x * gun_scale,
-                   -model.min_y * gun_scale + 0.02f,
-                   -((model.min_z + model.max_z) * 0.5f) * gun_scale);
+                   -model.min_x * gun_scale + 0.02f,
+                   -model.pos_y * gun_scale);
       glScalef(gun_scale, gun_scale, gun_scale);
       model.draw();
 
@@ -514,9 +517,9 @@ void setup() {
     max_dim = ext_z;
   gun_scale = 0.55f / max_dim;
 
-  // fixed warm sun from the upper left-front: the camera sees lit sides
-  // and the guns cast long shadows to the right, clearly on the floor
-  float sd[3] = {-0.7f, 0.55f, 0.3f};
+  // fixed warm sun, low in the sky from the left-front: the upright guns cast
+  // long, clearly visible shadows across the floor to the right
+  float sd[3] = {-0.85f, 0.38f, 0.35f};
   float len = sqrtf(sd[0] * sd[0] + sd[1] * sd[1] + sd[2] * sd[2]);
   sun_dir_world[0] = sd[0] / len;
   sun_dir_world[1] = sd[1] / len;
