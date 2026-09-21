@@ -16,6 +16,8 @@ SDL_GLContext glContext;
 const char *gShotPath = nullptr;
 float gShotTime = 3.0f;
 int gWinW = 1366, gWinH = 768;
+// debug: dump the shadow map and CPU-evaluate the shadow test at floor points
+bool gDumpShadow = false;
 bool gDollySet = false;
 
 // ---------------------------------------------------------------------------
@@ -272,11 +274,15 @@ void renderShadowMap() {
 
   glClear(GL_DEPTH_BUFFER_BIT);
   glUseProgram(shadowProg);
-  // render only back faces so the guns never shadow their own front side
+  // render front faces so the shadow map stores the TOP surface of each gun.
+  // With the guns lying flat on the floor their back faces are the underside,
+  // at floor level, which makes contact-area shadows lose to the depth bias.
+  // Front faces sit ~0.26 units above the floor -> unambiguous depth gap.
+  // The polygon offset below keeps the guns from shadow-acne-ing themselves.
   glEnable(GL_CULL_FACE);
-  glCullFace(GL_FRONT);
+  glCullFace(GL_BACK);
   glEnable(GL_POLYGON_OFFSET_FILL);
-  glPolygonOffset(2.0f, 4.0f);
+  glPolygonOffset(4.0f, 8.0f);
   drawGuns();
   glDisable(GL_POLYGON_OFFSET_FILL);
   glDisable(GL_CULL_FACE);
@@ -309,9 +315,18 @@ void buildLightMatrix() {
 
   const float bias[16] = {0.5f, 0.0f, 0.0f, 0.0f, 0.0f, 0.5f, 0.0f, 0.0f,
                           0.0f, 0.0f, 0.5f, 0.0f, 0.5f, 0.5f, 0.5f, 1.0f};
-  float pv[16];
+  float pv[16], lm_colmajor[16];
   mat4Multiply(lproj, lview, pv);
-  mat4Multiply(bias, pv, light_matrix);
+  mat4Multiply(bias, pv, lm_colmajor);
+  // mat4Multiply treats its inputs/outputs as row-major (m[row*4+col]), but
+  // glUniformMatrix4fv with transpose=GL_FALSE expects COLUMN-major data.
+  // Upload the transpose so the shader receives bias*proj*view as written.
+  // (This bug made the shadow lookup sample the wrong texels: most of the
+  // floor read depth 1.0 and rendered fully lit, so only a few guns showed
+  // shadows.)
+  for (int r = 0; r < 4; r++)
+    for (int c = 0; c < 4; c++)
+      light_matrix[c * 4 + r] = lm_colmajor[r * 4 + c];
 }
 
 void uploadCommonUniforms(GLuint prog) {
@@ -396,6 +411,69 @@ void renderScene() {
     SDL_SetWindowTitle(window, title);
     frame = 0;
     init_time = final_time;
+  }
+
+  // Debug probe: read back the depth texture and evaluate the exact shader
+  // shadow test on the CPU for a few key world-space floor points.
+  if (gDumpShadow) {
+    std::vector<float> depth((size_t)SHADOW_SIZE * SHADOW_SIZE);
+    glBindTexture(GL_TEXTURE_2D, shadowTex);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, GL_FLOAT, depth.data());
+    printf("shadow map stats: ");
+    float mn = 1.0f, mx = 0.0f;
+    size_t written = 0;
+    for (float v : depth) {
+      if (v < mn) mn = v;
+      if (v > mx) mx = v;
+    }
+    printf("min=%.4f max=%.4f\n", mn, mx);
+    printf("light_matrix (column-major, row-major print):\n");
+    for (int r = 0; r < 4; r++)
+      printf("  %10.6f %10.6f %10.6f %10.6f\n", light_matrix[r * 4 + 0],
+             light_matrix[r * 4 + 1], light_matrix[r * 4 + 2],
+             light_matrix[r * 4 + 3]);
+    FILE *df = fopen("/tmp/shadowdump.raw", "wb");
+    if (df) {
+      fwrite(depth.data(), 4, depth.size(), df);
+      fclose(df);
+      printf("wrote /tmp/shadowdump.raw (%zu floats)\n", depth.size());
+      (void)written;
+    }
+    // light-space matrix as column-major float[16] (light_matrix layout)
+    for (int probe = 0; probe < 5; probe++) {
+      float wx, wz;
+      const char *label;
+      if (probe == 0) {
+        // centre of the middle gun's footprint (must be shadowed)
+        wx = 0.02f; wz = -0.05f; label = "mid-gun footprint";
+      } else if (probe == 1) {
+        wx = 0.30f; wz = -0.05f; label = "beside mid-gun (lit?)";
+      } else if (probe == 2) {
+        wx = 0.0f; wz = 0.0f; label = "world origin";
+      } else if (probe == 3) {
+        wx = 6.0f; wz = 0.0f; label = "far floor +x";
+      } else {
+        wx = 0.0f; wz = 6.0f; label = "far floor +z";
+      }
+      float p[4] = {wx, 0.0f, wz, 1.0f};
+      float c[4] = {0, 0, 0, 0};
+      for (int col = 0; col < 4; col++)
+        for (int r = 0; r < 4; r++)
+          c[col] += light_matrix[r * 4 + col] * p[r];
+      float ndcx = c[0] / c[3], ndcy = c[1] / c[3], ndcz = c[2] / c[3];
+      float ux = ndcx * 0.5f + 0.5f, uy = ndcy * 0.5f + 0.5f, uz = ndcz * 0.5f + 0.5f;
+      int tx = (int)(ux * SHADOW_SIZE), ty = (int)(uy * SHADOW_SIZE);
+      float stored = -1.0f;
+      if (tx >= 0 && tx < SHADOW_SIZE && ty >= 0 && ty < SHADOW_SIZE)
+        stored = depth[(size_t)ty * SHADOW_SIZE + tx];
+      float bias = 0.0022f;
+      float lit = (stored >= 0.0f) ? (uz - bias <= stored ? 1.0f : 0.0f) : -1.0f;
+      printf("probe %-22s uv=(%.3f,%.3f) uz=%.4f stored=%.4f -> %s\n", label,
+             ux, uy, uz, stored,
+             lit < 0 ? "OUT-OF-MAP" : (lit > 0 ? "LIT" : "SHADOWED"));
+    }
+    SDL_Quit();
+    exit(0);
   }
   if (timet >= 60000) {
     printf("Benchmark Results - Score : %f\n", (fps * 2) / (1.01 / fps));
@@ -627,6 +705,8 @@ int main(int argc, char **argv) {
       gWinW = atoi(argv[++i]);
     } else if (arg == "--height" && i + 1 < argc) {
       gWinH = atoi(argv[++i]);
+    } else if (arg == "--dump-shadow") {
+      gDumpShadow = true;
     }
   }
 
