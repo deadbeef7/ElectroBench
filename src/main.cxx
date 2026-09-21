@@ -137,7 +137,7 @@ static const float cam_target[3] = {0.0f, 0.45f, 0.0f};
 
 // Scene layout: the 90 UZIs stand on the floor in a 10x9 grid
 int grid_rows = 9, grid_cols = 10;
-float grid_spacing = 0.62f;
+float grid_spacing = 0.68f;
 float gun_scale = 1.0f;
 float sun_dir_world[3];
 
@@ -226,7 +226,8 @@ void drawFloor() {
   glEnd();
 }
 
-// Draws the 90 UZIs standing upright on the floor in a tight grid
+// Draws the 90 UZIs lying flat on the floor (mag base touching the ground),
+// muzzle up, in a grid
 void drawGuns() {
   for (int i = 0; i < grid_rows; i++) {
     for (int j = 0; j < grid_cols; j++) {
@@ -238,12 +239,12 @@ void drawGuns() {
 
       glTranslatef(gridX, 0.0f, gridZ);
       glRotatef(yaw, 0.0f, 1.0f, 0.0f);
-      // stand the gun vertically: muzzle up, grip towards the viewer
-      glRotatef(90.0f, 0.0f, 0.0f, 1.0f);
-      // after the rotation the model's local X points up, so rest its lowest
-      // point (raw min_x) on the floor and centre the thickness (raw y mean)
+      // the model already lies along X with the mag pointing down (-Y), so
+      // resting raw min_y on the floor plants every gun on its mag base with
+      // the body horizontal: mags touch the ground, muzzle forward.
+      // 0.001 keeps the contact face out of z-fighting but is invisible.
       glTranslatef(model.pos_x * gun_scale,
-                   -model.min_x * gun_scale + 0.02f,
+                   -model.min_y * gun_scale + 0.001f,
                    -model.pos_y * gun_scale);
       glScalef(gun_scale, gun_scale, gun_scale);
       model.draw();
@@ -517,8 +518,8 @@ void setup() {
     max_dim = ext_z;
   gun_scale = 0.55f / max_dim;
 
-  // fixed warm sun, low in the sky from the left-front: the upright guns cast
-  // long, clearly visible shadows across the floor to the right
+  // fixed warm sun, low in the sky from the left-front: the flat-lying guns
+  // cast long, clearly visible shadows across the floor to the right
   float sd[3] = {-0.85f, 0.38f, 0.35f};
   float len = sqrtf(sd[0] * sd[0] + sd[1] * sd[1] + sd[2] * sd[2]);
   sun_dir_world[0] = sd[0] / len;
