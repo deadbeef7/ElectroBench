@@ -18,6 +18,8 @@ float gShotTime = 3.0f;
 int gWinW = 1366, gWinH = 768;
 // debug: dump the shadow map and CPU-evaluate the shadow test at floor points
 bool gDumpShadow = false;
+// debug: disable shadow test for ground-truth shadow-diff screenshots
+bool gNoShadow = false;
 bool gDollySet = false;
 
 // ---------------------------------------------------------------------------
@@ -315,18 +317,13 @@ void buildLightMatrix() {
 
   const float bias[16] = {0.5f, 0.0f, 0.0f, 0.0f, 0.0f, 0.5f, 0.0f, 0.0f,
                           0.0f, 0.0f, 0.5f, 0.0f, 0.5f, 0.5f, 0.5f, 1.0f};
-  float pv[16], lm_colmajor[16];
+  float pv[16];
+  // mat4Multiply indexes m[col*4+row], i.e. it already produces standard
+  // column-major data — exactly what glUniformMatrix4fv with transpose=GL_FALSE
+  // expects. (A transpose here was tried and verified to be wrong: it made the
+  // shader sample the wrong light-space texels, scattering shadows around.)
   mat4Multiply(lproj, lview, pv);
-  mat4Multiply(bias, pv, lm_colmajor);
-  // mat4Multiply treats its inputs/outputs as row-major (m[row*4+col]), but
-  // glUniformMatrix4fv with transpose=GL_FALSE expects COLUMN-major data.
-  // Upload the transpose so the shader receives bias*proj*view as written.
-  // (This bug made the shadow lookup sample the wrong texels: most of the
-  // floor read depth 1.0 and rendered fully lit, so only a few guns showed
-  // shadows.)
-  for (int r = 0; r < 4; r++)
-    for (int c = 0; c < 4; c++)
-      light_matrix[c * 4 + r] = lm_colmajor[r * 4 + c];
+  mat4Multiply(bias, pv, light_matrix);
 }
 
 void uploadCommonUniforms(GLuint prog) {
@@ -368,6 +365,8 @@ void renderScene() {
   glUniform3fv(glGetUniformLocation(groundProg, "uSunDirWorld"), 1,
                sun_dir_world);
   glUniform3fv(glGetUniformLocation(groundProg, "uSkyColor"), 1, sky_color);
+  glUniform1f(glGetUniformLocation(groundProg, "uShadowDisable"),
+              gNoShadow ? 1.0f : 0.0f);
   drawFloor();
 
   // Gun pass
@@ -432,6 +431,92 @@ void renderScene() {
       printf("  %10.6f %10.6f %10.6f %10.6f\n", light_matrix[r * 4 + 0],
              light_matrix[r * 4 + 1], light_matrix[r * 4 + 2],
              light_matrix[r * 4 + 3]);
+    // dump every intermediate stage of buildLightMatrix
+    {
+      glMatrixMode(GL_PROJECTION);
+      glPushMatrix();
+      glLoadIdentity();
+      glOrtho(-4.8, 4.8, -4.8, 4.8, 0.5, 20.0);
+      float lproj2[16];
+      glGetFloatv(GL_PROJECTION_MATRIX, lproj2);
+      glPopMatrix();
+      glMatrixMode(GL_MODELVIEW);
+      glPushMatrix();
+      glLoadIdentity();
+      gluLookAt(cam_target[0] + sun_dir_world[0] * 6.0f,
+                cam_target[1] + sun_dir_world[1] * 6.0f,
+                cam_target[2] + sun_dir_world[2] * 6.0f, cam_target[0],
+                cam_target[1], cam_target[2], 0.0, 1.0, 0.0);
+      float lview2[16];
+      glGetFloatv(GL_MODELVIEW_MATRIX, lview2);
+      glPopMatrix();
+      float pv2[16];
+      mat4Multiply(lproj2, lview2, pv2);
+      printf("lproj (row-major print):\n");
+      for (int r = 0; r < 4; r++)
+        printf("  %10.6f %10.6f %10.6f %10.6f\n", lproj2[r * 4 + 0],
+               lproj2[r * 4 + 1], lproj2[r * 4 + 2], lproj2[r * 4 + 3]);
+      printf("lview (row-major print):\n");
+      for (int r = 0; r < 4; r++)
+        printf("  %10.6f %10.6f %10.6f %10.6f\n", lview2[r * 4 + 0],
+               lview2[r * 4 + 1], lview2[r * 4 + 2], lview2[r * 4 + 3]);
+      printf("pv (row-major print):\n");
+      for (int r = 0; r < 4; r++)
+        printf("  %10.6f %10.6f %10.6f %10.6f\n", pv2[r * 4 + 0],
+               pv2[r * 4 + 1], pv2[r * 4 + 2], pv2[r * 4 + 3]);
+    }
+    // empirical calibration: unproject known screen pixels of the MAIN camera
+    // with GLU (uses GL's own matrices, no hand-derived rays), intersect the
+    // floor, then evaluate light_matrix exactly like the GLSL shader does and
+    // compare against the actual depth dump.
+    {
+      const float az = cam_azimuth * 3.14159265f / 180.0f;
+      const float el = cam_elevation * 3.14159265f / 180.0f;
+      float eye[3] = {cam_target[0] + cam_dist * cosf(el) * sinf(az),
+                      cam_target[1] + cam_dist * sinf(el),
+                      cam_target[2] + cam_dist * cosf(el) * cosf(az)};
+      applyCamera();
+      double mv[16], pr[16];
+      for (int k = 0; k < 16; k++) {
+        float mvf[16], prf[16];
+        glGetFloatv(GL_MODELVIEW_MATRIX, mvf);
+        glGetFloatv(GL_PROJECTION_MATRIX, prf);
+        mv[k] = mvf[k];
+        pr[k] = prf[k];
+      }
+      const int vp[4] = {0, 0, gWinW, gWinH};
+      const int probes[6][2] = {{683, 460}, {683, 560}, {450, 620},
+                                {950, 620},  {300, 680}, {1050, 680}};
+      for (int pi = 0; pi < 6; pi++) {
+        double wx, wy, wz;
+        // near-plane point through this pixel, then ray to the y=0 floor
+        double nx_, ny_, nz_;
+        gluUnProject(probes[pi][0], probes[pi][1], 0.0, mv, pr, vp, &nx_,
+                     &ny_, &nz_);
+        double dx = nx_ - eye[0], dy = ny_ - eye[1], dz = nz_ - eye[2];
+        float t = (float)(-eye[1] / dy);
+        float wp[3] = {(float)(eye[0] + dx * t), 0.0f, (float)(eye[2] + dz * t)};
+        float p4[4] = {wp[0], 0.0f, wp[2], 1.0f};
+        float cg[4] = {0, 0, 0, 0};
+        for (int r = 0; r < 4; r++)
+          for (int col = 0; col < 4; col++)
+            cg[r] += light_matrix[col * 4 + r] * p4[col];
+        // uLightMatrix is already bias*P*V, so its output IS the [0,1]
+        // shadow-map coordinate; no extra half-offset (that double-bias
+        // squeezed every probe into the top-right quadrant).
+        float ugx = cg[0] / cg[3];
+        float ugy = cg[1] / cg[3];
+        float uzg = cg[2] / cg[3];
+        int tx = (int)(ugx * SHADOW_SIZE), ty = (int)(ugy * SHADOW_SIZE);
+        float st = -1.0f;
+        if (tx >= 0 && tx < SHADOW_SIZE && ty >= 0 && ty < SHADOW_SIZE)
+          st = depth[(size_t)ty * SHADOW_SIZE + tx];
+        printf("px(%4d,%4d)->world(%6.2f,%6.2f) glsluv=(%.3f,%.3f) uz=%.3f "
+               "stored=%.4f %s\n",
+               probes[pi][0], probes[pi][1], wp[0], wp[2], ugx, ugy, uzg, st,
+               (st >= 0 && uzg - 0.0022f > st) ? "SHADOW" : "lit");
+      }
+    }
     FILE *df = fopen("/tmp/shadowdump.raw", "wb");
     if (df) {
       fwrite(depth.data(), 4, depth.size(), df);
@@ -457,11 +542,12 @@ void renderScene() {
       }
       float p[4] = {wx, 0.0f, wz, 1.0f};
       float c[4] = {0, 0, 0, 0};
+      // column-major consumption matching the shader (m[col*4+row]); the
+      // output is already in [0,1] light space, so no extra half-offset.
       for (int col = 0; col < 4; col++)
         for (int r = 0; r < 4; r++)
-          c[col] += light_matrix[r * 4 + col] * p[r];
-      float ndcx = c[0] / c[3], ndcy = c[1] / c[3], ndcz = c[2] / c[3];
-      float ux = ndcx * 0.5f + 0.5f, uy = ndcy * 0.5f + 0.5f, uz = ndcz * 0.5f + 0.5f;
+          c[r] += light_matrix[col * 4 + r] * p[col];
+      float ux = c[0] / c[3], uy = c[1] / c[3], uz = c[2] / c[3];
       int tx = (int)(ux * SHADOW_SIZE), ty = (int)(uy * SHADOW_SIZE);
       float stored = -1.0f;
       if (tx >= 0 && tx < SHADOW_SIZE && ty >= 0 && ty < SHADOW_SIZE)
@@ -596,11 +682,11 @@ void setup() {
     max_dim = ext_z;
   gun_scale = 0.55f / max_dim;
 
-  // fixed warm sun from the upper left-front. Elevation is high enough that
-  // each gun's shadow (~0.47 units, ~0.7x its height) stays compact and stays
-  // attached to its own contact point instead of sliding under the next row
-  // of guns, so every UZI shows its own shadow on the floor.
-  float sd[3] = {-0.62f, 0.68f, 0.35f};
+  // fixed warm sun from the upper left-front. Elevation keeps each gun's
+  // shadow ~0.4 units (~0.6x its height): compact, clearly attached to its
+  // own contact point, and far enough from the grid edge that per-gun
+  // shadows do not tile into long diagonal bands across open floor.
+  float sd[3] = {-0.58f, 0.74f, 0.34f};
   float len = sqrtf(sd[0] * sd[0] + sd[1] * sd[1] + sd[2] * sd[2]);
   sun_dir_world[0] = sd[0] / len;
   sun_dir_world[1] = sd[1] / len;
@@ -707,6 +793,8 @@ int main(int argc, char **argv) {
       gWinH = atoi(argv[++i]);
     } else if (arg == "--dump-shadow") {
       gDumpShadow = true;
+    } else if (arg == "--no-shadow") {
+      gNoShadow = true;
     }
   }
 
