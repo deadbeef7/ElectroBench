@@ -66,6 +66,51 @@ cmake --build build
 
 Controls (original GL 2.1 benchmark) : long-click + move orbits the camera, mouse wheel zooms (smooth, clamped so you never clip into the scene), `ESC` quits. The 90 UZIs stand on a shadow-mapped concrete floor lit by a warm sun.
 
+# Windows (MSYS2)
+
+On Windows the easiest route is [MSYS2](https://www.msys2.org/), which provides gcc, cmake and prebuilt SDL2/GLEW/GLU packages. Both benchmarks build and run unmodified.
+
+**1. Install MSYS2** from [msys2.org](https://www.msys2.org/) to the default `C:\msys64`.
+
+**2. Open the UCRT64 shell** — from the Start menu pick **"MSYS2 UCRT64"** (pink/flamingo icon). Not "MSYS2 MSYS" (black icon): that's the wrong environment and the packages below won't be found.
+
+**3. Update pacman (first launch only)** — run twice if it asks to close the window:
+
+```sh
+pacman -Syu
+```
+
+**4. Install toolchain + libraries** (one command; if you prefer the MINGW64 shell instead of UCRT64, replace `ucrt-x86_64` with `x86_64` in every name — but stick to one and stay in the matching shell):
+
+```sh
+pacman -S --needed git mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake \
+  mingw-w64-ucrt-x86_64-ninja mingw-w64-ucrt-x86_64-pkgconf \
+  mingw-w64-ucrt-x86_64-SDL2 mingw-w64-ucrt-x86_64-glew mingw-w64-ucrt-x86_64-glu
+```
+
+**5. Clone and build** (Ninja is much faster than the default MinGW generator):
+
+```sh
+git clone https://github.com/deadbeef7/ElectroBench.git
+cd ElectroBench
+cmake -S . -B build -G Ninja
+cmake --build build
+```
+
+**6. Run** — from the same UCRT64 shell:
+
+```sh
+./build/ElectroBench.exe        # original GL 2.1 / GLSL 1.2 — 90 UZIs + shadows
+./build/ElectroBenchPS14.exe    # GL 3.3 — the PS1.4 dusk sea benchmark
+```
+
+Running from the shell matters: the SDL2/GLEW/GLU DLLs live in `C:\msys64\ucrt64\bin`, which is only on `PATH` inside that shell. To launch from Explorer instead, copy `SDL2.dll`, `glew32.dll`, `glu32.dll` (and `zlib1.dll` if it complains) next to the exe.
+
+Notes :
+- The headless screenshot flags work too — just use a Windows-style path: `./build/ElectroBenchPS14.exe --width 960 --screenshot shot.ppm --shot-times 6,20,38`
+- Any GPU with drivers from ~2010 onward handles both targets (PS14 needs GL 3.3; the main bench's GL 2.1 request gets a compatibility context — drivers ignore the profile hint below 3.2, per spec).
+- Run the exes from the repo root or via `build\...` — the asset resolver checks the current directory and then the executable's parent, so `shaders/` and `assets/UZI.obj` are found either way.
+
 # Contributions
 
 Contributions are welcome, just post a PR / issue.
