@@ -69,12 +69,12 @@ void main() {
     float NdV = max(dot(N, V), 0.0);
     float fresnel = 0.022 + 0.978 * pow(1.0 - NdV, 5.0);
 
-    // ---- water body: deep colour + foam detail in the crests ----
-    vec3 body = uWaterColor + uHorizonColor * 0.06;
+    // ---- water body: near-black purple deep + faint foam in the crests ----
+    vec3 body = uWaterColor * 0.55 + uHorizonColor * 0.03;
     float crest = smoothstep(0.55, 1.25, hC);
     float foam = texture(uFoamTex, vUV * 23.0 + vec2(uTime * 0.010, 0.0)).r;
     foam *= texture(uFoamTex, vUV * 41.0 - vec2(0.0, uTime * 0.013)).g;
-    body += vec3(0.75) * crest * foam * 0.85;
+    body += vec3(0.55, 0.48, 0.58) * crest * foam * 0.45; // dim warm-gray foam
 
     // subsurface glow against the light: thin wave crests shine turquoise
     vec3 L = normalize(uSunDir);
@@ -84,10 +84,14 @@ void main() {
     vec3 color = mix(body, reflColor, fresnel);
 
     // ---- phase 3: address + blend - sun glitter path ----
+    // tight sparkle core + broad soft sheen: the reference glitter is a wide
+    // scattered band of individual sparkles, not a smooth gradient
     vec3 H = normalize(L + V);
-    float glint = pow(max(dot(N, H), 0.0), 300.0);
-    float glintWide = pow(max(dot(N, H), 0.0), 24.0) * 0.22;
-    color += vec3(1.0, 0.87, 0.62) * (glint * 4.5 + glintWide) * max(L.y, 0.0) * 1.4;
+    float NdH = max(dot(N, H), 0.0);
+    float glint = pow(NdH, 520.0) * 6.0;              // pinpoint sparkles
+    float glintMid = pow(NdH, 90.0) * 0.55;           // mid falloff keeps it grainy
+    float glintWide = pow(NdH, 14.0) * 0.26;          // soft sheen around the path
+    color += vec3(1.0, 0.84, 0.66) * (glint + glintMid + glintWide) * max(L.y, 0.0) * 1.5;
 
     // gentle aerial haze so distant water melts into the sky but the dark
     // water and glitter stay readable most of the way out (dark reference)

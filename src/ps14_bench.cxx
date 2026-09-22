@@ -467,7 +467,7 @@ static Program gSeaProg, gSkyProg, gSkyViewProg, gHudProg;
 static GLuint gRippleTex = 0, gNoiseTex = 0, gFoamTex = 0, gFontTex = 0;
 static GLuint gEnvCube = 0, gEnvFbo = 0, gEnvDepth = 0;
 
-static Vec3 gSunDir = {0.80f, 0.07f, 0.49f};   // sun just above the horizon (dusk reference): bright disc + glitter path enter view in the second half of the run
+static Vec3 gSunDir = {0.86f, 0.045f, 0.51f};  // sun barely above the horizon (dusk reference): huge warm disc + a long glitter path across the sea
 
 static Vec3 gCamPos = {0.0f, 7.0f, 0.0f};
 static float gCamYaw = 0.0f, gCamPitch = -0.05f;
@@ -498,24 +498,28 @@ static int gHudQuadCount = 0;
 
 // ------------------------------------------------------------- camera path
 // A gentle banking fly-over: forward glide plus a slow orbit, like the
-// Nature camera drifting over the ocean.
+// Nature camera drifting over the ocean. The view faces the sun azimuth with
+// a slow sway so the dusk reference framing — sun disc above the horizon with
+// its glitter path running toward the camera — dominates the benchmark,
+// occasionally drifting away for variety.
 static void UpdateAutoCamera(float t) {
   float a = t * 0.05f;
   float radius = 42.0f + std::sin(t * 0.021f) * 10.0f;
 
-  // Orbit around the centre of the ocean patch. The previous implementation
-  // looked at a second point on the orbit, which sent the camera away from the
-  // 1024m sea and exposed the edge of the finite grid.
   Vec3 eye;
   eye.x = std::cos(a) * radius;
   eye.z = std::sin(a) * radius * 0.7f;
   eye.y = 7.5f + std::sin(t * 0.043f) * 2.2f;
   gCamPos = eye;
 
-  Vec3 target = {0.0f, 1.5f, 0.0f};
-  Vec3 fwd = Vec3Normalize(Vec3Sub(target, eye));
+  // face the sun, swaying slowly so the framing breathes during the run
+  float yawSun = std::atan2(gSunDir.x, gSunDir.z);
+  float yaw = yawSun + 0.55f * std::sin(t * 0.013f) + 0.18f * std::sin(t * 0.041f);
+  float pitch = -0.06f + 0.035f * std::sin(t * 0.017f); // slightly downward gaze
+  Vec3 fwd = {std::sin(yaw) * std::cos(pitch), std::sin(pitch),
+              std::cos(yaw) * std::cos(pitch)};
   gCamYaw = std::atan2(fwd.x, fwd.z);
-  gCamPitch = std::asin(fwd.y) * 0.6f;
+  gCamPitch = std::asin(fwd.y);
 }
 
 static Vec3 OrbitCamPos() {
@@ -580,9 +584,9 @@ static void DrawSkyToEnvMap(const Mat4 &proj) {
     glUniform1f(gSkyProg.loc("uTime"), (float)NowSeconds());
     // Dusk palette (HDR, linear): dark charcoal-mauve sky, warm glow only
     // around the low sun (matches the dark reference photo).
-    glUniform3f(gSkyProg.loc("uZenithColor"), 0.030f, 0.042f, 0.110f);
-    glUniform3f(gSkyProg.loc("uMidColor"), 0.045f, 0.028f, 0.055f);
-    glUniform3f(gSkyProg.loc("uHorizonColor"), 0.22f, 0.12f, 0.15f);
+    glUniform3f(gSkyProg.loc("uZenithColor"), 0.010f, 0.010f, 0.030f);  // near-black anti-sun sky
+    glUniform3f(gSkyProg.loc("uMidColor"), 0.020f, 0.012f, 0.028f);     // deep charcoal-mauve overhead
+    glUniform3f(gSkyProg.loc("uHorizonColor"), 0.14f, 0.065f, 0.075f);  // dark maroon band
     glUniform3f(gSkyProg.loc("uSunColor"), 1.30f, 0.85f, 0.55f);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, gNoiseTex);
@@ -745,8 +749,8 @@ static void DrawSea(const Mat4 &view, double timeSec, const Vec3 &eye) {
   glUniform1f(gSeaProg.loc("uTime"), (float)timeSec);
   glUniform3f(gSeaProg.loc("uEyePos"), eye.x, eye.y, eye.z);
   glUniform3f(gSeaProg.loc("uSunDir"), gSunDir.x, gSunDir.y, gSunDir.z);
-  glUniform3f(gSeaProg.loc("uHorizonColor"), 0.30f, 0.20f, 0.30f); // dark mauve haze, melts into the sky band
-  glUniform3f(gSeaProg.loc("uWaterColor"), 0.048f, 0.030f, 0.070f); // dark purple body like the dusk reference
+  glUniform3f(gSeaProg.loc("uHorizonColor"), 0.14f, 0.075f, 0.090f); // dark maroon haze, melts into the sky band
+  glUniform3f(gSeaProg.loc("uWaterColor"), 0.042f, 0.026f, 0.062f); // near-black purple body like the dusk reference
   glActiveTexture(GL_TEXTURE0);
   glBindTexture(GL_TEXTURE_2D, gRippleTex);
   glUniform1i(gSeaProg.loc("uRippleTex"), 0);
