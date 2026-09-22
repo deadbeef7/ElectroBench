@@ -28,12 +28,12 @@ const float PI = 3.14159265359;
 // Chop everywhere: short wavelengths so several crests are always on screen.
 float waveHeight(vec2 p, float t) {
     float h = 0.0;
-    h += sin(dot(p, vec2( 0.98,  0.20)) * 0.170 + t * 1.30) * 0.68;
-    h += sin(dot(p, vec2(-0.64,  0.77)) * 0.240 + t * 1.60) * 0.46;
-    h += sin(dot(p, vec2( 0.36, -0.93)) * 0.380 + t * 2.10) * 0.34;
-    h += sin(dot(p, vec2(-0.91, -0.42)) * 0.540 + t * 2.70) * 0.22;
-    h += sin(dot(p, vec2( 0.59,  0.81)) * 0.860 + t * 3.40) * 0.14;
-    h += sin(dot(p, vec2(-0.20,  0.98)) * 1.450 + t * 4.40) * 0.08;
+    h += sin(dot(p, vec2( 0.98,  0.20)) * 0.170 + t * 1.30) * 0.95;
+    h += sin(dot(p, vec2(-0.64,  0.77)) * 0.240 + t * 1.60) * 0.64;
+    h += sin(dot(p, vec2( 0.36, -0.93)) * 0.380 + t * 2.10) * 0.48;
+    h += sin(dot(p, vec2(-0.91, -0.42)) * 0.540 + t * 2.70) * 0.31;
+    h += sin(dot(p, vec2( 0.59,  0.81)) * 0.860 + t * 3.40) * 0.20;
+    h += sin(dot(p, vec2(-0.20,  0.98)) * 1.450 + t * 4.40) * 0.11;
     return h;
 }
 
@@ -60,8 +60,13 @@ void main() {
     // add ripple perturbation in tangent space, THEN clamp: clamping before the
     // perturbation let downward-perturbed rays sample the never-rendered -Y
     // cubemap face (black band at the horizon + black spots on the water).
-    R = normalize(R + vec3(pert.x, 0.0, pert.y) * 2.2);
-    R.y = abs(R.y);                                   // never look below the horizon
+    R = normalize(R + vec3(pert.x, 0.0, pert.y) * 1.25);
+    // Reflections stretch vertically (the classic flattened-reflection trick):
+    // grazing rays would otherwise hug the bright horizon band and light the
+    // whole sea up. Biasing the ray up makes off-sun water reflect the dark
+    // upper sky while the sun glitter path stays put (it is a separate term).
+    R.y = abs(R.y) * 0.30 + 0.45;
+    R = normalize(R);
 
     vec3 reflColor = texture(uSkyEnvTex, R).rgb;
 
@@ -69,30 +74,50 @@ void main() {
     float NdV = max(dot(N, V), 0.0);
     float fresnel = 0.022 + 0.978 * pow(1.0 - NdV, 5.0);
 
-    // ---- water body: deep colour + foam detail in the crests ----
-    vec3 body = uWaterColor + uHorizonColor * 0.06;
+    // ---- water body: near-black purple deep + faint foam in the crests ----
+    vec3 body = uWaterColor * 0.55 + uHorizonColor * 0.03;
+
+    // directional sun lighting on the wave slopes: faces tilted toward the
+    // low sun glow warm, backslopes fall to near-black — this is what makes
+    // the sea read as lit by the same sun as the sky instead of pasted on
+    vec3 L = normalize(uSunDir);
+    float sunDiffuse = max(dot(N, L), 0.0);
+    body *= 0.50 + 0.90 * sunDiffuse;                                // slope shading
+    body += vec3(1.05, 0.52, 0.28) * pow(sunDiffuse, 3.0) * 0.40;    // warm sun-facing slopes
+
     float crest = smoothstep(0.55, 1.25, hC);
     float foam = texture(uFoamTex, vUV * 23.0 + vec2(uTime * 0.010, 0.0)).r;
     foam *= texture(uFoamTex, vUV * 41.0 - vec2(0.0, uTime * 0.013)).g;
-    body += vec3(0.75) * crest * foam * 0.85;
+    body += vec3(0.55, 0.48, 0.58) * crest * foam * 0.45; // dim warm-gray foam
 
     // subsurface glow against the light: thin wave crests shine turquoise
-    vec3 L = normalize(uSunDir);
     float towardSun = max(dot(normalize(vec3(-V.x, 0.0, -V.z)), L), 0.0);
     body += vec3(0.05, 0.20, 0.16) * towardSun * crest * 0.8;
 
     vec3 color = mix(body, reflColor, fresnel);
 
-    // ---- phase 3: address + blend - sun glitter path ----
-    vec3 H = normalize(L + V);
-    float glint = pow(max(dot(N, H), 0.0), 300.0);
-    float glintWide = pow(max(dot(N, H), 0.0), 24.0) * 0.22;
-    color += vec3(1.0, 0.87, 0.62) * (glint * 4.5 + glintWide) * max(L.y, 0.0) * 1.4;
+    // ---- aerial haze first: near water stays dark and readable, while the
+    // far sea melts into the horizon. The haze target is the ACTUAL sky colour
+    // at this fragment's azimuth — sampled from the env cubemap just above the
+    // horizon line — so by construction the far edge of the patch converges
+    // into the sky band above it (bright glow on the sun side, dark maroon
+    // away from it) instead of cutting off against a single constant colour.
+    float haze = 1.0 - exp(-dist * 0.00075);
+    vec2 dxdz = vWorld.xz - uEyePos.xz;
+    vec3 skyAtHorizon = texture(uSkyEnvTex,
+        normalize(vec3(dxdz.x, 0.012, dxdz.y))).rgb;
+    color = mix(color, skyAtHorizon, haze * (0.30 + 0.70 * haze));
 
-    // gentle aerial haze so distant water melts into the sky but the dark
-    // water and glitter stay readable most of the way out (dark reference)
-    float haze = 1.0 - exp(-dist * 0.00052);
-    color = mix(color, uHorizonColor, haze * 0.30);
+    // ---- phase 3: address + blend - sun glitter path ----
+    // tight sparkle core + broad soft sheen: individual sparkles scattered
+    // across the swell, applied after the haze so the path stays crisp far out
+    vec3 H = normalize(L + V);
+    float NdH = max(dot(N, H), 0.0);
+    float glint = pow(NdH, 520.0) * 6.0;              // pinpoint sparkles
+    float glintMid = pow(NdH, 90.0) * 0.55;           // mid falloff keeps it grainy
+    float glintWide = pow(NdH, 14.0) * 0.22;          // soft sheen around the path
+    color += vec3(1.0, 0.84, 0.66) * (glint + glintMid + glintWide)
+             * (0.25 + max(L.y, 0.0) * 1.2);
 
     // HDR tone map + gamma
     color = color / (color + vec3(1.0));

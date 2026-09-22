@@ -1,13 +1,9 @@
 
 # ElectroBench
 ElectroBench is a 45-second long benchmark specifiacally designed to run on old and modern PCs, don't critise it by it using OpenGL 2.1, and GLSL 1.2, Even office PCs have low scores at it.
-It uses OpenGL 2.1, and C++, and uses make for compilation. It is designed to be a replacement for glmark (even though it is great and I used it before).
+It uses OpenGL 2.1/3.3, and C++, and uses make for compilation. It is designed to be a replacement for glmark (even though it is great and I used it before).
 
-# Effects
 
-In this benchmark, we are using realistic lighting techniques, thanks to the shaders (with some limitations, of course), then we load 90 UZIs (!!) with 6 textures each onto the screen.
-
-You can move the camera by long-clicking and moving the mouse.
 
 # Screenshots
 
@@ -24,17 +20,17 @@ Close-up — mags resting on the ground, shadows clearly visible under each gun:
 The `ps14-sea-benchmark` branch adds a second, heavier benchmark written in **OpenGL 3.3 core** that recreates the pixel shader 1.4 workload from 3DMark2001 SE: an ocean under a cloudy sky with real-time reflections.
 
 What it renders :
-- A procedural **sky dome** with two layers of drifting fBm clouds, captured every frame into a **cubemap** (the PS1.4-era trick for dynamic reflections)
-- A **256x256 ocean grid** displaced on the GPU by a 6-octave wave function
+- A procedural **sky dome** with big smooth dusk cloud banks, rendered **directly at full screen resolution** — plus a cubemap capture of the same sky used for the sea's reflections (low-res there is invisible and cheap)
+- A **4 km ocean patch** (far plane 6000) displaced on the GPU by a 6-octave wave function, haze-matched to the per-azimuth horizon colour so it melts into the sky
 - Water shading structured like an asm `ps_1_4` shader: ripple-gradient **addressing** phase, a **dependent read** into the environment cubemap for reflections, then fresnel blending, sun **glitter**, foam crests and distance haze
 - The same score formula as the main benchmark, over a 45 second run
 
 Build and run it with :
 
 ```sh
-cmake -S . -B build
-cmake --build build
-./build/ElectroBenchPS14
+make
+./build/PS14SeaBenchmark          # Linux / macOS
+./build/PS14SeaBenchmark.exe      # Windows (MSYS2)
 ```
 
 Controls : `F` toggles the automatic fly-over camera, long-click + move orbits the camera, mouse wheel zooms, arrow keys look around, `ESC` quits.
@@ -42,10 +38,10 @@ Controls : `F` toggles the automatic fly-over camera, long-click + move orbits t
 Headless visual-test flags (used to verify the render output in CI-like environments):
 
 ```sh
-./build/ElectroBenchPS14 --width 960 --screenshot /tmp/shot.ppm --shot-times 6,20,38
+./build/PS14SeaBenchmark --width 960 --screenshot /tmp/shot.ppm --shot-times 6,20,38
 ```
 
-The sunset scene at 35s into the run (golden horizon, dark blue sky away from the sun, yellow sun with glitter reflection, choppy seas):
+The sunset scene at 35s into the run (big cloud banks, warm sun with glitter reflection, dark sea haze-matched into the horizon):
 
 ![PS1.4 sea benchmark](docs/screenshots/ps14_dusk_t36.png)
 
@@ -59,9 +55,7 @@ command on your machine after cloning repo:
 
 
 ```sh
-cmake -S . -B build
-cmake --build build
-./build/ElectroBench
+make legacy
 ```
 
 Controls (original GL 2.1 benchmark) : long-click + move orbits the camera, mouse wheel zooms (smooth, clamped so you never clip into the scene), `ESC` quits. The 90 UZIs stand on a shadow-mapped concrete floor lit by a warm sun.

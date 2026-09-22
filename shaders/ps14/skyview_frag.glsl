@@ -17,11 +17,12 @@ out vec4 fragColor;
 void main() {
     vec3 dir = normalize(uCamFwd + uCamRight * (vNDC.x * uTanHalfFov * uAspect) +
                          uCamUp * (vNDC.y * uTanHalfFov));
-    // The cubemap only stores the upper hemisphere; mirror below-horizon rays
-    // onto the horizon sky so the sliver between the sea's far edge and the
-    // horizon line shows haze instead of an empty (black) cube face.
+    // The cubemap only stores the upper hemisphere; above-horizon rays sample
+    // it directly. Below-horizon rays (the sliver between the sea's far edge
+    // and the horizon line) are mirrored across the sea plane onto the opposite
+    // azimuth above the horizon so they show sky instead of black.
     vec3 rd = dir;
-    rd.y = abs(rd.y);
+    if (rd.y < 0.0) rd = normalize(vec3(dir.x, -dir.y, dir.z));
     vec3 c = texture(uEnvMap, rd).rgb;
     c = c / (c + vec3(1.0));                 // same tonemap as the sea shader
     c = pow(c, vec3(1.0 / 2.2));
