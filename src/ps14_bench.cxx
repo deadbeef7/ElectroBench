@@ -44,9 +44,7 @@
 #define BENCH_MILLISECONDS 45000 // 45 s like the original ElectroBench
 
 static const int kSeaResolution = 256;   // vertices per side of the ocean grid
-static const float kSeaSize = 8192.0f;   // world size of the ocean patch (graded:
-                                         // reaches far past the 2500 far plane so
-                                         // the sea fills everywhere to the horizon)
+static const float kSeaSize = 1024.0f;   // world size of the ocean patch
 static const int kEnvMapSize = 224;      // cubemap face resolution
 static const int kNoiseSize = 256;       // fBm noise texture size
 static const int kRippleSize = 256;      // ripple gradient texture size
@@ -99,11 +97,14 @@ static void Mat4Perspective(Mat4 &m, float fovYDeg, float aspect, float zNear, f
 static void Mat4LookAt(Mat4 &m, const Vec3 &eye, const Vec3 &center, const Vec3 &up) {
   Vec3 f = Vec3Normalize(Vec3Sub(center, eye)); // forward
   Vec3 s = Vec3Normalize(Vec3Cross(f, up));     // right
-  Vec3 u = Vec3Cross(s, f);
+  Vec3 u = Vec3Cross(s, f);                     // corrected up basis
   Mat4Identity(m);
-  m[0] = s.x;  m[4] = s.y;  m[8] = -f.x;
-  m[1] = u.x;  m[5] = u.y;  m[9] = -f.y;
-  m[2] = s.z;  m[6] = u.z;  m[10] = -f.z;
+
+  // Column-major OpenGL look-at matrix:
+  // columns are right, up, -forward, translation.
+  m[0] = s.x;   m[4] = s.y;   m[8]  = s.z;
+  m[1] = u.x;   m[5] = u.y;   m[9]  = u.z;
+  m[2] = -f.x;  m[6] = -f.y;  m[10] = -f.z;
   m[12] = -Vec3Dot(s, eye);
   m[13] = -Vec3Dot(u, eye);
   m[14] = Vec3Dot(f, eye);
@@ -385,13 +386,8 @@ static void BuildSeaMesh() {
   idx.reserve((size_t)quads * quads * 6);
   for (int z = 0; z < res; z++) {
     for (int x = 0; x < res; x++) {
-      // Power-graded spacing: dense quads near the center (detail under the
-      // camera) that stretch quadratically towards the rim so the patch
-      // extends to ~4km — well past the far plane — in every direction.
-      float u = (float)x / (float)quads * 2.0f - 1.0f;
-      float v = (float)z / (float)quads * 2.0f - 1.0f;
-      float fx = (u < 0.0f ? -1.0f : 1.0f) * std::fabs(u) * std::fabs(u) * (size * 0.5f);
-      float fz = (v < 0.0f ? -1.0f : 1.0f) * std::fabs(v) * std::fabs(v) * (size * 0.5f);
+      float fx = ((float)x / (float)quads - 0.5f) * size;
+      float fz = ((float)z / (float)quads - 0.5f) * size;
       verts.push_back(fx);
       verts.push_back(fz);
       verts.push_back(x / (float)quads); // uv
@@ -506,13 +502,17 @@ static int gHudQuadCount = 0;
 static void UpdateAutoCamera(float t) {
   float a = t * 0.05f;
   float radius = 42.0f + std::sin(t * 0.021f) * 10.0f;
-  Vec3 center = {std::cos(a) * radius, 0.0f, std::sin(a) * radius * 0.7f};
+
+  // Orbit around the centre of the ocean patch. The previous implementation
+  // looked at a second point on the orbit, which sent the camera away from the
+  // 1024m sea and exposed the edge of the finite grid.
   Vec3 eye;
-  eye.x = std::cos(a + 0.9f) * radius;
-  eye.z = std::sin(a + 0.9f) * radius * 0.7f;
+  eye.x = std::cos(a) * radius;
+  eye.z = std::sin(a) * radius * 0.7f;
   eye.y = 7.5f + std::sin(t * 0.043f) * 2.2f;
   gCamPos = eye;
-  Vec3 target = Vec3Add(center, {0.0f, 1.5f, 0.0f});
+
+  Vec3 target = {0.0f, 1.5f, 0.0f};
   Vec3 fwd = Vec3Normalize(Vec3Sub(target, eye));
   gCamYaw = std::atan2(fwd.x, fwd.z);
   gCamPitch = std::asin(fwd.y) * 0.6f;
@@ -740,12 +740,9 @@ static void DrawSea(const Mat4 &view, double timeSec, const Vec3 &eye) {
   Mat4Multiply(vp, gProj, view);
   glUseProgram(gSeaProg.handle);
   glBindVertexArray(gSeaMesh.vao);
+  glDepthMask(GL_TRUE);
   glUniformMatrix4fv(gSeaProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
   glUniform1f(gSeaProg.loc("uTime"), (float)timeSec);
-  // The grid follows the camera (snapped to a coarse quantum so vertices do
-  // not swim) — the sea is effectively infinite.
-  glUniform2f(gSeaProg.loc("uSeaCenter"), std::floor(eye.x / 64.0f) * 64.0f,
-              std::floor(eye.z / 64.0f) * 64.0f);
   glUniform3f(gSeaProg.loc("uEyePos"), eye.x, eye.y, eye.z);
   glUniform3f(gSeaProg.loc("uSunDir"), gSunDir.x, gSunDir.y, gSunDir.z);
   glUniform3f(gSeaProg.loc("uHorizonColor"), 0.30f, 0.20f, 0.30f); // dark mauve haze, melts into the sky band
@@ -778,6 +775,7 @@ static void DrawSkyView() {
   Vec3 up = Vec3Cross(right, fwd);
 
   glDisable(GL_DEPTH_TEST);
+  glDepthMask(GL_FALSE); // sky is background; it must not occlude the sea
   glBindVertexArray(gEmptyVao);
   glUseProgram(gSkyViewProg.handle);
   glActiveTexture(GL_TEXTURE0);
@@ -790,6 +788,7 @@ static void DrawSkyView() {
   glUniform1f(gSkyViewProg.loc("uAspect"), aspect);
   glDrawArrays(GL_TRIANGLES, 0, 3);
   glBindVertexArray(0);
+  glDepthMask(GL_TRUE);
   glEnable(GL_DEPTH_TEST);
 }
 
