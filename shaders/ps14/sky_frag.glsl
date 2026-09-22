@@ -1,12 +1,17 @@
 #version 330 core
-// Fragment shader for the sky dome: gradient zenith -> horizon plus two layers
-// of fBm clouds. The dome is captured once per frame into the environment
-// cubemap, so the sea below always reflects what is above.
+// Fragment shader for the sky dome: a dusk gradient plus two procedural cloud
+// layers, captured once per frame into the environment cubemap so the sea
+// below always reflects what is above.
 //
-// Styled after the moody dusk reference: the sky is nearly black away from the
-// sun, a broad salmon field surrounds the sun, and heavy horizontal stratus
-// streaks cross it — dark charcoal where unlit, pale pink where the sun catches
-// their underside.
+// Layer 1 — high sheared cirrus/stratus: long thin bands, sampled
+//           anisotropically so they stretch horizontally; they can cross the
+//           sun disc.
+// Layer 2 — broken cumulus masses: domain-warped fBm so they read as puffy,
+//           lumpy clouds, lit warm on the sun-facing side and shaded cool on
+//           their own shadow side (basic two-tone cloud shading).
+//
+// Palette follows the 3DMark2001 "Nature" dusk: deep blue-black zenith,
+// warm orange horizon band around a setting sun, pink-to-gold cloud rims.
 
 in vec3 vDir;
 
@@ -22,92 +27,132 @@ out vec4 fragColor;
 
 const float PI = 3.14159265359;
 
-// One octave set of drifting domain-warped clouds on the upper hemisphere.
-// The noise is sampled anisotropically (compressed vertically) so the masses
-// shear into long horizontal stratus streaks like the reference.
-// Returns the lit cloud color; outDensity carries the coverage so main() can
-// blend it over the sky gradient.
-vec3 clouds(vec3 dir, out float outDensity) {
-    // cylindrical unwrap; poles are never visible at this camera height
-    vec2 uv = vec2(atan(dir.z, dir.x) * (0.5 / PI) + 0.5, dir.y);
-
-    // streaks persist down to the horizon (at reduced opacity) so thin bands
-    // veil the sun disc itself, like the reference
-    float fade = 0.25 + 0.75 * smoothstep(0.0, 0.15, dir.y);
-    if (fade <= 0.001) return vec3(0.0);
-
-    float wind = uTime * 0.0055;
-    float t1 = 0.0, t2 = 0.0;
+// 4-octave fBm helper: octaves double in frequency (proper detail cascade).
+// Sampled with textureLod 0: the big coordinate multipliers would otherwise
+// push the implicit derivatives into high mip levels and erase the detail
+// octaves (flat, cloudless sky).
+float fbm(vec2 p) {
+    float sum = 0.0;
     float amp = 0.5;
-    vec2 flow1 = vec2(wind, wind * 0.30);
-    vec2 flow2 = vec2(-wind * 0.6, wind * 0.40);
-
-    for (int i = 0; i < 5; i++) {
-        // stretch: x frequency stays high (texture along the streak),
-        // y frequency is compressed (slow variation with height) -> bands
-        vec2 s1 = vec2(3.4, 1.05) * amp * 2.0;
-        vec2 s2 = vec2(6.3, 1.90) * amp * 2.0;
-        vec2 p1 = uv * s1 + flow1 * amp * 2.0;
-        vec2 p2 = uv * s2 + flow2 * amp * 2.0 + 17.0;
-        p1.y *= 0.55;
-        p2.y *= 0.55;
-        t1 += texture(uNoiseTex, p1).r * amp;
-        t2 += texture(uNoiseTex, p2).g * amp;
+    for (int i = 0; i < 4; i++) {
+        sum += textureLod(uNoiseTex, p, 0.0).r * amp;
+        p = p * 2.07 + vec2(0.37, 1.31);
         amp *= 0.5;
     }
-    t1 = t1 / 0.96875 - 0.5;   // normalise 5-octave sum (1.0 - 0.5^5)
-    t2 = t2 / 0.96875 - 0.5;
+    return sum / 0.9375 - 0.5; // normalise 4-octave sum (1.0 - 0.5^4)
+}
 
-    // heavy overcast: large solid masses plus shredded streaky wisps
-    float cover = smoothstep(0.02, 0.52, t1 * 0.95 + t2 * 0.40 + 0.10);
-    float wisp  = smoothstep(0.26, 0.72, t2 + t1 * 0.5) * 0.75;
-    float density = clamp(cover * 0.9 + wisp, 0.0, 1.0) * fade;
-    outDensity = density;
+// High cirrus / stratus: thin horizontal bands, strongest overhead, thinning
+// toward the horizon. Returns density; light returns the sun-facing factor.
+float cirrus(vec3 dir, out float light) {
+    vec2 uv = vec2(atan(dir.z, dir.x) * (0.5 / PI) + 0.5, dir.y);
 
-    // lighting: near the sun the masses go dark (backlit silhouettes) while
-    // their thin edges and wisps catch pale pink rim light — like the reference
-    float sunAmount = max(dot(normalize(dir), normalize(uSunDir)), 0.0);
-    float shine = pow(sunAmount, 5.0) * 0.85 + pow(sunAmount, 18.0) * 0.9;
-    vec3 base = vec3(0.085, 0.070, 0.095);            // charcoal-mauve shadow side
-    vec3 lit  = vec3(1.55, 0.95, 0.78);               // salmon-pink rim light
-    float edgeBand = smoothstep(0.05, 0.30, density) * (1.0 - smoothstep(0.45, 0.85, density));
-    vec3 c = base * density * (1.0 - 0.55 * shine) + lit * shine * (0.20 * density + 0.85 * edgeBand);
-    return c;
+    float wind = uTime * 0.0045;
+    vec2 q = vec2(uv.x * 3.5, uv.y * 24.0) + vec2(wind, 0.0); // long thin horizontal bands
+    float n = fbm(q);
+
+    // banded coverage: several distinct streak layers rather than one blob
+    float band = smoothstep(0.06, 0.32, n) * 0.75
+               + smoothstep(0.18, 0.50, fbm(vec2(uv.x * 5.0, uv.y * 34.0) - vec2(wind * 0.6, 3.7))) * 0.55;
+
+    // fade with altitude: thin veil near the horizon, denser overhead
+    float fade = smoothstep(0.01, 0.14, dir.y) * (0.35 + 0.65 * smoothstep(0.0, 0.45, dir.y));
+    float density = clamp(band, 0.0, 1.0) * fade;
+
+    // sun-facing thin cloud lights up warm; thick stays dark
+    float sunAmount = max(dot(dir, normalize(uSunDir)), 0.0);
+    light = pow(sunAmount, 3.0) * 0.9 + pow(sunAmount, 24.0) * 1.1;
+    return density;
+}
+
+// Broken cumulus masses: domain-warped fBm so the shapes get the lumpy,
+// cauliflower edges real cumulus has, instead of smooth noise blobs.
+// Returns the coverage density; light carries the sun-facing factor and rim
+// the "thin edge catching light" factor used for the edge-lit look.
+float cumulus(vec3 dir, out float light, out float rim) {
+    vec2 uv = vec2(atan(dir.z, dir.x) * (0.5 / PI) + 0.5, dir.y);
+
+    float wind = uTime * 0.0032;
+    vec2 q = vec2(uv.x * 9.0, uv.y * 13.0) + vec2(wind, wind * 0.25);
+    // domain warp: two nested noise lookups bend the base field
+    vec2 warp = vec2(textureLod(uNoiseTex, q * 0.5 + 3.7, 0.0).r,
+                     textureLod(uNoiseTex, q * 0.5 + 9.1, 0.0).g) - 0.5;
+    q += warp * 0.55;
+
+    float n = fbm(q); // puffy shapes
+
+    // large broken masses with fairly hard edges, scattered not uniform
+    float mass = smoothstep(0.14, 0.40, n);
+    // bright rim light only in a narrow band at the mass edges — cloud cores
+    // stay dark, exactly like backlit real-dusk cumulus
+    rim = smoothstep(0.06, 0.13, n) * (1.0 - smoothstep(0.16, 0.34, n));
+
+    // cumulus needs altitude: nothing at the horizon line
+    float fade = smoothstep(0.06, 0.22, dir.y);
+    float density = clamp(mass * 0.9 + rim * 0.5, 0.0, 1.0) * fade;
+
+    // sun-facing faces catch warm low light; everything else stays dark
+    float sunAmount = max(dot(dir, normalize(uSunDir)), 0.0);
+    light = 0.06 + 0.94 * pow(sunAmount, 3.0);
+    return density;
 }
 
 void main() {
     vec3 dir = normalize(vDir);
     float h = clamp(dir.y, 0.0, 1.0);
-
-    // Sunset gradient: warm dark band at the horizon, deep mauve mid-sky.
-    vec3 sky = mix(uHorizonColor, uMidColor, smoothstep(0.0, 0.10, h));
-    sky = mix(sky, uZenithColor, smoothstep(0.08, 0.30, h));
-
-    // Fade the whole gradient toward black away from the sun: on the anti-sun
-    // side the dusk sky collapses into near-black like the reference.
     vec3 sd = normalize(uSunDir);
+
+    // Sunset gradient: deep blue-black zenith through mauve, into the warm
+    // horizon band. Multiplied by a sun-direction falloff so the anti-sun sky
+    // stays dark like the reference shot.
+    vec3 sky = mix(uHorizonColor, uMidColor, smoothstep(0.0, 0.14, h));
+    sky = mix(sky, uZenithColor, smoothstep(0.10, 0.38, h));
+
     float sunAmount = max(dot(dir, sd), 0.0);
-    sky *= mix(0.30, 1.0, pow(sunAmount, 0.35));
+    sky *= mix(0.22, 1.0, pow(sunAmount, 4.0));   // steep: dark sky away from the sun
 
-    // broad salmon field around the sun reaching well above the horizon,
-    // then a hotter core just behind the clouds
-    float glowMask = clamp(pow(sunAmount, 14.0) * 0.80 + pow(sunAmount, 34.0) * 0.85, 0.0, 0.97);
-    glowMask *= 1.0 - smoothstep(0.06, 0.85, h);      // glow fades overhead, not at the horizon
-    sky = mix(sky, vec3(2.6, 0.95, 0.50), glowMask);  // salmon-orange field
+    // warm horizon glow hugging the horizon around the sun azimuth
+    float glowMask = pow(sunAmount, 14.0) * 0.55 + pow(sunAmount, 35.0) * 0.80;
+    glowMask *= 1.0 - smoothstep(0.05, 0.55, h) * 0.85;  // strongest at the horizon
+    sky = mix(sky, vec3(1.7, 0.66, 0.28), clamp(glowMask, 0.0, 0.65));
 
-    float coreMask = clamp(pow(sunAmount, 110.0) * 0.9, 0.0, 0.95);
-    sky = mix(sky, vec3(6.5, 2.6, 1.15), coreMask);   // hot center behind clouds
+    // broader soft gold field above the horizon glow
+    float goldMask = pow(sunAmount, 120.0) * 0.9 * (1.0 - smoothstep(0.0, 0.70, h) * 0.6);
+    sky = mix(sky, vec3(2.6, 1.3, 0.62), clamp(goldMask, 0.0, 0.85));
 
-    // big bright disc sitting just above the horizon
-    float disc = smoothstep(0.9950, 0.9982, sunAmount);
-    sky = mix(sky, vec3(10.0, 6.0, 3.0), disc);       // -> warm white core, soft edge
+    // hot core just behind the clouds where the sun sits
+    float coreMask = pow(sunAmount, 250.0) * 0.95;
+    sky = mix(sky, vec3(6.0, 2.8, 1.2), clamp(coreMask, 0.0, 0.97));
 
-    // clouds composite LAST, over the glow and the disc: thin stratus veiling
-    // the sun (like the reference) instead of sitting behind it
-    float cloudDensity;
-    vec3 c = clouds(dir, cloudDensity);
-    float shade = 0.60 + 0.30 * smoothstep(0.0, 0.50, dir.y);
-    sky = mix(sky, c * shade, clamp(cloudDensity, 0.0, 0.85));
+    // ---- clouds composite over the glow ----
+    float cirLight, cumLight, cumRim;
+    float cirD = cirrus(dir, cirLight);
+    float cumD = cumulus(dir, cumLight, cumRim);
+
+    // cirrus: thin veils, lit gold-pink where they face the sun
+    vec3 cirCol = vec3(0.080, 0.065, 0.100)               // unlit band colour
+                + vec3(2.1, 1.15, 0.68) * clamp(cirLight, 0.0, 1.0);
+    sky = mix(sky, cirCol, clamp(cirD * 0.85, 0.0, 0.9));
+
+    // cumulus: edge-lit like real dusk clouds — dark slate cores, blazing
+    // gold-pink rims on the sun side, warm sunlit faces, faint cool fringes
+    // away from the sun
+    vec3 cumBase = vec3(0.075, 0.065, 0.100);
+    vec3 rimCol = mix(vec3(0.14, 0.13, 0.18),             // away-from-sun fringes
+                      vec3(2.3, 1.30, 0.85),              // near-sun rims
+                      clamp(cumLight, 0.0, 1.0));
+    vec3 faceCol = vec3(0.85, 0.50, 0.34) * clamp(cumLight, 0.0, 1.0);
+    vec3 cumCol = cumBase + rimCol * clamp(cumRim, 0.0, 1.0)
+                + faceCol * clamp(cumD, 0.0, 1.0) * 0.6;
+    sky = mix(sky, cumCol, clamp(cumD * 0.95, 0.0, 0.94));
+
+    // big soft disc: the sun is well above the horizon, so it reads as a
+    // compact bright ball with a warm halo. Drawn last and attenuated by
+    // cloud cover so thin bands can veil it without erasing it.
+    float cover = max(cirD * 0.85, cumD * 0.95);
+    float disc = smoothstep(0.9975, 0.9990, sunAmount) * (1.0 - 0.80 * clamp(cover, 0.0, 1.0));
+    float halo = pow(sunAmount, 600.0) * 0.7 * (1.0 - 0.5 * clamp(cover, 0.0, 1.0));
+    sky = mix(sky, vec3(9.0, 6.2, 3.6), clamp(disc + halo, 0.0, 1.0));
 
     // HDR-ish output for the env map (tone mapping happens in the sea shader)
     fragColor = vec4(sky, 1.0);

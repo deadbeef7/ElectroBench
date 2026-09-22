@@ -44,7 +44,8 @@
 #define BENCH_MILLISECONDS 45000 // 45 s like the original ElectroBench
 
 static const int kSeaResolution = 256;   // vertices per side of the ocean grid
-static const float kSeaSize = 1024.0f;   // world size of the ocean patch
+static const float kSeaSize = 4096.0f;   // world size of the ocean patch: reaches past the
+                                         // visible horizon in every direction the camera can look
 static const int kEnvMapSize = 224;      // cubemap face resolution
 static const int kNoiseSize = 256;       // fBm noise texture size
 static const int kRippleSize = 256;      // ripple gradient texture size
@@ -467,7 +468,8 @@ static Program gSeaProg, gSkyProg, gSkyViewProg, gHudProg;
 static GLuint gRippleTex = 0, gNoiseTex = 0, gFoamTex = 0, gFontTex = 0;
 static GLuint gEnvCube = 0, gEnvFbo = 0, gEnvDepth = 0;
 
-static Vec3 gSunDir = {0.86f, 0.045f, 0.51f};  // sun barely above the horizon (dusk reference): huge warm disc + a long glitter path across the sea
+static Vec3 gSunDir = {0.824f, 0.287f, 0.489f}; // sun well above the horizon (3DMark Nature framing):
+                                                // warm setting sun ~17 deg up, compact glitter path
 
 static Vec3 gCamPos = {0.0f, 7.0f, 0.0f};
 static float gCamYaw = 0.0f, gCamPitch = -0.05f;
@@ -515,7 +517,9 @@ static void UpdateAutoCamera(float t) {
   // face the sun, swaying slowly so the framing breathes during the run
   float yawSun = std::atan2(gSunDir.x, gSunDir.z);
   float yaw = yawSun + 0.55f * std::sin(t * 0.013f) + 0.18f * std::sin(t * 0.041f);
-  float pitch = -0.06f + 0.035f * std::sin(t * 0.017f); // slightly downward gaze
+  float pitch = 0.075f + 0.030f * std::sin(t * 0.017f); // gaze tilted up so the raised sun
+                                                        // sits in the upper third (reference
+                                                        // framing) with clouds above it
   Vec3 fwd = {std::sin(yaw) * std::cos(pitch), std::sin(pitch),
               std::cos(yaw) * std::cos(pitch)};
   gCamYaw = std::atan2(fwd.x, fwd.z);
@@ -582,11 +586,11 @@ static void DrawSkyToEnvMap(const Mat4 &proj) {
     glUniformMatrix4fv(gSkyProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
     glUniform3f(gSkyProg.loc("uSunDir"), gSunDir.x, gSunDir.y, gSunDir.z);
     glUniform1f(gSkyProg.loc("uTime"), (float)NowSeconds());
-    // Dusk palette (HDR, linear): dark charcoal-mauve sky, warm glow only
-    // around the low sun (matches the dark reference photo).
-    glUniform3f(gSkyProg.loc("uZenithColor"), 0.010f, 0.010f, 0.030f);  // near-black anti-sun sky
-    glUniform3f(gSkyProg.loc("uMidColor"), 0.020f, 0.012f, 0.028f);     // deep charcoal-mauve overhead
-    glUniform3f(gSkyProg.loc("uHorizonColor"), 0.14f, 0.065f, 0.075f);  // dark maroon band
+    // Dusk palette (HDR, linear): deep blue-black zenith shading into a warm
+    // horizon band around the setting sun (3DMark Nature look).
+    glUniform3f(gSkyProg.loc("uZenithColor"), 0.012f, 0.016f, 0.048f);  // deep blue-black overhead
+    glUniform3f(gSkyProg.loc("uMidColor"), 0.028f, 0.022f, 0.048f);     // dark slate-mauve mid sky
+    glUniform3f(gSkyProg.loc("uHorizonColor"), 0.115f, 0.055f, 0.062f); // warm maroon horizon band
     glUniform3f(gSkyProg.loc("uSunColor"), 1.30f, 0.85f, 0.55f);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, gNoiseTex);
@@ -733,7 +737,7 @@ static void Setup() {
   glDepthFunc(GL_LEQUAL);
   glEnable(GL_CULL_FACE);
   glCullFace(GL_BACK);
-  glClearColor(0.55f, 0.62f, 0.70f, 1.0f);
+  glClearColor(0.055f, 0.035f, 0.075f, 1.0f); // dusk background (only visible if geometry ever gaps)
 }
 
 // -------------------------------------------------------------- render passes
@@ -749,8 +753,8 @@ static void DrawSea(const Mat4 &view, double timeSec, const Vec3 &eye) {
   glUniform1f(gSeaProg.loc("uTime"), (float)timeSec);
   glUniform3f(gSeaProg.loc("uEyePos"), eye.x, eye.y, eye.z);
   glUniform3f(gSeaProg.loc("uSunDir"), gSunDir.x, gSunDir.y, gSunDir.z);
-  glUniform3f(gSeaProg.loc("uHorizonColor"), 0.14f, 0.075f, 0.090f); // dark maroon haze, melts into the sky band
-  glUniform3f(gSeaProg.loc("uWaterColor"), 0.042f, 0.026f, 0.062f); // near-black purple body like the dusk reference
+  glUniform3f(gSeaProg.loc("uHorizonColor"), 0.10f, 0.052f, 0.062f); // dark maroon haze, melts into the sky band
+  glUniform3f(gSeaProg.loc("uWaterColor"), 0.034f, 0.020f, 0.052f); // near-black indigo body like the dusk reference
   glActiveTexture(GL_TEXTURE0);
   glBindTexture(GL_TEXTURE_2D, gRippleTex);
   glUniform1i(gSeaProg.loc("uRippleTex"), 0);
@@ -828,7 +832,7 @@ static void RenderScene() {
   }
 
   float aspect = (float)gWindowWidth / (float)gWindowHeight;
-  Mat4Perspective(gProj, 45.0f, aspect, 0.5f, 2500.0f);
+  Mat4Perspective(gProj, 45.0f, aspect, 0.5f, 6000.0f); // far plane past the 4096 m sea patch diagonal
 
   // ---- pass 1: sky -> env cubemap (90 deg per face so every cube face is
   // fully covered by the dome) ----
