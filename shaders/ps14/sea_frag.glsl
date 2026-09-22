@@ -76,13 +76,21 @@ void main() {
 
     // ---- water body: near-black purple deep + faint foam in the crests ----
     vec3 body = uWaterColor * 0.55 + uHorizonColor * 0.03;
+
+    // directional sun lighting on the wave slopes: faces tilted toward the
+    // low sun glow warm, backslopes fall to near-black — this is what makes
+    // the sea read as lit by the same sun as the sky instead of pasted on
+    vec3 L = normalize(uSunDir);
+    float sunDiffuse = max(dot(N, L), 0.0);
+    body *= 0.50 + 0.90 * sunDiffuse;                                // slope shading
+    body += vec3(1.05, 0.52, 0.28) * pow(sunDiffuse, 3.0) * 0.40;    // warm sun-facing slopes
+
     float crest = smoothstep(0.55, 1.25, hC);
     float foam = texture(uFoamTex, vUV * 23.0 + vec2(uTime * 0.010, 0.0)).r;
     foam *= texture(uFoamTex, vUV * 41.0 - vec2(0.0, uTime * 0.013)).g;
     body += vec3(0.55, 0.48, 0.58) * crest * foam * 0.45; // dim warm-gray foam
 
     // subsurface glow against the light: thin wave crests shine turquoise
-    vec3 L = normalize(uSunDir);
     float towardSun = max(dot(normalize(vec3(-V.x, 0.0, -V.z)), L), 0.0);
     body += vec3(0.05, 0.20, 0.16) * towardSun * crest * 0.8;
 

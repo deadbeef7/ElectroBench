@@ -48,12 +48,13 @@ float cirrus(vec3 dir, out float light) {
     vec2 uv = vec2(atan(dir.z, dir.x) * (0.5 / PI) + 0.5, dir.y);
 
     float wind = uTime * 0.0045;
-    vec2 q = vec2(uv.x * 3.5, uv.y * 24.0) + vec2(wind, 0.0); // long thin horizontal bands
+    vec2 q = vec2(uv.x * 2.6, uv.y * 14.0) + vec2(wind, 0.0); // long soft horizontal bands
     float n = fbm(q);
 
-    // banded coverage: several distinct streak layers rather than one blob
-    float band = smoothstep(0.06, 0.32, n) * 0.75
-               + smoothstep(0.18, 0.50, fbm(vec2(uv.x * 5.0, uv.y * 34.0) - vec2(wind * 0.6, 3.7))) * 0.55;
+    // banded coverage: a couple of overlapping streak layers, soft thresholds
+    // (hard smoothsteps at high frequency read as noise on real hardware)
+    float band = smoothstep(0.02, 0.38, n) * 0.80
+               + smoothstep(0.10, 0.55, fbm(vec2(uv.x * 3.6, uv.y * 20.0) - vec2(wind * 0.6, 3.7))) * 0.50;
 
     // fade with altitude: thin veil near the horizon, denser overhead
     float fade = smoothstep(0.01, 0.14, dir.y) * (0.35 + 0.65 * smoothstep(0.0, 0.45, dir.y));
@@ -73,19 +74,19 @@ float cumulus(vec3 dir, out float light, out float rim) {
     vec2 uv = vec2(atan(dir.z, dir.x) * (0.5 / PI) + 0.5, dir.y);
 
     float wind = uTime * 0.0032;
-    vec2 q = vec2(uv.x * 9.0, uv.y * 13.0) + vec2(wind, wind * 0.25);
+    vec2 q = vec2(uv.x * 6.0, uv.y * 8.5) + vec2(wind, wind * 0.25);
     // domain warp: two nested noise lookups bend the base field
     vec2 warp = vec2(textureLod(uNoiseTex, q * 0.5 + 3.7, 0.0).r,
                      textureLod(uNoiseTex, q * 0.5 + 9.1, 0.0).g) - 0.5;
-    q += warp * 0.55;
+    q += warp * 0.65;
 
     float n = fbm(q); // puffy shapes
 
-    // large broken masses with fairly hard edges, scattered not uniform
-    float mass = smoothstep(0.14, 0.40, n);
-    // bright rim light only in a narrow band at the mass edges — cloud cores
-    // stay dark, exactly like backlit real-dusk cumulus
-    rim = smoothstep(0.06, 0.13, n) * (1.0 - smoothstep(0.16, 0.34, n));
+    // large broken masses with soft organic edges
+    float mass = smoothstep(0.06, 0.42, n);
+    // bright rim light in a band at the mass edges — cloud cores stay dark,
+    // exactly like backlit real-dusk cumulus
+    rim = smoothstep(0.02, 0.16, n) * (1.0 - smoothstep(0.20, 0.46, n));
 
     // cumulus needs altitude: nothing at the horizon line
     float fade = smoothstep(0.06, 0.22, dir.y);

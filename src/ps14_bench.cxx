@@ -46,7 +46,8 @@
 static const int kSeaResolution = 256;   // vertices per side of the ocean grid
 static const float kSeaSize = 4096.0f;   // world size of the ocean patch: reaches past the
                                          // visible horizon in every direction the camera can look
-static const int kEnvMapSize = 224;      // cubemap face resolution
+static const int kEnvMapSize = 512;      // cubemap face resolution (224 magnified
+                                         // into visible white squares on real GPUs)
 static const int kNoiseSize = 256;       // fBm noise texture size
 static const int kRippleSize = 256;      // ripple gradient texture size
 static const int kFoamSize = 256;        // foam texture size
@@ -546,7 +547,7 @@ static void CreateEnvResources() {
     glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, GL_RGBA16F, kEnvMapSize, kEnvMapSize, 0,
                  GL_RGBA, GL_FLOAT, nullptr);
   }
-  glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
   glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
   glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
@@ -597,6 +598,11 @@ static void DrawSkyToEnvMap(const Mat4 &proj) {
     glUniform1i(gSkyProg.loc("uNoiseTex"), 0);
     glDrawElements(GL_TRIANGLES, gDomeMesh.indexCount, GL_UNSIGNED_INT, nullptr);
   }
+  // mip chain for the cube: LINEAR_MIPMAP_LINEAR on an unmipped texture is
+  // incomplete (black) on strict drivers, and mips also smooth the magnified
+  // sky when the sea reflects it
+  glBindTexture(GL_TEXTURE_CUBE_MAP, gEnvCube);
+  glGenerateMipmap(GL_TEXTURE_CUBE_MAP);
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
   glEnable(GL_CULL_FACE);
 }
