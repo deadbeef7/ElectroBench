@@ -63,7 +63,8 @@ float cirrus(vec3 dir, out float light) {
 
     // fade with altitude: thin veil near the horizon, denser overhead
     float fade = smoothstep(0.01, 0.14, dir.y) * (0.35 + 0.65 * smoothstep(0.0, 0.45, dir.y));
-    float density = clamp(band, 0.0, 1.0) * fade;
+    // cap the veil low — the cumulus masses below should dominate the look
+    float density = clamp(band, 0.0, 1.0) * fade * 0.55;
 
     // sun-facing thin cloud lights up warm; thick stays dark
     float sunAmount = max(dot(dir, normalize(uSunDir)), 0.0);
@@ -79,27 +80,37 @@ float cumulus(vec3 dir, out float light, out float rim) {
     vec2 uv = vec2(atan(dir.z, dir.x) * (0.5 / PI) + 0.5, dir.y);
 
     float wind = uTime * 0.0032;
-    // big cumulus masses: low frequency + domain warp does the organic shaping
-    vec2 q = vec2(uv.x * 3.2, uv.y * 3.6) + vec2(wind, wind * 0.25);
-    // domain warp: two nested noise lookups bend the base field (adaptive LOD
-    // same as fbm — these lookups stride multiple texels per pixel too)
+    // distinct round masses: ~22 clusters around the full horizon ring puts
+    // 4-7 separated puffs in the visible FOV with real clear-sky gaps between
+    // them (the reference look). uv.y slower — masses are wider than tall.
+    vec2 q = vec2(uv.x * 22.0, uv.y * 6.5) + vec2(wind, wind * 0.25);
+    // domain warp: two nested noise lookups bend the base field
     vec2 wq = q * 0.5 + 3.7;
     float wlod = clamp(log2(max(length(fwidth(wq)), 1e-4)), 0.0, 6.0);
     vec2 warp = vec2(textureLod(uNoiseTex, wq, wlod).r,
                      textureLod(uNoiseTex, wq + vec2(5.4, 0.0), wlod).g) - 0.5;
-    q += warp * 0.65;
+    q += warp * 0.85;
 
-    float n = fbm(q); // puffy shapes
+    float n = fbm(q);
+    // contrast boost: the mean-zero fBm alone never dips below the threshold
+    // band, which turns the field into a uniform mid-density deck. Scaling
+    // pushes troughs into real clear-sky gaps and peaks into solid cores.
+    n *= 1.45;
 
-    // large broken masses with soft puffy edges
-    float mass = smoothstep(0.02, 0.55, n);
+    // high-threshold + pow: strong peaks become cloud and the gradient
+    // deepens, so masses read THICK/SOLID while the fringes stay small.
+    // NOTE the fBm is mean-zero (sigma ~0.19) — the band is centred on that
+    // distribution and n is pre-contrasted (x1.45): ~0.10 starts fringe
+    // (~40% coverage = real gaps between masses), ~1 sigma saturates cores.
+    float density = pow(smoothstep(0.10, 0.45, n), 1.25);
+
     // bright rim light in a band at the mass edges — cloud cores stay dark,
     // exactly like backlit real-dusk cumulus
-    rim = smoothstep(0.02, 0.16, n) * (1.0 - smoothstep(0.20, 0.46, n));
+    rim = smoothstep(0.12, 0.24, n) * (1.0 - smoothstep(0.32, 0.50, n));
 
-    // cumulus needs altitude: nothing at the horizon line
-    float fade = smoothstep(0.06, 0.22, dir.y);
-    float density = clamp(mass * 0.9 + rim * 0.5, 0.0, 1.0) * fade;
+    // cumulus can reach almost down to the horizon like the reference
+    float fade = smoothstep(0.02, 0.14, dir.y);
+    density = clamp(density, 0.0, 1.0) * fade;
 
     // sun-facing faces catch warm low light; everything else stays dark
     float sunAmount = max(dot(dir, normalize(uSunDir)), 0.0);
@@ -144,22 +155,23 @@ void main() {
                 + vec3(2.1, 1.15, 0.68) * clamp(cirLight, 0.0, 1.0);
     sky = mix(sky, cirCol, clamp(cirD * 0.85, 0.0, 0.9));
 
-    // cumulus: edge-lit like real dusk clouds — dark slate cores, blazing
-    // gold-pink rims on the sun side, warm sunlit faces, faint cool fringes
-    // away from the sun
-    vec3 cumBase = vec3(0.075, 0.065, 0.100);
-    vec3 rimCol = mix(vec3(0.14, 0.13, 0.18),             // away-from-sun fringes
+    // cumulus: solid edge-lit masses — near-black undersides, blazing
+    // gold-pink rims, warm sunlit tops; density * 1.7 pushes mid densities
+    // opaque so bodies read thick instead of veiled
+    vec3 cumBase = vec3(0.050, 0.045, 0.075);
+    vec3 rimCol = mix(vec3(0.22, 0.19, 0.26),             // away-from-sun fringes: visible
+                                                           // silhouette edges against dark sky
                       vec3(2.3, 1.30, 0.85),              // near-sun rims
                       clamp(cumLight, 0.0, 1.0));
     vec3 faceCol = vec3(0.85, 0.50, 0.34) * clamp(cumLight, 0.0, 1.0);
     vec3 cumCol = cumBase + rimCol * clamp(cumRim, 0.0, 1.0)
                 + faceCol * clamp(cumD, 0.0, 1.0) * 0.6;
-    sky = mix(sky, cumCol, clamp(cumD * 0.95, 0.0, 0.94));
+    sky = mix(sky, cumCol, clamp(cumD * 1.7, 0.0, 0.97));
 
     // big soft disc: the sun is well above the horizon, so it reads as a
     // compact bright ball with a warm halo. Drawn last and attenuated by
     // cloud cover so thin bands can veil it without erasing it.
-    float cover = max(cirD * 0.85, cumD * 0.95);
+    float cover = max(cirD, cumD * 1.7);
     float disc = smoothstep(0.9975, 0.9990, sunAmount) * (1.0 - 0.80 * clamp(cover, 0.0, 1.0));
     float halo = pow(sunAmount, 600.0) * 0.7 * (1.0 - 0.5 * clamp(cover, 0.0, 1.0));
     sky = mix(sky, vec3(9.0, 6.2, 3.6), clamp(disc + halo, 0.0, 1.0));

@@ -68,7 +68,13 @@ void main() {
     R.y = abs(R.y) * 0.30 + 0.45;
     R = normalize(R);
 
-    vec3 reflColor = texture(uSkyEnvTex, R).rgb;
+    // Roughness-matched reflection LOD: the sun disc occupies a handful of
+    // cubemap texels, and sampling them at LOD 0 mirrors as small SQUARE
+    // patches on the water. Wave facets are rough at every distance, so the
+    // reflection blurs with range — which also smears the sun into a soft
+    // vertical glow (real water behaviour) instead of texel squares.
+    float reflDist = length(vWorld.xz - uEyePos.xz);
+    vec3 reflColor = textureLod(uSkyEnvTex, R, clamp(1.5 + reflDist * 0.0012, 1.0, 5.0)).rgb;
 
     // ---- fresnel: sea is a mirror at grazing angles, glass straight down ----
     float NdV = max(dot(N, V), 0.0);
