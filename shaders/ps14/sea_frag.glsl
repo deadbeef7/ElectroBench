@@ -97,10 +97,16 @@ void main() {
     vec3 color = mix(body, reflColor, fresnel);
 
     // ---- aerial haze first: near water stays dark and readable, while the
-    // far sea melts into the horizon glow — with the 4 km patch the horizon
-    // blends seamlessly into the sky band instead of cutting off hard
+    // far sea melts into the horizon. The haze target is the ACTUAL sky colour
+    // at this fragment's azimuth — sampled from the env cubemap just above the
+    // horizon line — so by construction the far edge of the patch converges
+    // into the sky band above it (bright glow on the sun side, dark maroon
+    // away from it) instead of cutting off against a single constant colour.
     float haze = 1.0 - exp(-dist * 0.00075);
-    color = mix(color, uHorizonColor, haze * (0.28 + 0.50 * haze));
+    vec2 dxdz = vWorld.xz - uEyePos.xz;
+    vec3 skyAtHorizon = texture(uSkyEnvTex,
+        normalize(vec3(dxdz.x, 0.012, dxdz.y))).rgb;
+    color = mix(color, skyAtHorizon, haze * (0.30 + 0.70 * haze));
 
     // ---- phase 3: address + blend - sun glitter path ----
     // tight sparkle core + broad soft sheen: individual sparkles scattered

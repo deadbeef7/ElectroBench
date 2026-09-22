@@ -265,8 +265,8 @@ static GLuint CreateSkyNoiseTexture() {
   for (int y = 0; y < kNoiseSize; y++) {
     for (int x = 0; x < kNoiseSize; x++) {
       float u = x / (float)kNoiseSize, v = y / (float)kNoiseSize;
-      float r = TileableFbm(u, v, 5, 4.0f, 101);
-      float g = TileableFbm(u, v, 5, 6.0f, 202);
+      float r = TileableFbm(u, v, 2, 4.0f, 101);
+      float g = TileableFbm(u, v, 2, 6.0f, 202);
       px[(y * kNoiseSize + x) * 4 + 0] = (unsigned char)std::lround(r * 255.0f);
       px[(y * kNoiseSize + x) * 4 + 1] = (unsigned char)std::lround(g * 255.0f);
       px[(y * kNoiseSize + x) * 4 + 2] = (unsigned char)std::lround(r * g * 255.0f);
@@ -425,16 +425,18 @@ static void BuildDomeMesh() {
   std::vector<float> verts;
   std::vector<unsigned int> idx;
   for (int r = 0; r <= rings; r++) {
-    // full sphere 0..pi: the lower hemisphere carries the horizon gradient so
-    // the cubemap has no black -Y face (it used to bleed black into grazing
-    // reflections, showing as dark spots on the water)
+    // TRUE full sphere: dir.y = cos(phi) sweeps +1 -> -1. The old mesh used
+    // sin(phi) over 0..pi, which is only the upper hemisphere — the dome
+    // stopped dead at the horizon line and the background showed through as
+    // a thin gap band between the sky and the sea's far edge.
     float phi = (float)r / rings * 3.14159265f;
+    float cy = std::cos(phi);   // +1 (top) -> -1 (bottom)
+    float cr = std::sin(phi);   // horizontal radius, 0 -> 1 -> 0
     for (int s = 0; s <= seg; s++) {
       float th = (float)s / seg * 3.14159265f * 2.0f;
-      float cp = std::cos(phi);
-      verts.push_back(cp * std::cos(th));
-      verts.push_back(std::sin(phi));
-      verts.push_back(cp * std::sin(th));
+      verts.push_back(cr * std::cos(th));
+      verts.push_back(cy);
+      verts.push_back(cr * std::sin(th));
     }
   }
   for (int r = 0; r < rings; r++)
@@ -465,7 +467,7 @@ static SDL_Window *gWindow = nullptr;
 static SDL_GLContext gContext = nullptr;
 static int gWindowWidth = WIDTH, gWindowHeight = HEIGHT;
 
-static Program gSeaProg, gSkyProg, gSkyViewProg, gHudProg;
+static Program gSeaProg, gSkyProg, gHudProg;
 static GLuint gRippleTex = 0, gNoiseTex = 0, gFoamTex = 0, gFontTex = 0;
 static GLuint gEnvCube = 0, gEnvFbo = 0, gEnvDepth = 0;
 
@@ -562,6 +564,25 @@ static void CreateEnvResources() {
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
+// --------------------------------------------------------------- env cubemap
+// Shared sky-dome uniforms so the cubemap capture and the on-screen dome draw
+// the exact same sky (same palette, same clouds, same time).
+static void BindSkyUniforms(const Mat4 &vp) {
+  glUseProgram(gSkyProg.handle);
+  glUniformMatrix4fv(gSkyProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
+  glUniform3f(gSkyProg.loc("uSunDir"), gSunDir.x, gSunDir.y, gSunDir.z);
+  glUniform1f(gSkyProg.loc("uTime"), (float)NowSeconds());
+  // Dusk palette (HDR, linear): deep blue-black zenith shading into a warm
+  // horizon band around the setting sun (3DMark Nature look).
+  glUniform3f(gSkyProg.loc("uZenithColor"), 0.012f, 0.016f, 0.048f);  // deep blue-black overhead
+  glUniform3f(gSkyProg.loc("uMidColor"), 0.028f, 0.022f, 0.048f);     // dark slate-mauve mid sky
+  glUniform3f(gSkyProg.loc("uHorizonColor"), 0.115f, 0.055f, 0.062f); // warm maroon horizon band
+  glUniform3f(gSkyProg.loc("uSunColor"), 1.30f, 0.85f, 0.55f);
+  glActiveTexture(GL_TEXTURE0);
+  glBindTexture(GL_TEXTURE_2D, gNoiseTex);
+  glUniform1i(gSkyProg.loc("uNoiseTex"), 0);
+}
+
 static void DrawSkyToEnvMap(const Mat4 &proj) {
   static const GLenum faces[6] = {GL_TEXTURE_CUBE_MAP_POSITIVE_X, GL_TEXTURE_CUBE_MAP_NEGATIVE_X,
                                   GL_TEXTURE_CUBE_MAP_POSITIVE_Y, GL_TEXTURE_CUBE_MAP_NEGATIVE_Y,
@@ -584,18 +605,11 @@ static void DrawSkyToEnvMap(const Mat4 &proj) {
     Mat4LookAt(view, {0, 0, 0}, fwd[i], up[i]);
     Mat4 vp;
     Mat4Multiply(vp, proj, view);
-    glUniformMatrix4fv(gSkyProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
-    glUniform3f(gSkyProg.loc("uSunDir"), gSunDir.x, gSunDir.y, gSunDir.z);
-    glUniform1f(gSkyProg.loc("uTime"), (float)NowSeconds());
-    // Dusk palette (HDR, linear): deep blue-black zenith shading into a warm
-    // horizon band around the setting sun (3DMark Nature look).
-    glUniform3f(gSkyProg.loc("uZenithColor"), 0.012f, 0.016f, 0.048f);  // deep blue-black overhead
-    glUniform3f(gSkyProg.loc("uMidColor"), 0.028f, 0.022f, 0.048f);     // dark slate-mauve mid sky
-    glUniform3f(gSkyProg.loc("uHorizonColor"), 0.115f, 0.055f, 0.062f); // warm maroon horizon band
-    glUniform3f(gSkyProg.loc("uSunColor"), 1.30f, 0.85f, 0.55f);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, gNoiseTex);
-    glUniform1i(gSkyProg.loc("uNoiseTex"), 0);
+    BindSkyUniforms(vp);
+    // env capture: dome centred at the origin, small radius, HDR output
+    glUniform3f(gSkyProg.loc("uCenter"), 0.0f, 0.0f, 0.0f);
+    glUniform1f(gSkyProg.loc("uRadius"), 10.0f);
+    glUniform1f(gSkyProg.loc("uTonemap"), 0.0f);
     glDrawElements(GL_TRIANGLES, gDomeMesh.indexCount, GL_UNSIGNED_INT, nullptr);
   }
   // mip chain for the cube: LINEAR_MIPMAP_LINEAR on an unmipped texture is
@@ -736,7 +750,6 @@ static void Setup() {
 
   gSeaProg = LinkProgram(resolveAssetPath("shaders/ps14/sea_vert.glsl").c_str(), resolveAssetPath("shaders/ps14/sea_frag.glsl").c_str());
   gSkyProg = LinkProgram(resolveAssetPath("shaders/ps14/sky_vert.glsl").c_str(), resolveAssetPath("shaders/ps14/sky_frag.glsl").c_str());
-  gSkyViewProg = LinkProgram(resolveAssetPath("shaders/ps14/skyview_vert.glsl").c_str(), resolveAssetPath("shaders/ps14/skyview_frag.glsl").c_str());
   gHudProg = LinkProgram(resolveAssetPath("shaders/ps14/hud_vert.glsl").c_str(), resolveAssetPath("shaders/ps14/hud_frag.glsl").c_str());
 
   glEnable(GL_DEPTH_TEST);
@@ -774,34 +787,27 @@ static void DrawSea(const Mat4 &view, double timeSec, const Vec3 &eye) {
   glBindVertexArray(0);
 }
 
-static void DrawSkyView() {
-  // Fullscreen sky reconstruction from the cubemap.
-  float aspect = (float)gWindowWidth / (float)gWindowHeight;
-  float fovRad = 45.0f * 3.14159265f / 180.0f;
-  float tanHalf = std::tan(fovRad * 0.5f);
-
-  // Camera basis from yaw/pitch.
-  float cy = std::cos(gCamYaw), sy = std::sin(gCamYaw);
-  float cp = std::cos(gCamPitch), sp = std::sin(gCamPitch);
-  Vec3 fwd = {sy * cp, sp, cy * cp};
-  Vec3 worldUp = {0, 1, 0};
-  Vec3 right = Vec3Normalize(Vec3Cross(fwd, worldUp));
-  Vec3 up = Vec3Cross(right, fwd);
+static void DrawSkyScreen(const Mat4 &view, const Vec3 &eye) {
+  // The visible sky is the procedural dome drawn DIRECTLY to the screen at
+  // full framebuffer resolution. (It used to be reconstructed from the env
+  // cubemap, which magnified each texel into the blocky squares the user saw
+  // on real hardware.) The cubemap is now only used for sea reflections and
+  // the sea haze target, where its low resolution is an advantage (blur).
+  Mat4 vp;
+  Mat4Multiply(vp, gProj, view);
 
   glDisable(GL_DEPTH_TEST);
   glDepthMask(GL_FALSE); // sky is background; it must not occlude the sea
-  glBindVertexArray(gEmptyVao);
-  glUseProgram(gSkyViewProg.handle);
-  glActiveTexture(GL_TEXTURE0);
-  glBindTexture(GL_TEXTURE_CUBE_MAP, gEnvCube);
-  glUniform1i(gSkyViewProg.loc("uEnvMap"), 0);
-  glUniform3f(gSkyViewProg.loc("uCamRight"), right.x, right.y, right.z);
-  glUniform3f(gSkyViewProg.loc("uCamUp"), up.x, up.y, up.z);
-  glUniform3f(gSkyViewProg.loc("uCamFwd"), fwd.x, fwd.y, fwd.z);
-  glUniform1f(gSkyViewProg.loc("uTanHalfFov"), tanHalf);
-  glUniform1f(gSkyViewProg.loc("uAspect"), aspect);
-  glDrawArrays(GL_TRIANGLES, 0, 3);
+  glDisable(GL_CULL_FACE); // camera is inside the dome sphere
+  glBindVertexArray(gDomeMesh.vao);
+  BindSkyUniforms(vp);
+  // dome centred at the eye, radius kept inside the far plane
+  glUniform3f(gSkyProg.loc("uCenter"), eye.x, eye.y, eye.z);
+  glUniform1f(gSkyProg.loc("uRadius"), 5000.0f);
+  glUniform1f(gSkyProg.loc("uTonemap"), 1.0f); // LDR out on screen
+  glDrawElements(GL_TRIANGLES, gDomeMesh.indexCount, GL_UNSIGNED_INT, nullptr);
   glBindVertexArray(0);
+  glEnable(GL_CULL_FACE);
   glDepthMask(GL_TRUE);
   glEnable(GL_DEPTH_TEST);
 }
@@ -852,8 +858,9 @@ static void RenderScene() {
   glViewport(0, 0, gWindowWidth, gWindowHeight);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-  DrawSkyView();
-  DrawSea(view, now, eye);    RenderHUD();
+  DrawSkyScreen(view, eye);
+  DrawSea(view, now, eye);
+  RenderHUD();
 
     // Visual-test captures: read the framebuffer back before the swap so the
     // pixels we analyse are exactly what this frame rendered.

@@ -17,6 +17,7 @@ in vec3 vDir;
 
 uniform sampler2D uNoiseTex;   // tileable RGBA fBm noise
 uniform float uTime;
+uniform float uTonemap;       // 1.0: on-screen pass (LDR out) / 0.0: HDR env cubemap
 uniform vec3  uSunDir;
 uniform vec3  uZenithColor;
 uniform vec3  uMidColor;
@@ -27,19 +28,22 @@ out vec4 fragColor;
 
 const float PI = 3.14159265359;
 
-// 4-octave fBm helper: octaves double in frequency (proper detail cascade).
-// Sampled with textureLod 0: the big coordinate multipliers would otherwise
-// push the implicit derivatives into high mip levels and erase the detail
-// octaves (flat, cloudless sky).
+// 3-octave fBm with per-octave ADAPTIVE LOD. Each octave is sampled at the
+// mip level where its frequency is properly band-limited for the current
+// pass — sharp on the full-res screen dome, smooth on the smaller cubemap
+// faces. 3 octaves is deliberate: with the layer frequencies below, a 4th
+// octave lands at 3-5 px per cell on screen, which reads as noise grain —
+// real dusk clouds have no content below ~9 px at this framing.
 float fbm(vec2 p) {
-    float sum = 0.0;
-    float amp = 0.5;
-    for (int i = 0; i < 4; i++) {
-        sum += textureLod(uNoiseTex, p, 0.0).r * amp;
-        p = p * 2.07 + vec2(0.37, 1.31);
-        amp *= 0.5;
-    }
-    return sum / 0.9375 - 0.5; // normalise 4-octave sum (1.0 - 0.5^4)
+    // spectrum deliberately biased low-frequency: 0.55/0.30/0.15 instead of
+    // equal-half octaves. The 8-px octave keeps only 15% amplitude — enough
+    // for soft ragged edges, not enough to read as grain/dashes.
+    float sum = textureLod(uNoiseTex, p, clamp(log2(max(length(fwidth(p)), 1e-4)), 0.0, 6.0)).r * 0.55;
+    p = p * 2.07 + vec2(0.37, 1.31);
+    sum += textureLod(uNoiseTex, p, clamp(log2(max(length(fwidth(p)), 1e-4)), 0.0, 6.0)).r * 0.30;
+    p = p * 2.07 + vec2(0.37, 1.31);
+    sum += textureLod(uNoiseTex, p, clamp(log2(max(length(fwidth(p)), 1e-4)), 0.0, 6.0)).r * 0.15;
+    return sum - 0.5;
 }
 
 // High cirrus / stratus: thin horizontal bands, strongest overhead, thinning
@@ -48,13 +52,14 @@ float cirrus(vec3 dir, out float light) {
     vec2 uv = vec2(atan(dir.z, dir.x) * (0.5 / PI) + 0.5, dir.y);
 
     float wind = uTime * 0.0045;
-    vec2 q = vec2(uv.x * 2.6, uv.y * 14.0) + vec2(wind, 0.0); // long soft horizontal bands
+    // BIG SMOOTH BANKS: long wavelength in x (banks stretch across the sky),
+    // modest in y. Single fBm — stacking streak layers doubles the effective
+    // frequency and is what produced the dash/confetti look.
+    vec2 q = vec2(uv.x * 1.8, uv.y * 3.2) + vec2(wind, 0.0);
     float n = fbm(q);
 
-    // banded coverage: a couple of overlapping streak layers, soft thresholds
-    // (hard smoothsteps at high frequency read as noise on real hardware)
-    float band = smoothstep(0.02, 0.38, n) * 0.80
-               + smoothstep(0.10, 0.55, fbm(vec2(uv.x * 3.6, uv.y * 20.0) - vec2(wind * 0.6, 3.7))) * 0.50;
+    // wide threshold ramp: merges the field into coherent banks
+    float band = smoothstep(0.00, 0.50, n) * 0.85;
 
     // fade with altitude: thin veil near the horizon, denser overhead
     float fade = smoothstep(0.01, 0.14, dir.y) * (0.35 + 0.65 * smoothstep(0.0, 0.45, dir.y));
@@ -74,16 +79,20 @@ float cumulus(vec3 dir, out float light, out float rim) {
     vec2 uv = vec2(atan(dir.z, dir.x) * (0.5 / PI) + 0.5, dir.y);
 
     float wind = uTime * 0.0032;
-    vec2 q = vec2(uv.x * 6.0, uv.y * 8.5) + vec2(wind, wind * 0.25);
-    // domain warp: two nested noise lookups bend the base field
-    vec2 warp = vec2(textureLod(uNoiseTex, q * 0.5 + 3.7, 0.0).r,
-                     textureLod(uNoiseTex, q * 0.5 + 9.1, 0.0).g) - 0.5;
+    // big cumulus masses: low frequency + domain warp does the organic shaping
+    vec2 q = vec2(uv.x * 3.2, uv.y * 3.6) + vec2(wind, wind * 0.25);
+    // domain warp: two nested noise lookups bend the base field (adaptive LOD
+    // same as fbm — these lookups stride multiple texels per pixel too)
+    vec2 wq = q * 0.5 + 3.7;
+    float wlod = clamp(log2(max(length(fwidth(wq)), 1e-4)), 0.0, 6.0);
+    vec2 warp = vec2(textureLod(uNoiseTex, wq, wlod).r,
+                     textureLod(uNoiseTex, wq + vec2(5.4, 0.0), wlod).g) - 0.5;
     q += warp * 0.65;
 
     float n = fbm(q); // puffy shapes
 
-    // large broken masses with soft organic edges
-    float mass = smoothstep(0.06, 0.42, n);
+    // large broken masses with soft puffy edges
+    float mass = smoothstep(0.02, 0.55, n);
     // bright rim light in a band at the mass edges — cloud cores stay dark,
     // exactly like backlit real-dusk cumulus
     rim = smoothstep(0.02, 0.16, n) * (1.0 - smoothstep(0.20, 0.46, n));
@@ -155,6 +164,9 @@ void main() {
     float halo = pow(sunAmount, 600.0) * 0.7 * (1.0 - 0.5 * clamp(cover, 0.0, 1.0));
     sky = mix(sky, vec3(9.0, 6.2, 3.6), clamp(disc + halo, 0.0, 1.0));
 
-    // HDR-ish output for the env map (tone mapping happens in the sea shader)
-    fragColor = vec4(sky, 1.0);
+    // Env-cubemap pass keeps HDR values (the sea shader tone maps after adding
+    // glitter). The on-screen dome pass tone maps + gammas right here so the
+    // visible sky matches what the water reflects.
+    vec3 outCol = mix(sky, pow(sky / (sky + vec3(1.0)), vec3(1.0 / 2.2)), uTonemap);
+    fragColor = vec4(outCol, 1.0);
 }
