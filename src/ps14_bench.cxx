@@ -526,12 +526,14 @@ static void UpdateAutoCamera(float t) {
   eye.y = 7.5f + std::sin(t * 0.043f) * 2.2f;
   gCamPos = eye;
 
-  // face the sun, swaying slowly so the framing breathes during the run
+  // face the sun, swaying slowly so the framing breathes during the run.
+  // Tamed sway (±0.18 rad) keeps the glitter path in the middle of the frame
+  // with dark off-path sea on both sides — the reference composition.
   float yawSun = std::atan2(gSunDir.x, gSunDir.z);
-  float yaw = yawSun + 0.55f * std::sin(t * 0.013f) + 0.18f * std::sin(t * 0.041f);
-  float pitch = 0.075f + 0.030f * std::sin(t * 0.017f); // gaze tilted up so the raised sun
-                                                        // sits in the upper third (reference
-                                                        // framing) with clouds above it
+  float yaw = yawSun + 0.14f * std::sin(t * 0.013f) + 0.04f * std::sin(t * 0.041f);
+  float pitch = 0.030f + 0.022f * std::sin(t * 0.017f); // horizon high in frame:
+                                                        // sky ~25%, sea ~75% like
+                                                        // the reference shot
   Vec3 fwd = {std::sin(yaw) * std::cos(pitch), std::sin(pitch),
               std::cos(yaw) * std::cos(pitch)};
   gCamYaw = std::atan2(fwd.x, fwd.z);
@@ -586,7 +588,7 @@ static void BindSkyUniforms(const Mat4 &vp) {
   glUniform3f(gSkyProg.loc("uZenithColor"), 0.012f, 0.016f, 0.048f);  // deep blue-black overhead
   glUniform3f(gSkyProg.loc("uMidColor"), 0.028f, 0.022f, 0.048f);     // dark slate-mauve mid sky
   glUniform3f(gSkyProg.loc("uHorizonColor"), 0.115f, 0.055f, 0.062f); // warm maroon horizon band
-  glUniform3f(gSkyProg.loc("uSunColor"), 1.30f, 0.85f, 0.55f);
+  glUniform3f(gSkyProg.loc("uSunColor"), 1.55f, 0.72f, 0.30f);        // deeper orange sun
 
   // Explicit cloud masses: a FEW fat cumulus with real clear-sky gaps between
   // them (the 3DMark Nature look). Hand-placed, time-static — uploaded once.
@@ -837,7 +839,7 @@ static void DrawSkyScreen(const Mat4 &view, const Vec3 &eye) {
 static void RenderHUD() {
   char line1[128], line2[128];
   std::snprintf(line1, sizeof(line1), "FPS: %d  SCORE: %.0f", gFps,
-                gSmoothFps > 0.0 ? (gSmoothFps * 2.0) / (1.01 / gSmoothFps) : 0.0);
+                gSmoothFps > 0.0 ? gSmoothFps * gSmoothFps * 2.0 : 0.0);
   std::snprintf(line2, sizeof(line2), "3DMARK2001SE PS1.4 - NATURE SEA - OPENGL 3.3");
   RenderText(16.0f, 16.0f, line1);
   RenderText(16.0f, (float)gWindowHeight - 34.0f, line2);
@@ -914,9 +916,11 @@ static void RenderScene() {
   }
   if ((now - gStartTime) * 1000.0 >= (double)BENCH_MILLISECONDS) {
     double elapsed = now - gStartTime;
-    double fps = gSmoothFps > 0.0 ? gSmoothFps : (double)gFrame / elapsed;
-    double score = (fps * 2.0) / (1.01 / fps);
-    std::printf("Benchmark Results - Time : %.1fs, Average FPS : %.1f, Score : %.2f\n",
+    // Score from ALL frames of the run (not the last smoothing window),
+    // matching the original bench: score = fps^2 * 2.
+    double fps = (double)gFrame / elapsed;
+    double score = fps * fps * 2.0;
+    std::printf("Benchmark Results - Time : %.1fs, Average FPS : %.1f, Score : %.0f\n",
                 elapsed, fps, score);
     std::fflush(stdout);
     SDL_Quit();

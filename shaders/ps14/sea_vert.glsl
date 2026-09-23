@@ -16,14 +16,15 @@ out vec2 vUV;
 // Chop everywhere: short wavelengths so several crests are always on screen
 // (grid is 4096m across at 256x256, i.e. ~16m per quad; the fine shading
 // detail comes from the per-pixel analytic normals in the fragment shader).
+// Amplitudes raised ~35%: tall, raised swells like the reference shot.
 float waveHeight(vec2 p, float t) {
     float h = 0.0;
-    h += sin(dot(p, vec2( 0.98,  0.20)) * 0.170 + t * 1.30) * 0.95;
-    h += sin(dot(p, vec2(-0.64,  0.77)) * 0.240 + t * 1.60) * 0.64;
-    h += sin(dot(p, vec2( 0.36, -0.93)) * 0.380 + t * 2.10) * 0.48;
-    h += sin(dot(p, vec2(-0.91, -0.42)) * 0.540 + t * 2.70) * 0.31;
-    h += sin(dot(p, vec2( 0.59,  0.81)) * 0.860 + t * 3.40) * 0.20;
-    h += sin(dot(p, vec2(-0.20,  0.98)) * 1.450 + t * 4.40) * 0.11;
+    h += sin(dot(p, vec2( 0.98,  0.20)) * 0.170 + t * 1.30) * 1.30;
+    h += sin(dot(p, vec2(-0.64,  0.77)) * 0.240 + t * 1.60) * 0.88;
+    h += sin(dot(p, vec2( 0.36, -0.93)) * 0.380 + t * 2.10) * 0.66;
+    h += sin(dot(p, vec2(-0.91, -0.42)) * 0.540 + t * 2.70) * 0.42;
+    h += sin(dot(p, vec2( 0.59,  0.81)) * 0.860 + t * 3.40) * 0.27;
+    h += sin(dot(p, vec2(-0.20,  0.98)) * 1.450 + t * 4.40) * 0.15;
     return h;
 }
 

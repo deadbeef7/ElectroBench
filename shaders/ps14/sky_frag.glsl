@@ -46,11 +46,13 @@ out vec4 fragColor;
 const float PI = 3.14159265359;
 
 // Assemble the explicit puff field. Returns density in [0,1] (1 = opaque core)
-// plus lighting terms: how far up inside the mass we are (top-lit volumetric
-// gradient) and the silhouette-edge softness factor for the rim light.
-float cloudField(vec3 dir, out float upness, out float rim) {
+// plus lighting terms: upness (height inside the mass), sunness (how far the
+// sample sits toward the SUN side of the mass — the key to the silver-lining
+// look) and the silhouette-edge softness factor for the rim light.
+float cloudField(vec3 dir, vec3 sd, out float upness, out float sunness, out float rim) {
     float density = 0.0;
     float heightSum = 0.0;
+    float sunSum = 0.0;
     float weight = 0.0;
     float edge = 1.0;   // min puff-edge softness across the cloud = silhouette
 
@@ -99,7 +101,14 @@ float cloudField(vec3 dir, out float upness, out float rim) {
             // "height" inside the cloud: squashed-plane elevation relative to
             // the mass centre — drives the volumetric top-lit gradient
             float hn = clamp(p.y / R + 0.5, 0.0, 1.0);
+            // volumetric DEPTH: projection of the in-cloud offset onto the
+            // sun direction in the cloud's tangent plane (+1 = sun-side edge,
+            // -1 = far anti-sun bulk). Real clouds are lit THROUGH from the
+            // sun side: bright translucent rim, dark body away.
+            vec2 toSun = vec2(dot(sd, t1), dot(sd, t2));
+            float dsun = dot(p, toSun) / (R * 1.5);
             heightSum += hn * local;
+            sunSum += clamp(dsun, -1.0, 1.0) * local;
             weight += local;
             edge = min(edge, local);
         }
@@ -107,6 +116,7 @@ float cloudField(vec3 dir, out float upness, out float rim) {
     }
 
     upness = weight > 0.001 ? heightSum / weight : 0.0;
+    sunness = weight > 0.001 ? clamp(sunSum / weight, -1.0, 1.0) : 0.0;
     rim = (1.0 - edge) * density;   // strongest at the soft silhouette edge
     return clamp(density, 0.0, 1.0);
 }
@@ -125,36 +135,43 @@ void main() {
     float sunAmount = max(dot(dir, sd), 0.0);
     sky *= mix(0.22, 1.0, pow(sunAmount, 4.0));   // steep: dark sky away from the sun
 
-    // warm horizon glow hugging the horizon around the sun azimuth
-    float glowMask = pow(sunAmount, 14.0) * 0.55 + pow(sunAmount, 35.0) * 0.80;
+    // warm horizon glow hugging the horizon around the sun azimuth — pulled
+    // tighter and dimmer so the glow is a compact band, not a sky-wide wash
+    float glowMask = pow(sunAmount, 22.0) * 0.42 + pow(sunAmount, 50.0) * 0.62;
     glowMask *= 1.0 - smoothstep(0.05, 0.55, h) * 0.85;  // strongest at the horizon
-    sky = mix(sky, vec3(1.7, 0.66, 0.28), clamp(glowMask, 0.0, 0.65));
+    sky = mix(sky, vec3(1.55, 0.52, 0.18), clamp(glowMask, 0.0, 0.52));
 
-    // broader soft gold field above the horizon glow
-    float goldMask = pow(sunAmount, 120.0) * 0.9 * (1.0 - smoothstep(0.0, 0.70, h) * 0.6);
-    sky = mix(sky, vec3(2.6, 1.3, 0.62), clamp(goldMask, 0.0, 0.85));
+    // broader soft gold field above the horizon glow — tighter and dimmer
+    float goldMask = pow(sunAmount, 170.0) * 0.62 * (1.0 - smoothstep(0.0, 0.70, h) * 0.6);
+    sky = mix(sky, vec3(2.3, 1.05, 0.42), clamp(goldMask, 0.0, 0.62));
 
     // hot core just behind the clouds where the sun sits
-    float coreMask = pow(sunAmount, 250.0) * 0.95;
-    sky = mix(sky, vec3(6.0, 2.8, 1.2), clamp(coreMask, 0.0, 0.97));
+    float coreMask = pow(sunAmount, 320.0) * 0.85;
+    sky = mix(sky, vec3(5.2, 2.1, 0.72), clamp(coreMask, 0.0, 0.90));
 
     // ---- explicit volumetric clouds composite over the glow ----
-    float upn, rimF;
-    float cl = cloudField(dir, upn, rimF);
+    float upn, sunn, rimF;
+    float cl = cloudField(dir, sd, upn, sunn, rimF);
 
     if (cl > 0.001) {
         float sunAmt = clamp(dot(dir, sd) * 0.5 + 0.5, 0.0, 1.0);
 
-        // volumetric gradient with MODERATE contrast: dusky base -> warm sunlit
-        // top, lifted so the body reads as vapour rather than a black cut-out
-        vec3 baseCol = vec3(0.115, 0.100, 0.150);
-        vec3 topCol  = vec3(0.85, 0.63, 0.48) * (0.45 + 0.55 * sunAmt);
-        vec3 bodyCol = mix(baseCol, topCol, 0.22 + 0.78 * upn * upn);
+        // VOLUMETRIC LIGHT TRANSPORT (the cheap-but-correct trick): light
+        // enters the sun-facing side and dies off with depth. sunward parts
+        // glow warm and translucent; the anti-sun bulk stays cool grey-slate.
+        float lit = clamp(sunn * 0.5 + 0.5, 0.0, 1.0);       // depth through the mass
+        float lit2 = lit * lit;
+        vec3 shadeCol = vec3(0.105, 0.105, 0.150);           // cool anti-sun bulk
+        vec3 litCol   = vec3(1.15, 0.78, 0.52) * (0.55 + 0.45 * sunAmt); // sun-side vapour
+        vec3 bodyCol = mix(shadeCol, litCol, 0.12 + 0.88 * lit2);
+        // top surfaces catch extra light even off-sun (sky light from above)
+        bodyCol = mix(bodyCol, bodyCol * 1.35 + vec3(0.10, 0.09, 0.08), upn * upn * 0.45);
 
-        // restrained rim light on the silhouette, strongest toward the sun —
-        // a hint of back-light, not the glowing outline that read cartoonish
-        vec3 rimCol = mix(vec3(0.30, 0.26, 0.34), vec3(1.35, 0.95, 0.72), sunAmt);
-        bodyCol += rimCol * rimF * 0.55;
+        // silver lining: silhouette edges on the SUN side blaze, anti-sun
+        // edges stay dark — asymmetric, like back-lit real clouds
+        float rimSun = rimF * clamp(sunn * 0.5 + 0.35, 0.0, 1.0);
+        vec3 rimCol = mix(vec3(0.22, 0.20, 0.28), vec3(1.9, 1.15, 0.68), sunAmt);
+        bodyCol += rimCol * rimSun * rimSun * 0.9;
 
         // faint warm haze where the glow is strong behind the cloud edge
         bodyCol += vec3(1.5, 0.8, 0.45) * pow(sunAmount, 8.0) * (1.0 - cl) * 0.22;
@@ -162,13 +179,12 @@ void main() {
         sky = mix(sky, bodyCol, clamp(cl * 1.10, 0.0, 0.97));
     }
 
-    // big soft disc: the sun is low, so it reads as a compact bright ball with
-    // a warm halo. Drawn last and attenuated by cloud cover so a cloud can
-    // veil it without erasing it.
+    // compact orange disc with a TIGHT halo — the reference sun is a defined
+    // ball, not a bloom blob. Drawn last, attenuated by cloud cover.
     float cover = cl;
-    float disc = smoothstep(0.9975, 0.9990, sunAmount) * (1.0 - 0.80 * clamp(cover, 0.0, 1.0));
-    float halo = pow(sunAmount, 600.0) * 0.7 * (1.0 - 0.5 * clamp(cover, 0.0, 1.0));
-    sky = mix(sky, vec3(9.0, 6.2, 3.6), clamp(disc + halo, 0.0, 1.0));
+    float disc = smoothstep(0.9977, 0.9992, sunAmount) * (1.0 - 0.80 * clamp(cover, 0.0, 1.0));
+    float halo = pow(sunAmount, 900.0) * 0.45 * (1.0 - 0.5 * clamp(cover, 0.0, 1.0));
+    sky = mix(sky, vec3(8.5, 4.6, 1.7), clamp(disc + halo, 0.0, 1.0));
 
     // Env-cubemap pass keeps HDR values (the sea shader tone maps after adding
     // glitter). The on-screen dome pass tone maps + gammas right here so the

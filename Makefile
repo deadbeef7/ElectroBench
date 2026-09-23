@@ -8,13 +8,24 @@ CXX ?= g++
 CXXFLAGS := -std=c++17 -O2 -march=x86-64 -mtune=generic
 CPPFLAGS := -Ilib
 
+# STATIC=1 -> fully static link (example, Windows/MSYS2):
+#   g++ -std=c++17 -O2 -march=x86-64 -mtune=generic \
+#       -static -static-libgcc -static-libstdc++ src/main.cxx \
+#       -o build/ElectroBench-static.exe \
+#       $(pkg-config --static --cflags --libs sdl2 glew) \
+#       -lglew32 -lglu32 -lopengl32 -lSDL2main -lSDL2 -mwindows
+# Requires the static archives of every dependency (SDL2, GLEW, GL, libc++).
+STATIC ?= 0
+STATIC_SUFFIX :=
+STATIC_LDFLAGS :=
+
 BUILD := build
 
 LEGACY_SRC := src/main.cxx
 PS14_SRC   := src/ps14_bench.cxx
 
-LEGACY_BIN := $(BUILD)/ElectroBench
-PS14_BIN   := $(BUILD)/PS14SeaBenchmark
+LEGACY_BIN = $(BUILD)/ElectroBench$(STATIC_SUFFIX)
+PS14_BIN   = $(BUILD)/PS14SeaBenchmark$(STATIC_SUFFIX)
 
 # ------------------------------------------------------------
 # Platform detection
@@ -42,35 +53,58 @@ endif
 
 ifeq ($(PLATFORM),windows)
 
-    PKG_CFLAGS := $(shell pkg-config --cflags sdl2 glew)
-    PKG_LIBS   := $(shell pkg-config --libs sdl2)
+    ifeq ($(STATIC),1)
+        STATIC_SUFFIX := -static
+        STATIC_LDFLAGS := -static -static-libgcc -static-libstdc++
+        PKG_CFLAGS := $(shell pkg-config --static --cflags sdl2 glew)
+        PKG_LIBS   := $(shell pkg-config --static --libs sdl2 glew)
+        LDLIBS := $(PKG_LIBS) \
+                  -lglew32 \
+                  -lglu32 \
+                  -lopengl32 \
+                  -lSDL2main \
+                  -lSDL2 \
+                  -mwindows
+    else
+        PKG_CFLAGS := $(shell pkg-config --cflags sdl2 glew)
+        PKG_LIBS   := $(shell pkg-config --libs sdl2)
+        LDLIBS := $(PKG_LIBS) \
+                  -lglew32 \
+                  -lglu32 \
+                  -lopengl32
+    endif
 
-    CXXFLAGS += $(PKG_CFLAGS)
-
-    LDLIBS := $(PKG_LIBS) \
-              -lglew32 \
-              -lglu32 \
-              -lopengl32
-
-    LEGACY_BIN := $(BUILD)/ElectroBench.exe
-    PS14_BIN   := $(BUILD)/PS14SeaBenchmark.exe
+ifeq ($(PLATFORM),windows)
+    LEGACY_BIN := $(BUILD)/ElectroBench$(STATIC_SUFFIX).exe
+    PS14_BIN   := $(BUILD)/PS14SeaBenchmark$(STATIC_SUFFIX).exe
+endif
 
 else ifeq ($(PLATFORM),macos)
 
-    PKG_CFLAGS := $(shell pkg-config --cflags sdl2 glew)
-    PKG_LIBS   := $(shell pkg-config --libs sdl2 glew)
-
-    CXXFLAGS += $(PKG_CFLAGS)
+    ifeq ($(STATIC),1)
+        STATIC_SUFFIX := -static
+        STATIC_LDFLAGS := -static-libgcc -static-libstdc++
+        PKG_CFLAGS := $(shell pkg-config --static --cflags sdl2 glew)
+        PKG_LIBS   := $(shell pkg-config --static --libs sdl2 glew)
+    else
+        PKG_CFLAGS := $(shell pkg-config --cflags sdl2 glew)
+        PKG_LIBS   := $(shell pkg-config --libs sdl2 glew)
+    endif
 
     LDLIBS := $(PKG_LIBS) \
               -framework OpenGL
 
 else ifeq ($(PLATFORM),linux)
 
-    PKG_CFLAGS := $(shell pkg-config --cflags sdl2 glew)
-    PKG_LIBS   := $(shell pkg-config --libs sdl2 glew)
-
-    CXXFLAGS += $(PKG_CFLAGS)
+    ifeq ($(STATIC),1)
+        STATIC_SUFFIX := -static
+        STATIC_LDFLAGS := -static -static-libgcc -static-libstdc++
+        PKG_CFLAGS := $(shell pkg-config --static --cflags sdl2 glew)
+        PKG_LIBS   := $(shell pkg-config --static --libs sdl2 glew)
+    else
+        PKG_CFLAGS := $(shell pkg-config --cflags sdl2 glew)
+        PKG_LIBS   := $(shell pkg-config --libs sdl2 glew)
+    endif
 
     LDLIBS := $(PKG_LIBS) \
               -lGLU \
@@ -108,7 +142,11 @@ $(LEGACY_BIN): $(LEGACY_SRC) | $(BUILD)
 	@echo " Building ElectroBench Legacy"
 	@echo " Platform: $(PLATFORM)"
 	@echo "========================================"
+ifeq ($(STATIC),1)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(STATIC_LDFLAGS) $< -o $@ $(LDLIBS)
+else
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
+endif
 
 # ------------------------------------------------------------
 # PS1.4 Sea Benchmark
@@ -122,7 +160,11 @@ $(PS14_BIN): $(PS14_SRC) | $(BUILD)
 	@echo " Building PS1.4 Sea Benchmark"
 	@echo " Platform: $(PLATFORM)"
 	@echo "========================================"
+ifeq ($(STATIC),1)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(STATIC_LDFLAGS) $< -o $@ $(LDLIBS)
+else
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
+endif
 
 # ------------------------------------------------------------
 # Clean
@@ -155,4 +197,5 @@ info:
 	@echo "Platform : $(PLATFORM)"
 	@echo "Compiler : $(CXX)"
 	@echo "CXXFLAGS : $(CXXFLAGS)"
+	@echo "Static   : $(STATIC)"
 	@echo "Libraries: $(LDLIBS)"
