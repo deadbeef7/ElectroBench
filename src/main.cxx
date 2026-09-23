@@ -139,11 +139,135 @@ float cam_min_dist = 3.0f;
 float cam_max_dist = 26.0f;
 static const float cam_target[3] = {0.0f, 0.45f, 0.0f};
 
-// Scene layout: the 90 UZIs stand on the floor in a 10x9 grid
-int grid_rows = 9, grid_cols = 10;
+// Scene layout: the 110 UZIs stand on the floor in a 10x11 grid
+int grid_rows = 11, grid_cols = 10;
 float grid_spacing = 0.68f;
 float gun_scale = 1.0f;
 float sun_dir_world[3];
+
+// ------------------------------------------------------------ real fps + score
+// Frame timing uses SDL's performance counter (sub-microsecond resolution)
+// and accounts EVERY frame, so the counter tracks real frame rate instead of
+// sampling 1-second buckets with integer division. The smooth value drives
+// the HUD/title; the final score is computed from ALL frames of the run.
+static double gPerfFreq = 1.0;
+static Uint64 gPerfStartTick = 0;   // first accounted frame
+static Uint64 gPerfLastTick = 0;    // previous frame
+static double gFpsWindowStart = -1.0;
+static int gFpsWindowFrames = 0;
+static double gSmoothFps = 0.0;
+static long gTotalFrames = 0;
+
+// Benchmark score: fps^2 * 2 (see README). Linear in load twice over, easy to
+// reason about, and computed from the true frame-count average of the run.
+static inline double BenchScore(double fps) { return fps * fps * 2.0; }
+
+// ---------------------------------------------------------------------------
+// FPS HUD (OpenGL 2.1 fixed function): 5x7 bitmap font drawn as immediate-mode
+// quads after the 3D pass, with a dark backing panel for readability.
+// ---------------------------------------------------------------------------
+static const unsigned char kHudFont[95][5] = {
+    {0x00,0x00,0x00,0x00,0x00}, {0x05,0x05,0x05,0x00,0x05}, {0x0A,0x0A,0x00,0x00,0x00},
+    {0x0A,0x0A,0x1F,0x0A,0x1F}, {0x04,0x0F,0x05,0x0E,0x09}, {0x19,0x12,0x04,0x09,0x13},
+    {0x0C,0x12,0x14,0x12,0x0D}, {0x04,0x04,0x02,0x00,0x00}, {0x02,0x04,0x04,0x04,0x02},
+    {0x08,0x04,0x04,0x04,0x08}, {0x00,0x15,0x0E,0x00,0x00}, {0x00,0x04,0x0E,0x04,0x00},
+    {0x00,0x00,0x00,0x04,0x08}, {0x00,0x00,0x0E,0x00,0x00}, {0x00,0x00,0x00,0x04,0x00},
+    {0x01,0x02,0x02,0x02,0x01}, {0x0E,0x11,0x11,0x11,0x0E}, {0x04,0x0C,0x04,0x04,0x0E},
+    {0x0E,0x01,0x0E,0x10,0x0F}, {0x0E,0x01,0x06,0x01,0x0E}, {0x11,0x11,0x0F,0x01,0x01},
+    {0x0F,0x10,0x0E,0x01,0x0E}, {0x0E,0x10,0x0E,0x11,0x0E}, {0x1F,0x01,0x02,0x04,0x08},
+    {0x0E,0x11,0x0E,0x11,0x0E}, {0x0E,0x11,0x07,0x01,0x0E}, {0x00,0x04,0x00,0x04,0x00},
+    {0x00,0x04,0x00,0x04,0x08}, {0x02,0x04,0x08,0x04,0x02}, {0x00,0x00,0x0E,0x00,0x0E},
+    {0x08,0x04,0x02,0x04,0x08}, {0x0E,0x01,0x06,0x04,0x00}, {0x0E,0x11,0x15,0x15,0x0E},
+    {0x0E,0x11,0x11,0x1F,0x11}, {0x1E,0x09,0x0E,0x09,0x1E}, {0x0E,0x11,0x10,0x11,0x0E},
+    {0x1C,0x12,0x11,0x12,0x1C}, {0x0F,0x10,0x1E,0x10,0x0F}, {0x0F,0x10,0x1E,0x10,0x10},
+    {0x0E,0x10,0x13,0x11,0x0F}, {0x11,0x11,0x1F,0x11,0x11}, {0x0E,0x04,0x04,0x04,0x0E},
+    {0x07,0x02,0x02,0x12,0x0C}, {0x11,0x12,0x1C,0x12,0x11}, {0x10,0x10,0x10,0x10,0x0F},
+    {0x11,0x1B,0x15,0x11,0x11}, {0x11,0x19,0x15,0x13,0x11}, {0x0E,0x11,0x11,0x11,0x0E},
+    {0x1E,0x11,0x1E,0x10,0x10}, {0x0E,0x11,0x11,0x15,0x16}, {0x1E,0x11,0x1E,0x12,0x11},
+    {0x0F,0x10,0x0E,0x01,0x1E}, {0x1F,0x04,0x04,0x04,0x04}, {0x11,0x11,0x11,0x11,0x0E},
+    {0x11,0x11,0x11,0x0A,0x04}, {0x11,0x11,0x15,0x15,0x0A}, {0x11,0x0A,0x04,0x0A,0x11},
+    {0x11,0x11,0x0E,0x04,0x04}, {0x1F,0x02,0x04,0x08,0x1F}, {0x0E,0x08,0x08,0x08,0x0E},
+    {0x01,0x02,0x02,0x04,0x08}, {0x0E,0x02,0x02,0x02,0x0E}, {0x04,0x0E,0x15,0x04,0x04},
+    {0x00,0x00,0x00,0x00,0x1F}, {0x08,0x04,0x02,0x00,0x00}, {0x00,0x0E,0x01,0x07,0x0F},
+    {0x10,0x1E,0x11,0x11,0x1E}, {0x00,0x0F,0x10,0x10,0x0F}, {0x01,0x0E,0x11,0x11,0x0E},
+    {0x00,0x0E,0x11,0x1E,0x10}, {0x07,0x08,0x0E,0x08,0x07}, {0x10,0x1E,0x11,0x11,0x11},
+    {0x04,0x00,0x0E,0x11,0x11}, {0x08,0x02,0x02,0x02,0x0C}, {0x04,0x02,0x02,0x12,0x0C},
+    {0x10,0x10,0x1E,0x11,0x1E}, {0x10,0x10,0x10,0x10,0x0E}, {0x00,0x0A,0x15,0x15,0x0A},
+    {0x00,0x0E,0x11,0x11,0x0E}, {0x00,0x1E,0x11,0x1E,0x10}, {0x00,0x0E,0x11,0x11,0x0E},
+    {0x00,0x0F,0x10,0x0F,0x01}, {0x08,0x0E,0x10,0x08,0x04}, {0x00,0x1D,0x12,0x04,0x09},
+    {0x00,0x0E,0x0A,0x0E,0x02}, {0x0B,0x0C,0x0E,0x02,0x06}, {0x04,0x04,0x04,0x04,0x04},
+    {0x04,0x04,0x0E,0x00,0x00}, {0x09,0x12,0x1F,0x12,0x09}, {0x0A,0x0A,0x0A,0x0A,0x0A},
+    {0x04,0x0F,0x11,0x0F,0x04}};
+
+static void HudGlyph(int c, float x, float y) {
+  if (c < 32 || c > 126) return;
+  const unsigned char *g = kHudFont[c - 32];
+  glBegin(GL_QUADS);
+  for (int row = 0; row < 7; row++) {
+    for (int col = 0; col < 5; col++) {
+      if (g[row] & (1 << (4 - col))) {
+        glVertex2f(x + col, y + row);
+        glVertex2f(x + col + 1, y + row);
+        glVertex2f(x + col + 1, y + row + 1);
+        glVertex2f(x + col, y + row + 1);
+      }
+    }
+  }
+  glEnd();
+}
+
+static void HudText(float x, float y, const char *text) {
+  float pen = x;
+  for (const char *p = text; *p; ++p, pen += 6.0f) HudGlyph((unsigned char)*p, pen, y);
+}
+
+static void RenderHUD() {
+  if (!window) return;
+  char line[96];
+  snprintf(line, sizeof(line), "FPS : %d   SCORE : %.0f", fps,
+           gSmoothFps > 0.0 ? BenchScore(gSmoothFps) : 0.0);
+
+  glUseProgram(0);
+  glMatrixMode(GL_PROJECTION);
+  glPushMatrix();
+  glLoadIdentity();
+  glOrtho(0.0, (double)gWinW, (double)gWinH, 0.0, -1.0, 1.0);
+  glMatrixMode(GL_MODELVIEW);
+  glPushMatrix();
+  glLoadIdentity();
+
+  glDisable(GL_DEPTH_TEST);
+  glDisable(GL_LIGHTING);
+  glDisable(GL_BLEND);
+
+  // The gun pass leaves textures bound and GL_TEXTURE_2D enabled on non-active
+  // units; glDisable only touches the ACTIVE unit, so unit 0 would keep
+  // modulating these quads by the dark gunmetal texture. Reset unit 0 first.
+  glActiveTexture(GL_TEXTURE0);
+  glDisable(GL_TEXTURE_2D);
+  glBindTexture(GL_TEXTURE_2D, 0);
+  glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+
+  // dark backing panel: solid strip so the text reads on any background
+  glColor4f(0.02f, 0.02f, 0.04f, 1.0f);
+  float w = (float)strlen(line) * 6.0f + 12.0f;
+  glBegin(GL_QUADS);
+  glVertex2f(0.0f, 0.0f);
+  glVertex2f(w, 0.0f);
+  glVertex2f(w, 16.0f);
+  glVertex2f(0.0f, 16.0f);
+  glEnd();
+
+  glColor4f(0.72f, 0.93f, 1.0f, 1.0f); // pale cyan, matches the PS1.4 HUD
+  HudText(6.0f, 5.0f, line);
+
+  glEnable(GL_DEPTH_TEST);
+  glMatrixMode(GL_PROJECTION);
+  glPopMatrix();
+  glMatrixMode(GL_MODELVIEW);
+  glPopMatrix();
+  glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+}
 
 // light-space matrix (world -> [0,1] shadow map coords)
 float light_matrix[16];
@@ -230,7 +354,7 @@ void drawFloor() {
   glEnd();
 }
 
-// Draws the 90 UZIs lying flat on the floor (mag base touching the ground),
+// Draws the 110 UZIs lying flat on the floor (mag base touching the ground),
 // muzzle up, in a grid
 void drawGuns() {
   for (int i = 0; i < grid_rows; i++) {
@@ -352,7 +476,7 @@ void applyCamera() {
             cam_target[2], 0.0, 1.0, 0.0);
 }
 
-// Renders the scene (90 UZIs on a shadowed floor!) and calculates FPS
+// Renders the scene (110 UZIs on a shadowed floor!) and calculates FPS
 void renderScene() {
   unsigned int timet = SDL_GetTicks();
   applyCamera();
@@ -382,9 +506,11 @@ void renderScene() {
   drawGuns();
 
   glUseProgram(0);
-  SDL_GL_SwapWindow(window);
+  RenderHUD();
 
-  // Headless screenshot capture
+
+  // Headless screenshot capture: read BEFORE the swap so the pixels analysed
+  // are exactly what this frame rendered (the PS1.4 bench does the same).
   if (gShotPath != nullptr && timet >= (unsigned int)(gShotTime * 1000.0f)) {
     std::vector<unsigned char> px((size_t)gWinW * gWinH * 3);
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
@@ -401,15 +527,30 @@ void renderScene() {
     exit(0);
   }
 
+  SDL_GL_SwapWindow(window);
+
   frame++;
   final_time = time(NULL);
-  if (final_time - init_time > 0) {
+
+  // ---- real fps + score accounting ----
+  gTotalFrames++;
+  Uint64 nowTick = SDL_GetPerformanceCounter();
+  double nowS = (double)(nowTick - gPerfStartTick) / gPerfFreq;
+  gPerfLastTick = nowTick;
+
+  gFpsWindowFrames++;
+  if (gFpsWindowStart < 0.0) gFpsWindowStart = nowS;
+  double windowLen = nowS - gFpsWindowStart;
+  if (windowLen >= 0.5) {
+    double inst = (double)gFpsWindowFrames / windowLen; // real frames per second
+    gSmoothFps = gSmoothFps > 0.0 ? gSmoothFps * 0.8 + inst * 0.2 : inst;
+    gFpsWindowFrames = 0;
+    gFpsWindowStart = nowS;
+    fps = (int)(gSmoothFps + 0.5);
     char title[256];
-    fps = frame / (final_time - init_time);
-    snprintf(title, 256, "ElectroBench - FPS : %d", fps);
+    snprintf(title, 256, "ElectroBench - FPS : %d  Score : %.0f", fps,
+             gSmoothFps * gSmoothFps * 2.0);
     SDL_SetWindowTitle(window, title);
-    frame = 0;
-    init_time = final_time;
   }
 
   // Debug probe: read back the depth texture and evaluate the exact shader
@@ -562,7 +703,13 @@ void renderScene() {
     exit(0);
   }
   if (timet >= 60000) {
-    printf("Benchmark Results - Score : %f\n", (fps * 2) / (1.01 / fps));
+    // Score from ALL frames of the run (not the last 1-second window).
+    double elapsed = (double)(SDL_GetPerformanceCounter() - gPerfStartTick) / gPerfFreq;
+    if (elapsed <= 0.0) elapsed = 1.0;
+    double avgFps = (double)gTotalFrames / elapsed;
+    double score = avgFps * avgFps * 2.0;
+    printf("Benchmark Results - Time : %.1fs, Average FPS : %.1f, Score : %.0f\n",
+           elapsed, avgFps, score);
     SDL_Quit();
     exit(0);
   }
@@ -808,6 +955,15 @@ int main(int argc, char **argv) {
   bool quit = false;
 
   init_time = time(NULL);
+
+  // start the sub-second fps clock right before the first rendered frame
+  gPerfFreq = (double)SDL_GetPerformanceFrequency();
+  gPerfStartTick = SDL_GetPerformanceCounter();
+  gPerfLastTick = gPerfStartTick;
+  gFpsWindowStart = -1.0;
+  gFpsWindowFrames = 0;
+  gSmoothFps = 0.0;
+  gTotalFrames = 0;
 
   while (!quit) {
     while (SDL_PollEvent(&event) != 0) {

@@ -24,16 +24,16 @@ out vec4 fragColor;
 
 const float PI = 3.14159265359;
 
-// Must stay in sync with waveHeight() in sea_vert.glsl
-// Chop everywhere: short wavelengths so several crests are always on screen.
+// Must stay in sync with waveHeight() in sea_vert.glsl (amplitudes raised:
+// tall raised swells like the reference)
 float waveHeight(vec2 p, float t) {
     float h = 0.0;
-    h += sin(dot(p, vec2( 0.98,  0.20)) * 0.170 + t * 1.30) * 0.95;
-    h += sin(dot(p, vec2(-0.64,  0.77)) * 0.240 + t * 1.60) * 0.64;
-    h += sin(dot(p, vec2( 0.36, -0.93)) * 0.380 + t * 2.10) * 0.48;
-    h += sin(dot(p, vec2(-0.91, -0.42)) * 0.540 + t * 2.70) * 0.31;
-    h += sin(dot(p, vec2( 0.59,  0.81)) * 0.860 + t * 3.40) * 0.20;
-    h += sin(dot(p, vec2(-0.20,  0.98)) * 1.450 + t * 4.40) * 0.11;
+    h += sin(dot(p, vec2( 0.98,  0.20)) * 0.170 + t * 1.30) * 1.30;
+    h += sin(dot(p, vec2(-0.64,  0.77)) * 0.240 + t * 1.60) * 0.88;
+    h += sin(dot(p, vec2( 0.36, -0.93)) * 0.380 + t * 2.10) * 0.66;
+    h += sin(dot(p, vec2(-0.91, -0.42)) * 0.540 + t * 2.70) * 0.42;
+    h += sin(dot(p, vec2( 0.59,  0.81)) * 0.860 + t * 3.40) * 0.27;
+    h += sin(dot(p, vec2(-0.20,  0.98)) * 1.450 + t * 4.40) * 0.15;
     return h;
 }
 
@@ -57,9 +57,6 @@ void main() {
     // ---- phase 2: dependent read - perturbed reflection of the sky ----
     vec3 V = normalize(uEyePos - vWorld);             // towards the eye
     vec3 R = reflect(-V, N);
-    // add ripple perturbation in tangent space, THEN clamp: clamping before the
-    // perturbation let downward-perturbed rays sample the never-rendered -Y
-    // cubemap face (black band at the horizon + black spots on the water).
     R = normalize(R + vec3(pert.x, 0.0, pert.y) * 1.25);
     // Reflections stretch vertically (the classic flattened-reflection trick):
     // grazing rays would otherwise hug the bright horizon band and light the
@@ -67,6 +64,15 @@ void main() {
     // upper sky while the sun glitter path stays put (it is a separate term).
     R.y = abs(R.y) * 0.30 + 0.45;
     R = normalize(R);
+    // azimuthal smear toward the sun: only rays near the SUN azimuth keep
+    // crisp reflections; off-path rays mirror-blend toward the dark upper sky
+    // so the glow column stays narrow and the sides read deep blue/purple
+    vec3 Lh = normalize(uSunDir);
+    vec2 sunXZ = normalize(Lh.xz);
+    vec2 dirXZ = normalize(vWorld.xz - uEyePos.xz + vec2(1e-4));
+    float sunAlign = max(dot(dirXZ, sunXZ), 0.0);
+    vec3 Rdark = normalize(vec3(R.x, abs(R.y) * 1.8 + 0.62, R.z)); // steep: upper sky
+    R = normalize(mix(Rdark, R, pow(sunAlign, 6.0)));
 
     // Roughness-matched reflection LOD: the sun disc occupies a handful of
     // cubemap texels, and sampling them at LOD 0 mirrors as small SQUARE
@@ -85,11 +91,15 @@ void main() {
 
     // directional sun lighting on the wave slopes: faces tilted toward the
     // low sun glow warm, backslopes fall to near-black — this is what makes
-    // the sea read as lit by the same sun as the sky instead of pasted on
-    vec3 L = normalize(uSunDir);
+    // the sea read as lit by the same sun as the sky instead of pasted on.
+    // Prefaced by an azimuth gate so the WARM slope light lives inside the
+    // sun path; off-path water stays deep blue/purple.
+    vec3 L = Lh;
     float sunDiffuse = max(dot(N, L), 0.0);
-    body *= 0.50 + 0.90 * sunDiffuse;                                // slope shading
-    body += vec3(1.05, 0.52, 0.28) * pow(sunDiffuse, 3.0) * 0.40;    // warm sun-facing slopes
+    float warmGate = pow(sunAlign, 3.0);
+    body *= 0.50 + 0.55 * sunDiffuse * warmGate + 0.18 * sunDiffuse; // slope shading
+    body *= mix(0.62, 1.0, warmGate);                                // dark off-path body
+    body += vec3(1.05, 0.42, 0.20) * pow(sunDiffuse, 3.0) * warmGate * 0.42; // warm slopes in the path
 
     float crest = smoothstep(0.55, 1.25, hC);
     float foam = texture(uFoamTex, vUV * 23.0 + vec2(uTime * 0.010, 0.0)).r;
@@ -115,15 +125,17 @@ void main() {
     color = mix(color, skyAtHorizon, haze * (0.30 + 0.70 * haze));
 
     // ---- phase 3: address + blend - sun glitter path ----
-    // tight sparkle core + broad soft sheen: individual sparkles scattered
-    // across the swell, applied after the haze so the path stays crisp far out
+    // tight sparkle core + broad soft sheen, gated to the sun's azimuth column
+    // so the glow stays a NARROW path down the middle with dark water either
+    // side (the reference look) instead of a horizon-wide shine
     vec3 H = normalize(L + V);
     float NdH = max(dot(N, H), 0.0);
+    float pathGate = pow(sunAlign, 6.0) * 0.90 + 0.10;
     float glint = pow(NdH, 520.0) * 6.0;              // pinpoint sparkles
     float glintMid = pow(NdH, 90.0) * 0.55;           // mid falloff keeps it grainy
     float glintWide = pow(NdH, 14.0) * 0.22;          // soft sheen around the path
-    color += vec3(1.0, 0.84, 0.66) * (glint + glintMid + glintWide)
-             * (0.25 + max(L.y, 0.0) * 1.2);
+    color += vec3(1.0, 0.72, 0.42) * (glint + glintMid + glintWide * pathGate)
+             * (0.25 + max(L.y, 0.0) * 1.2) * pathGate;
 
     // HDR tone map + gamma
     color = color / (color + vec3(1.0));
