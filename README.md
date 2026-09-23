@@ -92,6 +92,10 @@ What it renders :
   sun's azimuth (bright path down the middle, dark blue-purple water either side),
   slope-gated crest foam, subsurface glow in thin crests, and distance haze that converges into the
   actual per-azimuth sky colour so the far sea melts into the horizon
+- **Cloud shadows on the water**: each sea fragment is projected along its sun ray into the same
+  analytic cloud layout the sky renders — where a cloud blocks the sun the direct light dies, foam
+  stops breaking and the sea goes much darker, in coherent patches that sit exactly under the
+  clouds that cast them. Off-sun water sinks to near-black indigo
 - A clean in-engine **FPS readout** (the score belongs to the final results line) and the same score
   formula as the main benchmark, over a 45 second run
 

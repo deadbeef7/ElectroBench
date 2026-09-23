@@ -27,6 +27,13 @@ uniform vec3  uSunDir;
 uniform vec3  uHorizonColor;
 uniform vec3  uWaterColor;
 
+#define MAX_CLOUDS 6             // must match sky_frag.glsl and ps14_bench.cxx
+uniform int   uCloudCount;
+uniform float uCloudAzim[MAX_CLOUDS];   // centre azimuth, radians
+uniform float uCloudElev[MAX_CLOUDS];   // centre elevation, radians
+uniform float uCloudRadius[MAX_CLOUDS]; // angular half-height, radians
+uniform float uCloudStretch[MAX_CLOUDS];// azimuthal elongation (>1 = wider than tall)
+
 out vec4 fragColor;
 
 const float PI = 3.14159265359;
@@ -47,6 +54,52 @@ float waveHeight(vec2 p, float t) {
     return h;
 }
 
+// CLOUD SHADOWS: project the fragment onto the sky along its sun ray and
+// evaluate the SAME analytic puffs the sky renders. Where a cloud occludes
+// the sun, direct light dies on the water — the sea goes much darker there,
+// exactly under the cloud that casts it (physically consistent with the sky,
+// no textures, nothing that can grid or block).
+float cloudShadow(vec3 world, vec3 sd, vec3 dir) {
+    vec3 sunTan = sd - dir * dot(sd, dir);
+    float stLen = length(sunTan);
+    float shadow = 1.0;
+    if (stLen < 0.02) return 1.0;
+    sunTan /= stLen;
+    for (int i = 0; i < MAX_CLOUDS; i++) {
+        if (i >= uCloudCount) break;
+        vec3 c = vec3(cos(uCloudElev[i]) * cos(uCloudAzim[i]),
+                      sin(uCloudElev[i]),
+                      cos(uCloudElev[i]) * sin(uCloudAzim[i]));
+        float R = uCloudRadius[i];
+        float stretch = max(uCloudStretch[i], 1.0);
+        vec3 t1 = normalize(vec3(-sin(c.z), 0.0, cos(c.z)));
+        vec3 t2 = normalize(cross(c, t1));
+        // march the sun ray up to the cloud's tangent-plane shell (~600m up)
+        vec3 hitDir = normalize(world + sunTan * (620.0 / max(sd.y, 0.15)));
+        vec3 rel = hitDir - c * dot(hitDir, c);
+        vec2 p = vec2(dot(rel, t1) / stretch, dot(rel, t2));
+        if (dot(p, p) > R * R * 2.4) continue;
+        const int PUFFS = 5;
+        vec2 off[PUFFS];
+        off[0] = vec2( 0.00,  0.00); off[1] = vec2( 0.78,  0.14); off[2] = vec2(-0.72,  0.20);
+        off[3] = vec2( 0.34, -0.20); off[4] = vec2(-0.34, -0.16);
+        float prad[PUFFS];
+        prad[0] = 0.60; prad[1] = 0.42; prad[2] = 0.38; prad[3] = 0.34; prad[4] = 0.32;
+        float local = 0.0;
+        for (int j = 0; j < PUFFS; j++) {
+            vec2 q = p - off[j] * R;
+            float ang = atan(q.y, q.x);
+            float rj = R * prad[j] * (1.0
+                + 0.15 * sin(ang * 3.0 + uCloudAzim[i] * 7.0 + float(j) * 2.1)
+                + 0.09 * sin(ang * 5.0 - uCloudAzim[i] * 11.0 + float(j) * 4.7));
+            local = max(local, 1.0 - smoothstep(rj * 0.68, rj * 1.28, length(q)));
+        }
+        local *= 1.0 - smoothstep(R * 0.95, R * 1.55, length(p)) * 0.78;
+        shadow *= 1.0 - 0.85 * local;   // up to 85% direct-light loss per cloud
+    }
+    return clamp(shadow, 0.15, 1.0);
+}
+
 // Three octaves of small analytic wavelets: extra normal detail that would
 // be wasted (and aliased) as vertex displacement, but sells micro-chop up
 // close. Frequencies chosen so screen-space wavelength stays > ~4px at typical
@@ -63,6 +116,9 @@ void detailNormals(vec2 p, float t, float dist, inout vec2 grad) {
 }
 
 void main() {
+    vec3 sd = normalize(uSunDir);
+    vec3 dir = normalize(vWorld - uEyePos);   // fragment direction (eye -> point)
+
     // ---- analytic wave normal (finite differences of the wave field) ----
     float dist = length(vWorld.xz - uEyePos.xz);
     float e = 0.35;
@@ -112,6 +168,10 @@ void main() {
     // ---- fresnel: sea is a mirror at grazing angles, glass straight down ----
     float NdV = max(dot(N, V), 0.0);
     float fresnel = 0.022 + 0.978 * pow(1.0 - NdV, 5.0);
+    // stronger sky reflections: at dusk the whole water surface reads as a
+    // dark mirror of the sky — lift the base fresnel and clamp the minimum
+    // reflectance higher than the physical 2%
+    fresnel = clamp(fresnel * 1.25 + 0.045, 0.0, 0.92);
 
     // ---- water body: near-black purple deep, warmed by the sky band ----
     vec3 body = uWaterColor * 0.55 + uHorizonColor * 0.03;
@@ -123,15 +183,22 @@ void main() {
     // sun path; off-path water stays deep blue/purple.
     float sunDiffuse = max(dot(N, L), 0.0);
     float warmGate = pow(sunAlign, 3.0);
-    body *= 0.50 + 0.55 * sunDiffuse * warmGate + 0.18 * sunDiffuse; // slope shading
-    body *= mix(0.62, 1.0, warmGate);                                // dark off-path body
-    body += vec3(1.05, 0.42, 0.20) * pow(sunDiffuse, 3.0) * warmGate * 0.42; // warm slopes in the path
+
+    // cloud shadows: the projected puffs gate ALL direct sun terms
+    float shadow = cloudShadow(vWorld, sd, dir);
+
+    // MUCH darker water where the sun's light doesn't reach: off-path base
+    // drops to near-black indigo, and cloud shadows multiply direct light
+    body *= 0.50 + 0.55 * sunDiffuse * warmGate * shadow + 0.18 * sunDiffuse * (0.35 + 0.65 * shadow);
+    body *= mix(0.38, 1.0, warmGate * shadow + (1.0 - warmGate) * 0.35 * shadow); // dark off-path + shadowed body
+    body += vec3(1.05, 0.42, 0.20) * pow(sunDiffuse, 3.0) * warmGate * shadow * 0.42; // warm slopes in the path
 
     // ---- slope-gated crest foam ----
     // Foam only where the shading says waves actually BREAK: a height band
     // AND the slope facing the sun/light AND some ripple chaos — the noise
     // tile alone would foam uniformly everywhere, which reads fake.
-    float crest = smoothstep(0.55, 1.25, hC);
+    // Cloud shadows gate foam too: nothing breaks where light doesn't reach.
+    float crest = smoothstep(0.55, 1.25, hC) * mix(0.25, 1.0, shadow);
     float slopeFacing = max(dot(N, L), 0.0) * warmGate + 0.15;
     float chaos = texture(uRippleTex, vUV * 190.0 + vec2(uTime * 0.011, -uTime * 0.007)).g;
     float foam = texture(uFoamTex, vUV * 23.0 + vec2(uTime * 0.010, 0.0)).r;
@@ -165,17 +232,17 @@ void main() {
     // ---- phase 3: address + blend - sun glitter path ----
     // tight sparkle core + broad soft sheen, gated to the sun's azimuth column
     // so the glow stays a NARROW path down the middle with dark water either
-    // side (the reference look) instead of a horizon-wide shine.
-    // Tint: real dusk glitter is ORANGE — the path is compressed light from
-    // the disc itself, so it inherits the sun colour rather than white.
+    // side. Killed entirely inside cloud shadows, tinted orange, and the
+    // sparkle variance rides the ripple chaos.
     vec3 H = normalize(L + V);
     float NdH = max(dot(N, H), 0.0);
     float pathGate = pow(sunAlign, 6.0) * 0.90 + 0.10;
+    float sparkleGate = (0.55 + 0.90 * chaos);
     float glint = pow(NdH, 520.0) * 6.0;              // pinpoint sparkles
     float glintMid = pow(NdH, 90.0) * 0.55;           // mid falloff keeps it grainy
     float glintWide = pow(NdH, 14.0) * 0.22;          // soft sheen around the path
     color += vec3(1.0, 0.56, 0.24) * (glint + glintMid + glintWide * pathGate)
-             * (0.25 + max(L.y, 0.0) * 1.2) * pathGate;
+             * (0.25 + max(L.y, 0.0) * 1.2) * pathGate * shadow * sparkleGate;
 
     // HDR tone map + gamma
     color = color / (color + vec3(1.0));
