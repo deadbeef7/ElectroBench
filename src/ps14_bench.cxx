@@ -57,7 +57,7 @@ static const int kRippleSize = 256;      // ripple gradient texture size
 // upper sky instead of hugging the horizon.
 static const float kCloudAzim[MAX_CLOUDS] = {0.35f, 0.78f, 5.92f, 2.20f, 3.95f};
 static const float kCloudElev[MAX_CLOUDS] = {0.245f, 0.330f, 0.200f, 0.290f, 0.360f};
-static const float kCloudRad[MAX_CLOUDS]  = {0.062f, 0.050f, 0.055f, 0.048f, 0.045f};
+static const float kCloudRad[MAX_CLOUDS]  = {0.042f, 0.034f, 0.038f, 0.033f, 0.031f};
 static const float kCloudStretch[MAX_CLOUDS] = {2.8f, 2.5f, 2.6f, 2.3f, 2.2f};
 static const int kFoamSize = 256;        // foam texture size
 
