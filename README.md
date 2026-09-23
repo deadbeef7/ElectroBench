@@ -1,28 +1,95 @@
-
 # ElectroBench
 ElectroBench is a 45-second long benchmark specifiacally designed to run on old and modern PCs, don't critise it by it using OpenGL 2.1, and GLSL 1.2, Even office PCs have low scores at it.
 It uses OpenGL 2.1/3.3, and C++, and uses make for compilation. It is designed to be a replacement for glmark (even though it is great and I used it before).
+
+It ships **two** benchmarks :
+
+| Benchmark | Renderer | Scene |
+|---|---|---|
+| **ElectroBench** (the OG) | OpenGL 2.1 / GLSL 1.2, fixed-function pipeline | **110 UZIs** on a shadow-mapped concrete floor, lit by a warm sun |
+| **PS1.4 Sea Benchmark** | OpenGL 3.3 core, pixel-shader workloads | A dusk ocean under volumetric clouds (3DMark2001 SE "Nature" recreation) |
 
 
 
 # Screenshots
 
-The 90 UZIs lying on the shadow-mapped concrete floor — every gun now casts its own compact shadow anchored at its contact point (warm sun from the upper left):
+The 110 UZIs lying on the shadow-mapped concrete floor — every gun casts its own compact shadow anchored at its contact point (warm sun from the upper left):
 
-![Original GL 2.1 benchmark: 90 UZIs on a shadow-mapped concrete floor](docs/screenshots/uzi_wide.png)
+![Original GL 2.1 benchmark: 110 UZIs on a shadow-mapped concrete floor](docs/screenshots/uzi_wide.png)
 
 Close-up — mags resting on the ground, shadows clearly visible under each gun:
 
 ![Close-up: UZIs with mags on the ground and per-gun shadows](docs/screenshots/uzi_close.png)
 
+The PS1.4 sea benchmark — long cloud banks with sunward silver linings, a narrow orange glitter path down the middle of the sea, dark blue-purple water either side, raised swell banks:
+
+![PS1.4 sea benchmark](docs/screenshots/ps14_dusk_t36.png)
+
+# How to build ?
+
+Dependencies : `make`, `g++`, SDL2, GLEW, GLU (+ dev headers). On Debian/Ubuntu that is
+`libsdl2-dev libglew-dev libglu1-mesa-dev`; on Windows use MSYS2 (`pacman -S mingw-w64-x86_64-{gcc,SDL2,glew}`); on macOS `brew install sdl2 glew` (you may need `brew install make` for a GNU make).
+
+```sh
+make            # builds BOTH benchmarks
+make legacy     # only the OG GL 2.1 benchmark
+make ps14       # only the PS1.4 sea benchmark
+```
+
+Binaries land in `build/` :
+
+```sh
+./build/ElectroBench          # OG 2.1 benchmark (Linux / macOS)
+./build/ElectroBench.exe      # Windows (MSYS2)
+./build/PS14SeaBenchmark      # sea benchmark (Linux / macOS)
+./build/PS14SeaBenchmark.exe  # Windows (MSYS2)
+```
+
+## Static build
+
+Pass `STATIC=1` to link everything statically (`-static -static-libgcc -static-libstdc++` + static
+dependency archives) — handy for dropping a single exe on old machines:
+
+```sh
+make STATIC=1            # -> build/ElectroBench-static(.exe), build/PS14SeaBenchmark-static(.exe)
+make STATIC=1 legacy     # just the OG, statically linked
+```
+
+This requires the **static archives** of every dependency (e.g. MSYS2's `mingw-w64-x86_64-SDL2` ships
+`libSDL2.a` already; on Linux you need the `.a` variants of SDL2/GLEW/GLU installed). On Windows the
+static OG build links `-static-libgcc -static-libstdc++ -lopengl32 -lglu32 -lglew32 -lSDL2main -lSDL2 -mwindows` — no DLLs needed next to the exe.
+
+# The OG GL 2.1 benchmark (110 UZIs)
+
+Renders **110 UZIs** (10×11 grid) on a shadow-mapped concrete floor through the fixed-function
+pipeline, exactly like a 2001-era title: per-gun compact shadows anchored at each contact point,
+a warm directional sun, and a real-time **FPS + score HUD** drawn in a 5×7 bitmap font.
+
+Controls : long-click + move orbits the camera, mouse wheel zooms (smooth, clamped so you never clip
+into the scene), `ESC` quits. The FPS counter is a true frame-count average (SDL performance counter,
+every frame accounted) — the on-screen value is a smoothed window, the final score uses **all** frames
+of the run.
+
 # PS1.4 Sea benchmark (3DMark2001 SE "Nature" recreation)
 
-The `ps14-sea-benchmark` branch adds a second, heavier benchmark written in **OpenGL 3.3 core** that recreates the pixel shader 1.4 workload from 3DMark2001 SE: an ocean under a cloudy sky with real-time reflections.
+The sea benchmark is written in **OpenGL 3.3 core** and recreates the pixel shader 1.4 workload from
+3DMark2001 SE: an ocean under a cloudy sky with real-time reflections. It is heavy on purpose — a
+low-end machine may land in the low single-digit FPS, that is the workload working.
 
 What it renders :
-- A procedural **sky dome** with big smooth dusk cloud banks, rendered **directly at full screen resolution** — plus a cubemap capture of the same sky used for the sea's reflections (low-res there is invisible and cheap)
-- A **4 km ocean patch** (far plane 6000) displaced on the GPU by a 6-octave wave function, haze-matched to the per-azimuth horizon colour so it melts into the sky
-- Water shading structured like an asm `ps_1_4` shader: ripple-gradient **addressing** phase, a **dependent read** into the environment cubemap for reflections, then fresnel blending, sun **glitter**, foam crests and distance haze
+- A procedural **sky dome** rendered **directly at full screen resolution**: dusk gradient with a
+  bright horizon band, a compact orange sun, and a handful of **volumetric cloud banks** — explicit
+  analytic puffs with real light transport (sunward silver linings, dark anti-sun bulk, top
+  sky-light, asymmetric rims). Coverage is exact by construction: a few long banks with real gaps,
+  no noise-texture mottle
+- A **4 km ocean patch** displaced on the GPU: long rolling swells with crest-skewed banks, per-pixel
+  analytic wave normals plus near-camera detail wavelets
+- Water shading structured like an asm `ps_1_4` shader: ripple-gradient **addressing** phase, a
+  **dependent read** into the environment cubemap for reflections (roughness-matched LOD, so the sun
+  smears into a glow instead of texel squares), fresnel blending, sun-tinted **glitter** path gated to
+  the sun's azimuth (bright path down the middle, dark blue-purple water either side),
+  slope-gated crest foam, subsurface glow in thin crests, and distance haze that converges into the
+  actual per-azimuth sky colour so the far sea melts into the horizon
 - The same score formula as the main benchmark, over a 45 second run
 
 Build and run it with :
@@ -39,26 +106,21 @@ Headless visual-test flags (used to verify the render output in CI-like environm
 
 ```sh
 ./build/PS14SeaBenchmark --width 960 --screenshot /tmp/shot.ppm --shot-times 6,20,38
+./build/ElectroBench --screenshot /tmp/shot.ppm --shot-time 3
 ```
-
-The sunset scene at 35s into the run (big cloud banks, warm sun with glitter reflection, dark sea haze-matched into the horizon):
-
-![PS1.4 sea benchmark](docs/screenshots/ps14_dusk_t36.png)
 
 # How the score is calculated ?
-The score is calculated using this formula : ```fps*2/(1.01/fps)```
 
-# How to run ?
+Both benchmarks use the same formula, computed from the **average FPS over the whole run** (all
+frames, not the last second):
 
-Make sure you have `cmake, glew, libglvnd-dev, sdl2 and glu` installed and then run the following
-command on your machine after cloning repo:
-
-
-```sh
-make legacy
+```
+score = fps² × 2
 ```
 
-Controls (original GL 2.1 benchmark) : long-click + move orbits the camera, mouse wheel zooms (smooth, clamped so you never clip into the scene), `ESC` quits. The 90 UZIs stand on a shadow-mapped concrete floor lit by a warm sun.
+It is linear in nothing: twice the frames means twice the score, twice the load means a quarter of
+it — a fair curve from office PCs to gaming rigs. Both binaries print
+`Time / Average FPS / Score` at the end, and the OG also shows live FPS + score in its HUD.
 
 # Windows (MSYS2)
 

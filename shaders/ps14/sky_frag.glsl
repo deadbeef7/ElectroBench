@@ -89,8 +89,17 @@ float cloudField(vec3 dir, vec3 sd, out float upness, out float sunness, out flo
 
         float local = 0.0;
         for (int j = 0; j < PUFFS; j++) {
-            float dj = length(p - off[j] * R);
-            float rj = R * prad[j];
+            vec2 q = p - off[j] * R;
+            // gentle angular wobble: bulges each puff's silhouette organically
+            // (two LOW-frequency sine harmonics of the angle around the puff
+            // centre — integer harmonics stay continuous through atan's
+            // branch, the shapes stay big and smooth at screen resolution,
+            // and there is zero texture content so nothing can grid/block).
+            float ang = atan(q.y, q.x);
+            float rj = R * prad[j] * (1.0
+                + 0.15 * sin(ang * 3.0 + uCloudAzim[i] * 7.0 + float(j) * 2.1)
+                + 0.09 * sin(ang * 5.0 - uCloudAzim[i] * 11.0 + float(j) * 4.7));
+            float dj = length(q);
             // wide feathered falloff so silhouettes evaporate instead of popping
             local = max(local, 1.0 - smoothstep(rj * 0.68, rj * 1.28, dj));
         }
@@ -134,6 +143,12 @@ void main() {
 
     float sunAmount = max(dot(dir, sd), 0.0);
     sky *= mix(0.22, 1.0, pow(sunAmount, 4.0));   // steep: dark sky away from the sun
+
+    // thin bright glow line hugging the horizon itself — real dusks have a
+    // last sliver of lit atmosphere between the darkening sea and sky
+    sky += vec3(0.16, 0.075, 0.055)
+         * (1.0 - smoothstep(0.0, 0.05, h))
+         * (0.45 + 0.55 * pow(sunAmount, 2.0));
 
     // warm horizon glow hugging the horizon around the sun azimuth — pulled
     // tighter and dimmer so the glow is a compact band, not a sky-wide wash

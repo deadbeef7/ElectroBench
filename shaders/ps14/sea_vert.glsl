@@ -1,7 +1,8 @@
 #version 330 core
 // Vertex shader for the sea surface (shared wave equation with the fragment
-// shader). The grid is displaced on the GPU with a sum of sine waves, the
-// classic cheap stand-in for Gerstner waves used by 2001-era demos.
+// shader). The grid is displaced on the GPU by a sum of sine waves shaped to
+// break into crests (the classic cheap stand-in for Gerstner waves used by
+// 2001-era demos).
 
 layout(location = 0) in vec2 aXZ; // world-space XZ position of the grid node
 layout(location = 1) in vec2 aUV; // large-scale water UV
@@ -12,19 +13,27 @@ uniform float uTime;
 out vec3 vWorld;
 out vec2 vUV;
 
-// Must stay in sync with waveHeight() in sea_frag.glsl
-// Chop everywhere: short wavelengths so several crests are always on screen
-// (grid is 4096m across at 256x256, i.e. ~16m per quad; the fine shading
-// detail comes from the per-pixel analytic normals in the fragment shader).
-// Amplitudes raised ~35%: tall, raised swells like the reference shot.
+// NOTE: this is the DISPLACEMENT field. It is intentionally NOT identical to
+// the fragment shader's normal field (see sea_frag.glsl): crests here are
+// SHARPENED into choppy banks (smoothstep skew + a long swell passing under
+// everything) while the fragment shader keeps smooth normals for its analytic
+// lighting so the surface never faceting-alarms. If you retune one, check the
+// other still agrees on scale/speed of each component.
 float waveHeight(vec2 p, float t) {
     float h = 0.0;
-    h += sin(dot(p, vec2( 0.98,  0.20)) * 0.170 + t * 1.30) * 1.30;
-    h += sin(dot(p, vec2(-0.64,  0.77)) * 0.240 + t * 1.60) * 0.88;
-    h += sin(dot(p, vec2( 0.36, -0.93)) * 0.380 + t * 2.10) * 0.66;
-    h += sin(dot(p, vec2(-0.91, -0.42)) * 0.540 + t * 2.70) * 0.42;
-    h += sin(dot(p, vec2( 0.59,  0.81)) * 0.860 + t * 3.40) * 0.27;
-    h += sin(dot(p, vec2(-0.20,  0.98)) * 1.450 + t * 4.40) * 0.15;
+    // big rolling swell passing under everything (visible banks, not lines)
+    h += sin(dot(p, vec2(0.52, 0.30)) * 0.045 + t * 0.42) * 2.10;
+    h += sin(dot(p, vec2(0.10, -0.49)) * 0.075 + t * 0.55) * 1.30;
+    // primary chop, crest-skewed via smoothstep
+    float c1 = sin(dot(p, vec2(0.98, 0.20)) * 0.170 + t * 1.30);
+    h += smoothstep(-0.35, 1.0, c1) * 1.75 - 0.45;
+    float c2 = sin(dot(p, vec2(-0.64, 0.77)) * 0.240 + t * 1.60);
+    h += smoothstep(-0.35, 1.0, c2) * 1.05 - 0.28;
+    // fast secondary chop stays a plain sine
+    h += sin(dot(p, vec2(0.36, -0.93)) * 0.380 + t * 2.10) * 0.55;
+    h += sin(dot(p, vec2(-0.91, -0.42)) * 0.540 + t * 2.70) * 0.34;
+    h += sin(dot(p, vec2(0.59, 0.81)) * 0.860 + t * 3.40) * 0.20;
+    h += sin(dot(p, vec2(-0.20, 0.98)) * 1.450 + t * 4.40) * 0.11;
     return h;
 }
 
