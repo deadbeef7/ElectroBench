@@ -1,5 +1,5 @@
 #version 330 core
-// Fragment shader for the sky dome: a dusk gradient plus a handful of explicit
+// Fragment shader for the sky dome: a dusk gradient plus a handful of
 // "volumetric" cumulus clouds, captured once per frame into the environment
 // cubemap so the sea below always reflects what is above.
 //
@@ -13,16 +13,18 @@
 // silhouettes are pure screen-resolution math: no texel-based content left to
 // show blocks, no threshold statistics to drift between GPUs.
 //
-// Each mass is ELONGATED along the azimuth (uCloudStretch): puff distances are
-// evaluated in a tangent-plane space whose azimuth axis is divided by the
-// stretch, turning every puff into a wide shallow lens — long stratus-cumulus
-// banks instead of ball clusters.
-//
-// Puff interior shading is kept LOW-contrast so masses read as lit vapour:
-// gentle base-to-top gradient, restrained rim light, soft feathered edges.
-//
-// Palette follows the 3DMark2001 "Nature" dusk: deep blue-black zenith, warm
-// orange horizon band around a low sun, gold-pink rims on the clouds.
+// REALISM MODEL (this pass): shading is no longer a painted gradient. Each
+// visible cloud point ray-marches FOUR density samples toward the sun and
+// integrates optical depth; light is then
+//     sun_light = exp(-k * depth) * (ambient + HG_phase(dot(dir, sun)))
+// which produces the real phenomena for free:
+//   * silver linings — thin sun-side edges have low depth AND high forward
+//     Henyey-Greenstein phase, so they blaze; thick cores at the same angle
+//     stay dark because transmission dies
+//   * dark anti-sun bulk — grazing/backward phase is tiny
+//   * cool blue skylight from above, warm transmission near the sun
+//   * powder darkening in dense cores
+// There is zero texture content anywhere, so nothing can grid or block.
 
 in vec3 vDir;
 
@@ -45,16 +47,52 @@ out vec4 fragColor;
 
 const float PI = 3.14159265359;
 
-// Assemble the explicit puff field. Returns density in [0,1] (1 = opaque core)
-// plus lighting terms: upness (height inside the mass), sunness (how far the
-// sample sits toward the SUN side of the mass — the key to the silver-lining
-// look) and the silhouette-edge softness factor for the rim light.
-float cloudField(vec3 dir, vec3 sd, out float upness, out float sunness, out float rim) {
+// Cheap density-only evaluation used by the sunward march (no lighting outs).
+float cloudDensityOnly(vec3 dir) {
+    float density = 0.0;
+    for (int i = 0; i < MAX_CLOUDS; i++) {
+        if (i >= uCloudCount) break;
+        vec3 c = vec3(cos(uCloudElev[i]) * cos(uCloudAzim[i]),
+                      sin(uCloudElev[i]),
+                      cos(uCloudElev[i]) * sin(uCloudAzim[i]));
+        float R = uCloudRadius[i];
+        float stretch = max(uCloudStretch[i], 1.0);
+        vec3 t1 = normalize(vec3(-sin(c.z), 0.0, cos(c.z)));
+        vec3 t2 = normalize(cross(c, t1));
+        vec3 rel = dir - c * dot(dir, c);
+        vec2 p = vec2(dot(rel, t1) / stretch, dot(rel, t2));
+        if (dot(p, p) > R * R * 2.4) continue;
+        const int PUFFS = 5;
+        vec2 off[PUFFS];
+        off[0] = vec2( 0.00,  0.00);
+        off[1] = vec2( 0.78,  0.14);
+        off[2] = vec2(-0.72,  0.20);
+        off[3] = vec2( 0.34, -0.20);
+        off[4] = vec2(-0.34, -0.16);
+        float prad[PUFFS];
+        prad[0] = 0.60; prad[1] = 0.42; prad[2] = 0.38; prad[3] = 0.34; prad[4] = 0.32;
+        for (int j = 0; j < PUFFS; j++) {
+            vec2 q = p - off[j] * R;
+            float ang = atan(q.y, q.x);
+            float rj = R * prad[j] * (1.0
+                + 0.15 * sin(ang * 3.0 + uCloudAzim[i] * 7.0 + float(j) * 2.1)
+                + 0.09 * sin(ang * 5.0 - uCloudAzim[i] * 11.0 + float(j) * 4.7));
+            float dj = length(q);
+            density = max(density, 1.0 - smoothstep(rj * 0.68, rj * 1.28, dj));
+        }
+        density *= 1.0 - smoothstep(R * 0.95, R * 1.55, length(p)) * 0.78;
+    }
+    return clamp(density, 0.0, 1.0);
+}
+
+// Full evaluation at the visible point. Returns density in [0,1] plus the
+// height-inside-mass factor for the ambient gradient and the silhouette-edge
+// softness for edge detail.
+float cloudField(vec3 dir, out float upness, out float edge) {
     float density = 0.0;
     float heightSum = 0.0;
-    float sunSum = 0.0;
     float weight = 0.0;
-    float edge = 1.0;   // min puff-edge softness across the cloud = silhouette
+    float e = 1.0;
 
     for (int i = 0; i < MAX_CLOUDS; i++) {
         if (i >= uCloudCount) break;
@@ -63,20 +101,12 @@ float cloudField(vec3 dir, vec3 sd, out float upness, out float sunness, out flo
                       cos(uCloudElev[i]) * sin(uCloudAzim[i]));
         float R = uCloudRadius[i];
         float stretch = max(uCloudStretch[i], 1.0);
-
-        // local tangent frame at the cloud centre
-        vec3 t1 = normalize(vec3(-sin(c.z), 0.0, cos(c.z)));      // along azimuth
-        vec3 t2 = normalize(cross(c, t1));                        // along elevation
-
-        // pixel direction in the cloud's SQUASHED tangent plane: dividing the
-        // azimuth axis by 'stretch' maps a circle of radius R onto an ellipse
-        // R*stretch wide — the elongated bank shape
+        vec3 t1 = normalize(vec3(-sin(c.z), 0.0, cos(c.z)));
+        vec3 t2 = normalize(cross(c, t1));
         vec3 rel = dir - c * dot(dir, c);
         vec2 p = vec2(dot(rel, t1) / stretch, dot(rel, t2));
         if (dot(p, p) > R * R * 2.4) continue;
 
-        // each cloud = 5 overlapping puffs (offsets in squashed space,
-        // fraction of R) — a long loose chain of lumps, not a ball union
         const int PUFFS = 5;
         vec2 off[PUFFS];
         off[0] = vec2( 0.00,  0.00);
@@ -100,33 +130,23 @@ float cloudField(vec3 dir, vec3 sd, out float upness, out float sunness, out flo
                 + 0.15 * sin(ang * 3.0 + uCloudAzim[i] * 7.0 + float(j) * 2.1)
                 + 0.09 * sin(ang * 5.0 - uCloudAzim[i] * 11.0 + float(j) * 4.7));
             float dj = length(q);
-            // wide feathered falloff so silhouettes evaporate instead of popping
             local = max(local, 1.0 - smoothstep(rj * 0.68, rj * 1.28, dj));
         }
         // overall envelope fade so the long ends dissolve into the sky
         local *= 1.0 - smoothstep(R * 0.95, R * 1.55, length(p)) * 0.78;
 
         if (local > 0.001) {
-            // "height" inside the cloud: squashed-plane elevation relative to
-            // the mass centre — drives the volumetric top-lit gradient
+            // height inside the mass: drives the skylight-from-above gradient
             float hn = clamp(p.y / R + 0.5, 0.0, 1.0);
-            // volumetric DEPTH: projection of the in-cloud offset onto the
-            // sun direction in the cloud's tangent plane (+1 = sun-side edge,
-            // -1 = far anti-sun bulk). Real clouds are lit THROUGH from the
-            // sun side: bright translucent rim, dark body away.
-            vec2 toSun = vec2(dot(sd, t1), dot(sd, t2));
-            float dsun = dot(p, toSun) / (R * 1.5);
             heightSum += hn * local;
-            sunSum += clamp(dsun, -1.0, 1.0) * local;
             weight += local;
-            edge = min(edge, local);
+            e = min(e, local);
         }
         density = max(density, local);
     }
 
     upness = weight > 0.001 ? heightSum / weight : 0.0;
-    sunness = weight > 0.001 ? clamp(sunSum / weight, -1.0, 1.0) : 0.0;
-    rim = (1.0 - edge) * density;   // strongest at the soft silhouette edge
+    edge = e;
     return clamp(density, 0.0, 1.0);
 }
 
@@ -165,33 +185,54 @@ void main() {
     sky = mix(sky, vec3(5.2, 2.1, 0.72), clamp(coreMask, 0.0, 0.90));
 
     // ---- explicit volumetric clouds composite over the glow ----
-    float upn, sunn, rimF;
-    float cl = cloudField(dir, sd, upn, sunn, rimF);
+    float upn, edgeF;
+    float cl = cloudField(dir, upn, edgeF);
 
-    if (cl > 0.001) {
-        float sunAmt = clamp(dot(dir, sd) * 0.5 + 0.5, 0.0, 1.0);
+    if (cl > 0.004) {
+        // ---- self-shadowing: integrate optical depth toward the sun ----
+        vec3 sunTan = sd - dir * dot(sd, dir);
+        float stLen = length(sunTan);
+        float depth = 0.0;
+        if (stLen > 0.02) {
+            sunTan /= stLen;
+            // angular step sized to the current cloud scale (radii ~0.03-0.05 rad)
+            for (int s = 1; s <= 4; s++) {
+                depth += cloudDensityOnly(normalize(dir + sunTan * (0.021 * float(s))));
+            }
+        } else {
+            depth = cl * 4.0;   // looking straight through the mass at the sun
+        }
+        depth *= 0.30;          // -> optical depth scale
 
-        // VOLUMETRIC LIGHT TRANSPORT (the cheap-but-correct trick): light
-        // enters the sun-facing side and dies off with depth. sunward parts
-        // glow warm and translucent; the anti-sun bulk stays cool grey-slate.
-        float lit = clamp(sunn * 0.5 + 0.5, 0.0, 1.0);       // depth through the mass
-        float lit2 = lit * lit;
-        vec3 shadeCol = vec3(0.105, 0.105, 0.150);           // cool anti-sun bulk
-        vec3 litCol   = vec3(1.15, 0.78, 0.52) * (0.55 + 0.45 * sunAmt); // sun-side vapour
-        vec3 bodyCol = mix(shadeCol, litCol, 0.12 + 0.88 * lit2);
-        // top surfaces catch extra light even off-sun (sky light from above)
-        bodyCol = mix(bodyCol, bodyCol * 1.35 + vec3(0.10, 0.09, 0.08), upn * upn * 0.45);
+        float transmit = exp(-2.4 * depth);
+        float ms = 1.0 - exp(-depth * 1.7);   // multiple-scatter energy floor
 
-        // silver lining: silhouette edges on the SUN side blaze, anti-sun
-        // edges stay dark — asymmetric, like back-lit real clouds
-        float rimSun = rimF * clamp(sunn * 0.5 + 0.35, 0.0, 1.0);
-        vec3 rimCol = mix(vec3(0.22, 0.20, 0.28), vec3(1.9, 1.15, 0.68), sunAmt);
-        bodyCol += rimCol * rimSun * rimSun * 0.9;
+        // Henyey-Greenstein forward-scatter phase (g = 0.72): viewing rays
+        // toward the sun through thin vapour blaze; backscatter is dead.
+        float g = 0.72;
+        float cosT = clamp(dot(dir, sd), -1.0, 1.0);
+        float phase = (1.0 - g * g)
+                    / (4.0 * PI * pow(1.0 + g * g - 2.0 * g * cosT, 1.5));
+        phase *= 4.0 * PI;      // normalise: 1.0 == isotropic
 
-        // faint warm haze where the glow is strong behind the cloud edge
-        bodyCol += vec3(1.5, 0.8, 0.45) * pow(sunAmount, 8.0) * (1.0 - cl) * 0.22;
+        // light transport
+        vec3 sunCol = vec3(1.30, 0.74, 0.42);          // warm low-sun beam
+        vec3 skyAmb = vec3(0.34, 0.40, 0.55);          // cool skylight from above
+        float amb = mix(0.20, 0.85, upn);              // undersides dark, tops lit
+        float sunLight = transmit * (0.45 + 2.1 * phase);
 
-        sky = mix(sky, bodyCol, clamp(cl * 1.10, 0.0, 0.97));
+        vec3 col = vec3(0.84, 0.86, 0.90) * skyAmb * amb * 0.95
+                 + sunCol * sunLight * 0.85
+                 + sunCol * ms * 0.12;                 // in-scattered ambient beam
+
+        // powder effect: dense cores read slightly darker even when lit
+        col *= 1.0 - 0.20 * cl * cl;
+
+        // aerial perspective: banks near the horizon sink into the haze colour
+        float apFade = (1.0 - smoothstep(0.015, 0.22, h)) * 0.40;
+        col = mix(col, vec3(0.30, 0.17, 0.13), apFade);
+
+        sky = mix(sky, col, clamp(cl * 1.12, 0.0, 0.97));
     }
 
     // compact orange disc with a TIGHT halo — the reference sun is a defined
