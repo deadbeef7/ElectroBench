@@ -1,3 +1,0 @@
-super.img.lz4.part_ab filter=lfs diff=lfs merge=lfs -text
-super.img.lz4.part_ac filter=lfs diff=lfs merge=lfs -text
-super.img.lz4.part_aa filter=lfs diff=lfs merge=lfs -text
