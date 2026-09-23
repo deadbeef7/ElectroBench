@@ -22,10 +22,10 @@ STATIC_LDFLAGS :=
 BUILD := build
 
 LEGACY_SRC := src/main.cxx
-PS14_SRC   := src/ps14_bench.cxx
+DUSKTIDE_SRC := src/ps14_bench.cxx
 
 LEGACY_BIN = $(BUILD)/ElectroBench$(STATIC_SUFFIX)
-PS14_BIN   = $(BUILD)/PS14SeaBenchmark$(STATIC_SUFFIX)
+DUSKTIDE_BIN   = $(BUILD)/DuskTide$(STATIC_SUFFIX)
 
 # ------------------------------------------------------------
 # Platform detection
@@ -76,7 +76,7 @@ ifeq ($(PLATFORM),windows)
 
 ifeq ($(PLATFORM),windows)
     LEGACY_BIN := $(BUILD)/ElectroBench$(STATIC_SUFFIX).exe
-    PS14_BIN   := $(BUILD)/PS14SeaBenchmark$(STATIC_SUFFIX).exe
+    DUSKTIDE_BIN   := $(BUILD)/DuskTide$(STATIC_SUFFIX).exe
 endif
 
 else ifeq ($(PLATFORM),macos)
@@ -121,7 +121,7 @@ endif
 # ------------------------------------------------------------
 
 .PHONY: all
-all: legacy ps14
+all: legacy dusktide
 
 # ------------------------------------------------------------
 # Build directory
@@ -149,15 +149,15 @@ else
 endif
 
 # ------------------------------------------------------------
-# PS1.4 Sea Benchmark
+# DuskTide (dusk ocean benchmark)
 # ------------------------------------------------------------
 
-.PHONY: ps14
-ps14: $(PS14_BIN)
+.PHONY: dusktide
+dusktide: $(DUSKTIDE_BIN)
 
-$(PS14_BIN): $(PS14_SRC) | $(BUILD)
+$(DUSKTIDE_BIN): $(DUSKTIDE_SRC) | $(BUILD)
 	@echo "========================================"
-	@echo " Building PS1.4 Sea Benchmark"
+	@echo " Building DuskTide"
 	@echo " Platform: $(PLATFORM)"
 	@echo "========================================"
 ifeq ($(STATIC),1)
@@ -182,9 +182,9 @@ clean:
 run: legacy
 	./$(LEGACY_BIN)
 
-.PHONY: run-ps14
-run-ps14: ps14
-	./$(PS14_BIN)
+.PHONY: run-dusktide
+run-dusktide: dusktide
+	./$(DUSKTIDE_BIN)
 
 # ------------------------------------------------------------
 # Info

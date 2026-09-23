@@ -47,17 +47,19 @@ float waveHeight(vec2 p, float t) {
     return h;
 }
 
-// Two octaves of small analytic wavelets: extra normal detail that would be
-// wasted (and aliased) as vertex displacement, but sells micro-chop up close.
-// Frequencies chosen so screen-space wavelength stays > ~4px at typical orbit
-// distances — content finer than that reads as noise on real GPUs.
+// Three octaves of small analytic wavelets: extra normal detail that would
+// be wasted (and aliased) as vertex displacement, but sells micro-chop up
+// close. Frequencies chosen so screen-space wavelength stays > ~4px at typical
+// orbit distances — content finer than that reads as noise on real GPUs.
 void detailNormals(vec2 p, float t, float dist, inout vec2 grad) {
     float fade = exp(-dist * 0.004);   // micro-chop is a NEAR-camera feature
     if (fade < 0.02) return;
     float w1 = sin(dot(p, vec2(0.86, 0.51)) * 1.15 + t * 5.10);
     float w2 = sin(dot(p, vec2(-0.44, 0.90)) * 2.30 + t * 6.80);
+    float w3 = sin(dot(p, vec2(0.22, -0.97)) * 4.40 + t * 8.60);
     grad += vec2(0.86, 0.51) * 1.15 * w1 * 0.045;
     grad += vec2(-0.44, 0.90) * 2.30 * w2 * 0.022;
+    grad += vec2(0.22, -0.97) * 4.40 * w3 * 0.010;
 }
 
 void main() {
