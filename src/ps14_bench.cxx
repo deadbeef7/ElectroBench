@@ -808,6 +808,15 @@ static void DrawSea(const Mat4 &view, double timeSec, const Vec3 &eye) {
   glActiveTexture(GL_TEXTURE2);
   glBindTexture(GL_TEXTURE_2D, gFoamTex);
   glUniform1i(gSeaProg.loc("uFoamTex"), 2);
+
+  // cloud layout, shared with the sky shader: the sea projects fragments to
+  // the sky along sun rays and evaluates the SAME analytic puffs, so the
+  // cloud shadows on the water land exactly under the clouds that cast them.
+  glUniform1i(gSeaProg.loc("uCloudCount"), MAX_CLOUDS);
+  glUniform1fv(gSeaProg.loc("uCloudAzim"), MAX_CLOUDS, kCloudAzim);
+  glUniform1fv(gSeaProg.loc("uCloudElev"), MAX_CLOUDS, kCloudElev);
+  glUniform1fv(gSeaProg.loc("uCloudRadius"), MAX_CLOUDS, kCloudRad);
+  glUniform1fv(gSeaProg.loc("uCloudStretch"), MAX_CLOUDS, kCloudStretch);
   glDrawElements(GL_TRIANGLES, gSeaMesh.indexCount, GL_UNSIGNED_INT, nullptr);
   glBindVertexArray(0);
 }
