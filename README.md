@@ -7,7 +7,7 @@ It ships **two** benchmarks :
 | Benchmark | Renderer | Scene |
 |---|---|---|
 | **ElectroBench** (the OG) | OpenGL 2.1 / GLSL 1.2, fixed-function pipeline | **110 UZIs** on a shadow-mapped concrete floor, lit by a warm sun |
-| **PS1.4 Sea Benchmark** | OpenGL 3.3 core, pixel-shader workloads | A dusk ocean under volumetric clouds (3DMark2001 SE "Nature" recreation) |
+| **DuskTide** | OpenGL 3.3 core, pixel-shader workloads | A dusk ocean under volumetric clouds (3DMark2001 SE "Nature" recreation) |
 
 
 
@@ -23,7 +23,7 @@ Close-up — mags resting on the ground, shadows clearly visible under each gun:
 
 The PS1.4 sea benchmark — long cloud banks with sunward silver linings, a narrow orange glitter path down the middle of the sea, dark blue-purple water either side, raised swell banks:
 
-![PS1.4 sea benchmark](docs/screenshots/ps14_dusk_t36.png)
+![DuskTide dusk ocean benchmark](docs/screenshots/ps14_dusk_t36.png)
 
 # How to build ?
 
@@ -33,7 +33,7 @@ Dependencies : `make`, `g++`, SDL2, GLEW, GLU (+ dev headers). On Debian/Ubuntu 
 ```sh
 make            # builds BOTH benchmarks
 make legacy     # only the OG GL 2.1 benchmark
-make ps14       # only the PS1.4 sea benchmark
+make dusktide   # only DuskTide
 ```
 
 Binaries land in `build/` :
@@ -41,8 +41,8 @@ Binaries land in `build/` :
 ```sh
 ./build/ElectroBench          # OG 2.1 benchmark (Linux / macOS)
 ./build/ElectroBench.exe      # Windows (MSYS2)
-./build/PS14SeaBenchmark      # sea benchmark (Linux / macOS)
-./build/PS14SeaBenchmark.exe  # Windows (MSYS2)
+./build/DuskTide             # dusk ocean benchmark (Linux / macOS)
+./build/DuskTide.exe         # Windows (MSYS2)
 ```
 
 ## Static build
@@ -51,8 +51,9 @@ Pass `STATIC=1` to link everything statically (`-static -static-libgcc -static-l
 dependency archives) — handy for dropping a single exe on old machines:
 
 ```sh
-make STATIC=1            # -> build/ElectroBench-static(.exe), build/PS14SeaBenchmark-static(.exe)
+make STATIC=1            # -> build/ElectroBench-static(.exe), build/DuskTide-static(.exe)
 make STATIC=1 legacy     # just the OG, statically linked
+make STATIC=1 dusktide   # just DuskTide, statically linked
 ```
 
 This requires the **static archives** of every dependency (e.g. MSYS2's `mingw-w64-x86_64-SDL2` ships
@@ -70,34 +71,36 @@ into the scene), `ESC` quits. The FPS counter is a true frame-count average (SDL
 every frame accounted) — the on-screen value is a smoothed window, the final score uses **all** frames
 of the run.
 
-# PS1.4 Sea benchmark (3DMark2001 SE "Nature" recreation)
+# DuskTide — the dusk ocean benchmark
 
-The sea benchmark is written in **OpenGL 3.3 core** and recreates the pixel shader 1.4 workload from
-3DMark2001 SE: an ocean under a cloudy sky with real-time reflections. It is heavy on purpose — a
-low-end machine may land in the low single-digit FPS, that is the workload working.
+DuskTide is written in **OpenGL 3.3 core** and pushes a heavy, realistic dusk-ocean workload —
+high-resolution environment reflections, a dense displaced ocean mesh, and a real volumetric
+light-transport model for the clouds. It is heavy **on purpose**: the goal is to push old and new
+hardware alike, so low single-digit FPS on a low-end machine means the workload is doing its job.
 
 What it renders :
 - A procedural **sky dome** rendered **directly at full screen resolution**: dusk gradient with a
-  bright horizon band, a compact orange sun, and a handful of **volumetric cloud banks** — explicit
-  analytic puffs with real light transport (sunward silver linings, dark anti-sun bulk, top
-  sky-light, asymmetric rims). Coverage is exact by construction: a few long banks with real gaps,
-  no noise-texture mottle
-- A **4 km ocean patch** displaced on the GPU: long rolling swells with crest-skewed banks, per-pixel
-  analytic wave normals plus near-camera detail wavelets
-- Water shading structured like an asm `ps_1_4` shader: ripple-gradient **addressing** phase, a
-  **dependent read** into the environment cubemap for reflections (roughness-matched LOD, so the sun
-  smears into a glow instead of texel squares), fresnel blending, sun-tinted **glitter** path gated to
-  the sun's azimuth (bright path down the middle, dark blue-purple water either side),
+  bright horizon band, a compact orange sun, and a handful of **volumetric cloud banks** — each
+  visible cloud point ray-marches density toward the sun and shades with real light transport
+  (optical-depth self-shadowing, Henyey-Greenstein forward-scatter silver linings, dark anti-sun
+  bulk, skylight tops, powder-dense cores, aerial perspective). Coverage is exact by construction:
+  a few long banks with real gaps, no noise-texture mottle
+- A **4 km ocean patch** on a dense GPU-displaced grid: long rolling swells with crest-skewed banks,
+  per-pixel analytic wave normals plus near-camera detail wavelets
+- High-resolution **environment cubemap** reflections with roughness-matched LOD (the sun smears
+  into a glow, never texel squares), fresnel blending, sun-tinted **glitter** path gated to the
+  sun's azimuth (bright path down the middle, dark blue-purple water either side),
   slope-gated crest foam, subsurface glow in thin crests, and distance haze that converges into the
   actual per-azimuth sky colour so the far sea melts into the horizon
-- The same score formula as the main benchmark, over a 45 second run
+- A clean in-engine **FPS readout** (the score belongs to the final results line) and the same score
+  formula as the main benchmark, over a 45 second run
 
 Build and run it with :
 
 ```sh
 make
-./build/PS14SeaBenchmark          # Linux / macOS
-./build/PS14SeaBenchmark.exe      # Windows (MSYS2)
+./build/DuskTide          # Linux / macOS
+./build/DuskTide.exe      # Windows (MSYS2)
 ```
 
 Controls : `F` toggles the automatic fly-over camera, long-click + move orbits the camera, mouse wheel zooms, arrow keys look around, `ESC` quits.
@@ -105,7 +108,7 @@ Controls : `F` toggles the automatic fly-over camera, long-click + move orbits t
 Headless visual-test flags (used to verify the render output in CI-like environments):
 
 ```sh
-./build/PS14SeaBenchmark --width 960 --screenshot /tmp/shot.ppm --shot-times 6,20,38
+./build/DuskTide --width 960 --screenshot /tmp/shot.ppm --shot-times 6,20,38
 ./build/ElectroBench --screenshot /tmp/shot.ppm --shot-time 3
 ```
 

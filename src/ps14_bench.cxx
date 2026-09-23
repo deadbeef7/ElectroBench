@@ -38,16 +38,16 @@
 #include "../lib/asset_path.hxx"
 
 // ------------------------------------------------------------------ constants
-#define NAME "ElectroBench - PS1.4 Sea (Nature-like)"
+#define NAME "ElectroBench - DuskTide"
 #define WIDTH 1366
 #define HEIGHT 768
 #define BENCH_MILLISECONDS 45000 // 45 s like the original ElectroBench
 
-static const int kSeaResolution = 256;   // vertices per side of the ocean grid
+static const int kSeaResolution = 384;   // vertices per side of the ocean grid (2.25x the
+                                         // vertex count of 256 — pushed for realism)
 static const float kSeaSize = 4096.0f;   // world size of the ocean patch: reaches past the
                                          // visible horizon in every direction the camera can look
-static const int kEnvMapSize = 512;      // cubemap face resolution (224 magnified
-                                         // into visible white squares on real GPUs)
+static const int kEnvMapSize = 768;      // cubemap face resolution — higher fidelity reflections
 static const int kNoiseSize = 256;       // fBm noise texture size
 static const int kRippleSize = 256;      // ripple gradient texture size
 #define MAX_CLOUDS 6                     // must match sky_frag.glsl
@@ -838,12 +838,11 @@ static void DrawSkyScreen(const Mat4 &view, const Vec3 &eye) {
 }
 
 static void RenderHUD() {
-  char line1[128], line2[128];
-  std::snprintf(line1, sizeof(line1), "FPS: %d  SCORE: %.0f", gFps,
-                gSmoothFps > 0.0 ? gSmoothFps * gSmoothFps * 2.0 : 0.0);
-  std::snprintf(line2, sizeof(line2), "3DMARK2001SE PS1.4 - NATURE SEA - OPENGL 3.3");
+  // clean single readout: just the live FPS. The score belongs to the final
+  // results line, not on screen during the run.
+  char line1[128];
+  std::snprintf(line1, sizeof(line1), "FPS: %d", gFps);
   RenderText(16.0f, 16.0f, line1);
-  RenderText(16.0f, (float)gWindowHeight - 34.0f, line2);
 }
 
 // Renders the scene and calculates FPS (same pattern as the original bench).

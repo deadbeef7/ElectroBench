@@ -195,9 +195,10 @@ void main() {
         float depth = 0.0;
         if (stLen > 0.02) {
             sunTan /= stLen;
-            // angular step sized to the current cloud scale (radii ~0.03-0.05 rad)
-            for (int s = 1; s <= 4; s++) {
-                depth += cloudDensityOnly(normalize(dir + sunTan * (0.021 * float(s))));
+            // angular step sized to the current cloud scale (radii ~0.03-0.05 rad);
+            // 6 samples: deeper march = smoother optical-depth gradients
+            for (int s = 1; s <= 6; s++) {
+                depth += cloudDensityOnly(normalize(dir + sunTan * (0.017 * float(s))));
             }
         } else {
             depth = cl * 4.0;   // looking straight through the mass at the sun
