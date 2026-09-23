@@ -54,7 +54,12 @@ void main() {
     if (length(normal) < 0.1) normal = vec3(0.0, 0.0, 1.0);
 
     vec3 halfVec = normalize(lightDir + viewDir);
-    vec3 baseColor = texture2D(uBaseColor, texCoord).rgb;
+    // The base-colour / metallic / roughness maps are sRGB PNGs sampled raw
+    // here, but the pipeline applies pow(1/2.2) at the end — sampling raw and
+    // then gamma-encoding again re-brightens dark gunmetal albedo (~0.16
+    // raw) into washed-out light grey (~0.43): the guns looked far too
+    // white. Linearise the colour maps once, shade in linear, encode once.
+    vec3 baseColor = pow(texture2D(uBaseColor, texCoord).rgb, vec3(2.2));
     float metallic = texture2D(uMetallicMap, texCoord).r;
     float roughness = texture2D(uRoughnessMap, texCoord).r;
     float NdotV = max(dot(normal, viewDir), 0.0);
@@ -69,7 +74,12 @@ void main() {
     float spec = pow(NdotH, specExponent) * (1.0 - roughness);
     spec *= smoothstep(0.0, 0.1, NdotL) * shadow;
 
-    vec3 specColor = mix(vec3(1.0), baseColor, metallic);
+    // Metal F0: a metal's specular reflectance is far brighter than its
+    // diffuse albedo (steel F0 ~0.5 linear even when the painted body reads
+    // near-black). Clamp the metallic share of specColor so metal parts keep
+    // crisp bright glints while the diffuse body stays dark gunmetal.
+    vec3 metalF0 = max(baseColor, vec3(0.32, 0.33, 0.35));
+    vec3 specColor = mix(vec3(0.05, 0.05, 0.05), metalF0, metallic);
     const vec3 sunColor = vec3(1.0, 0.88, 0.72);   // warm late-afternoon sun
     const vec3 skyAmbient = vec3(0.92, 0.97, 1.12); // cool sky fill
 
@@ -78,7 +88,7 @@ void main() {
 
     vec3 reflectionDir = reflect(-viewDir, normal);
     vec2 reflectionTexCoord = vec2(reflectionDir.x * 0.5 + 0.5, reflectionDir.y * 0.5 + 0.5);
-    vec3 environmentColor = texture2D(uBaseColor, reflectionTexCoord).rgb;
+    vec3 environmentColor = pow(texture2D(uBaseColor, reflectionTexCoord).rgb, vec3(2.2));
 
     vec3 diffuse = baseColor * (1.0 - metallic);
     vec3 specular = specColor * spec * (metallic + 0.2 + fresnel * 0.5);

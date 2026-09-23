@@ -517,21 +517,22 @@ static int gHudQuadCount = 0;
 // its glitter path running toward the camera — dominates the benchmark,
 // occasionally drifting away for variety.
 static void UpdateAutoCamera(float t) {
-  float a = t * 0.05f;
-  float radius = 42.0f + std::sin(t * 0.021f) * 10.0f;
+  float a = t * 0.10f;                                   // orbit: 2x faster than before
+  float radius = 42.0f + std::sin(t * 0.042f) * 10.0f;   // breathe in/out at 2x
 
   Vec3 eye;
   eye.x = std::cos(a) * radius;
   eye.z = std::sin(a) * radius * 0.7f;
-  eye.y = 7.5f + std::sin(t * 0.043f) * 2.2f;
+  eye.y = 7.5f + std::sin(t * 0.086f) * 2.2f;            // bob: 2x faster
   gCamPos = eye;
 
-  // face the sun, swaying slowly so the framing breathes during the run.
+  // face the sun, swaying so the framing breathes during the run.
   // Tamed sway (±0.18 rad) keeps the glitter path in the middle of the frame
   // with dark off-path sea on both sides — the reference composition.
+  // All sway frequencies doubled so the whole motion reads quicker.
   float yawSun = std::atan2(gSunDir.x, gSunDir.z);
-  float yaw = yawSun + 0.14f * std::sin(t * 0.013f) + 0.04f * std::sin(t * 0.041f);
-  float pitch = 0.030f + 0.022f * std::sin(t * 0.017f); // horizon high in frame:
+  float yaw = yawSun + 0.14f * std::sin(t * 0.026f) + 0.04f * std::sin(t * 0.082f);
+  float pitch = 0.030f + 0.022f * std::sin(t * 0.034f); // horizon high in frame:
                                                         // sky ~25%, sea ~75% like
                                                         // the reference shot
   Vec3 fwd = {std::sin(yaw) * std::cos(pitch), std::sin(pitch),
