@@ -50,6 +50,10 @@ static const int kEnvMapSize = 512;      // cubemap face resolution (224 magnifi
                                          // into visible white squares on real GPUs)
 static const int kNoiseSize = 256;       // fBm noise texture size
 static const int kRippleSize = 256;      // ripple gradient texture size
+#define MAX_CLOUDS 6                     // must match sky_frag.glsl
+static const float kCloudAzim[MAX_CLOUDS] = {0.35f, 0.78f, 5.92f, 2.20f, 3.95f};
+static const float kCloudElev[MAX_CLOUDS] = {0.075f, 0.145f, 0.060f, 0.105f, 0.170f};
+static const float kCloudRad[MAX_CLOUDS]  = {0.30f, 0.20f, 0.24f, 0.22f, 0.17f};
 static const int kFoamSize = 256;        // foam texture size
 
 // ------------------------------------------------------------ tiny math utils
@@ -578,9 +582,21 @@ static void BindSkyUniforms(const Mat4 &vp) {
   glUniform3f(gSkyProg.loc("uMidColor"), 0.028f, 0.022f, 0.048f);     // dark slate-mauve mid sky
   glUniform3f(gSkyProg.loc("uHorizonColor"), 0.115f, 0.055f, 0.062f); // warm maroon horizon band
   glUniform3f(gSkyProg.loc("uSunColor"), 1.30f, 0.85f, 0.55f);
-  glActiveTexture(GL_TEXTURE0);
-  glBindTexture(GL_TEXTURE_2D, gNoiseTex);
-  glUniform1i(gSkyProg.loc("uNoiseTex"), 0);
+
+  // Explicit cloud masses: a FEW fat cumulus with real clear-sky gaps between
+  // them (the 3DMark Nature look). Hand-placed, time-static — uploaded once.
+  // Coverage is exact by construction; nothing depends on noise-texture
+  // statistics, which is what previously mottled the whole sky on real GPUs.
+  static bool cloudsUploaded = false;
+  if (!cloudsUploaded) {
+    // 5 clouds spread around the horizon ring; three sit in the camera's
+    // sun-facing view, two populate the rest of the sky for the orbit.
+    glUniform1i(gSkyProg.loc("uCloudCount"), MAX_CLOUDS);
+    glUniform1fv(gSkyProg.loc("uCloudAzim"), MAX_CLOUDS, kCloudAzim);
+    glUniform1fv(gSkyProg.loc("uCloudElev"), MAX_CLOUDS, kCloudElev);
+    glUniform1fv(gSkyProg.loc("uCloudRadius"), MAX_CLOUDS, kCloudRad);
+    cloudsUploaded = true;
+  }
 }
 
 static void DrawSkyToEnvMap(const Mat4 &proj) {
