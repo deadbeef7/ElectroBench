@@ -7,7 +7,7 @@ It ships **one** executable that contains **both** scenes — no second binary, 
 | Scene | Renderer | Contents |
 |---|---|---|
 | **ElectroBench** (the OG) | OpenGL 2.1 / GLSL 1.2, fixed-function pipeline | **110 UZIs** on a shadow-mapped concrete floor, lit by a warm sun |
-| **TideBench** | OpenGL 3.3 core, pixel-shader workloads | A dusk ocean under volumetric clouds (3DMark2001 SE "Nature" recreation) |
+| **Dusk Ocean** (scene 2) | OpenGL 3.3 core, pixel-shader workloads | A dusk ocean under volumetric clouds (3DMark2001 SE "Nature" recreation) |
 
 
 
@@ -21,9 +21,9 @@ Close-up — mags resting on the ground, shadows clearly visible under each gun:
 
 ![Close-up: UZIs with mags on the ground and per-gun shadows](docs/screenshots/uzi_close.png)
 
-The TideBench ocean scene — long cloud banks with sunward silver linings, a narrow orange glitter path down the middle of the sea, dark blue-purple water either side, raised swell banks:
+The dusk-ocean scene — long cloud banks with sunward silver linings, a narrow orange glitter path down the middle of the sea, dark blue-purple water either side, raised swell banks:
 
-![TideBench dusk ocean benchmark](docs/screenshots/ps14_dusk_t36.png)
+![ElectroBench dusk ocean scene](docs/screenshots/ps14_dusk_t36.png)
 
 # How to build ?
 
@@ -66,9 +66,9 @@ into the scene), `ESC` quits. The FPS counter is a true frame-count average (SDL
 every frame accounted) — the on-screen value is a smoothed window, the final score uses **all** frames
 of the run.
 
-# TideBench — the dusk ocean scene
+# Scene 2 — the dusk ocean
 
-TideBench is **scene 2 of the same ElectroBench binary** and is written in **OpenGL 3.3 core**.
+The dusk ocean is **scene 2 of the same ElectroBench binary** and is written in **OpenGL 3.3 core**.
 It pushes a heavy, realistic dusk-ocean workload —
 high-resolution environment reflections, a dense displaced ocean mesh, and a real volumetric
 light-transport model for the clouds. It is heavy **on purpose**: the goal is to push old and new
@@ -99,8 +99,8 @@ Run the ocean scene on its own with :
 
 ```sh
 make
-./build/ElectroBench --tide-only          # Linux / macOS
-./build/ElectroBench.exe --tide-only      # Windows (MSYS2)
+./build/ElectroBench --scene-only          # Linux / macOS
+./build/ElectroBench.exe --scene-only      # Windows (MSYS2)
 ```
 
 Controls : `F` toggles the automatic fly-over camera, long-click + move orbits the camera, mouse wheel zooms, arrow keys look around, `ESC` quits.
@@ -108,7 +108,7 @@ Controls : `F` toggles the automatic fly-over camera, long-click + move orbits t
 Headless visual-test flags (used to verify the render output in CI-like environments):
 
 ```sh
-./build/ElectroBench --tide-only --width 960 --screenshot /tmp/shot.ppm --shot-times 6,20,38
+./build/ElectroBench --scene-only --width 960 --screenshot /tmp/shot.ppm --shot-times 6,20,38
 ./build/ElectroBench --og-only --screenshot /tmp/shot.ppm --shot-time 3
 ```
 
@@ -141,14 +141,14 @@ Benchmark Results - Time : 45.0s, Average FPS : 12.4, Score : 308
 `build/ElectroBench` is the **only** binary, and it contains both scenes. It runs the OG 60-second gun scene
 first, then probes an OpenGL 3.3 core context:
 
-- **found** — TideBench (the dusk ocean) runs as scene 2 on the same session, and the final
+- **found** — the dusk-ocean scene runs as scene 2 on the same session, and the final
   results screen shows **per-scene scores and the average**:
-  `Fused Results - ElectroBench : 308 | TideBench : 42 | Average : 175`
-- **not found** (GL 2.1-only drivers, old iGPUs) — TideBench skips itself cleanly and the OG
-  result stands, so the binary still runs on the ancient hardware it targets
+  `Fused Results - ElectroBench : 308 | Dusk Ocean : 42 | Average : 175`
+- **not found** (GL 2.1-only drivers, old iGPUs) — the ocean scene skips itself cleanly and the
+  OG result stands, so the binary still runs on the ancient hardware it targets
 
 Scene selection flags: `--og-only` runs just the gun scene even on GL 3.3-capable devices,
-`--tide-only` runs just the ocean scene (handy for the headless visual test).
+`--scene-only` runs just the ocean scene (handy for the headless visual test).
 
 # Windows (MSYS2)
 
@@ -180,7 +180,7 @@ Notes for the direct g++ build :
 - This was verified end-to-end on a Toshiba Satellite P200 (Core 2 Duo, pre-x86-64-v2) — all three shader programs compiled and linked on hardware.
 
 Notes :
-- The headless screenshot flags work too — just use a Windows-style path: `./build/ElectroBench.exe --tide-only --width 960 --screenshot shot.ppm --shot-times 6,20,38`
+- The headless screenshot flags work too — just use a Windows-style path: `./build/ElectroBench.exe --scene-only --width 960 --screenshot shot.ppm --shot-times 6,20,38`
 - Any GPU with drivers from ~2010 onward handles both scenes (the ocean scene needs GL 3.3; the gun scene's GL 2.1 request gets a compatibility context — drivers ignore the profile hint below 3.2, per spec).
 - Run the exe from the repo root or via `build\...` — the asset resolver checks the current directory and then the executable's parent, so `shaders/` and `assets/UZI.obj` are found either way.
 

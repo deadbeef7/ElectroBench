@@ -2,8 +2,8 @@
 // recreation of the 3DMark2001 SE "Nature" pixel shader 1.4 workload
 // (sea + sky + clouds + reflections) on OpenGL 3.3 core.
 //
-// This translation unit is NOT a program of its own any more. It exports
-// RunTideBenchFused(), which main.cxx calls as the second scene of the one and
+// This translation unit is NOT a program of its own. It exports
+// RunOceanScene(), which main.cxx calls as the second scene of the one and
 // only ElectroBench executable (the same in-process SDL session; no second
 // binary, no child process).
 //
@@ -44,7 +44,7 @@
 #include "../lib/asset_path.hxx"
 
 // ------------------------------------------------------------------ constants
-#define NAME "ElectroBench - TideBench"
+#define NAME "ElectroBench - Dusk Ocean"
 #define WIDTH 1366
 #define HEIGHT 768
 #define BENCH_MILLISECONDS 45000 // 45 s like the original ElectroBench
@@ -520,14 +520,14 @@ static double gResultsShownAt = 0.0;
 // keep the single-scene display short.
 static const double kResultsScreenSeconds = 4.0;
 // Label shown on this scene's results screen (distinguishes it from the OG's).
-static const char *gSceneName = "TideBench";
+static const char *gSceneName = "Dusk Ocean";
 // Final score of this scene, read by main.cxx for the combined per-scene +
 // average results screen.
 double gFusedTideScore = 0.0;
 // When the results screen is done, hand control back to main.cxx instead of
 // exiting the process (the OG scene then shows the combined screen).
 static bool gFusedDone = false;
-// --tide-only: this scene runs on its own (no OG scene first), so its own
+// --scene-only: this scene runs on its own (no OG scene first), so its own
 // results screen is the last thing the user sees and it exits the process.
 static bool gStandaloneScene = false;
 static int gFrame = 0, gFps = 0, gFrameAccum = 0;
@@ -1083,8 +1083,8 @@ static bool ParseShotTimes(const char *arg) {
 
 // ------------------------------------------------ option plumbing for main()
 // There is one executable now, so main.cxx owns the command line and forwards
-// the TideBench-specific flags here. Returns EXIT_FAILURE on a bad option.
-int TideBenchParseArgs(int argc, char **argv) {
+// the ocean scene's own flags here. Returns EXIT_FAILURE on a bad option.
+int OceanSceneParseArgs(int argc, char **argv) {
   for (int i = 1; i < argc; i++) {
     if (!std::strcmp(argv[i], "--shot-times") && i + 1 < argc) {
       if (!ParseShotTimes(argv[++i])) {
@@ -1101,10 +1101,10 @@ int TideBenchParseArgs(int argc, char **argv) {
 }
 
 // Shares main.cxx's --screenshot target with this scene.
-void TideBenchSetScreenshot(const char *path) { gScreenshotPath = path; }
+void OceanSceneSetScreenshot(const char *path) { gScreenshotPath = path; }
 
-// --tide-only: this scene runs (and ends) on its own.
-void TideBenchSetStandalone(bool standalone) { gStandaloneScene = standalone; }
+// --scene-only: this scene runs (and ends) on its own.
+void OceanSceneSetStandalone(bool standalone) { gStandaloneScene = standalone; }
 
 static void WriteScreenshotPPM(const char *path) {
   const int w = gWindowWidth, h = gWindowHeight;
@@ -1125,10 +1125,10 @@ static void WriteScreenshotPPM(const char *path) {
 }
 
 // ------------------------------------------------------ scene entry point
-// Runs the TideBench scene on the SDL session handed over by main.cxx (either
-// straight after the OG gun scene, or alone with --tide-only). Sets
+// Runs the ocean scene on the SDL session handed over by main.cxx (either
+// straight after the OG gun scene, or alone with --scene-only). Sets
 // *gaveUp = true when the GL 3.3 core context could not be created.
-int RunTideBenchFused(bool *gaveUpOut) {
+int RunOceanScene(bool *gaveUpOut) {
   if (gaveUpOut) *gaveUpOut = false;
 
   if (SDL_Init(SDL_INIT_VIDEO) < 0) {
@@ -1163,7 +1163,7 @@ int RunTideBenchFused(bool *gaveUpOut) {
   gContext = SDL_GL_CreateContext(gWindow);
   if (!gContext) {
     // No GL 3.3 core context on this device: skip the scene, keep the OG result.
-    std::printf("TideBench: OpenGL 3.3 core context unavailable — skipping this scene\n");
+    std::printf("Dusk ocean scene: OpenGL 3.3 core context unavailable — skipping this scene\n");
     std::fflush(stdout);
     SDL_Quit();
     if (gaveUpOut) *gaveUpOut = true;

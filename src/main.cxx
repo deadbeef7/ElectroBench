@@ -301,15 +301,15 @@ static void RenderHUD() {
 // no main of its own) and is linked straight into this binary. After the 60 s
 // gun run this file hands the SDL session to it, and the ocean scene probes a
 // GL 3.3 core context, skipping itself when the device cannot provide one.
-int RunTideBenchFused(bool *gaveUpOut);   // scene 2 entry (GL 3.3 ocean)
-extern double gFusedTideScore;           // scene 2's final score
-int  TideBenchParseArgs(int argc, char **argv);  // scene 2's CLI flags
-void TideBenchSetScreenshot(const char *path);   // share --screenshot
-void TideBenchSetStandalone(bool standalone);    // --tide-only
+int RunOceanScene(bool *gaveUpOut);       // scene 2 entry (GL 3.3 ocean)
+extern double gFusedTideScore;            // scene 2's final score
+int  OceanSceneParseArgs(int argc, char **argv); // scene 2's CLI flags
+void OceanSceneSetScreenshot(const char *path);  // share --screenshot
+void OceanSceneSetStandalone(bool standalone);   // --scene-only
 void changeSize(int w, int h);            // resize handler (defined below)
 
 static bool   gFusedEnabled = true; // --og-only forces the single OG scene
-static bool   gTideOnly = false;    // --tide-only runs the ocean scene alone
+static bool   gSceneOnly = false;   // --scene-only runs the ocean scene alone
 static bool   gFusedTideRan = false;
 static double gFusedOgScore = 0.0;
 
@@ -367,9 +367,9 @@ static void RenderResults() {
   if (gFusedEnabled) {
     snprintf(scene1, sizeof(scene1), "ElectroBench (guns)  : %.0f", gFusedOgScore);
     if (gFusedTideRan)
-      snprintf(scene2, sizeof(scene2), "TideBench (ocean)    : %.0f", gFusedTideScore);
+      snprintf(scene2, sizeof(scene2), "Dusk Ocean (scene 2) : %.0f", gFusedTideScore);
     else
-      snprintf(scene2, sizeof(scene2), "TideBench (ocean)    : skipped (needs GL 3.3)");
+      snprintf(scene2, sizeof(scene2), "Dusk Ocean (scene 2) : skipped (needs GL 3.3)");
     glColor4f(0.60f, 0.78f, 0.88f, 1.0f);
     HudText(cx - (float)strlen(scene1) * kGlyphAdvance * 0.5f,
             cy + (float)kGlyphH * kGlyphScale * 0.5f + 52.0f, scene1);
@@ -853,26 +853,26 @@ void renderScene() {
     gFusedOgScore = score;
 
     if (gFusedEnabled) {
-      // ---- scene 2: TideBench (GL 3.3) on the same SDL session ----
-      printf("Scene 2/2 : TideBench (GL 3.3 dusk ocean)\n");
+      // ---- scene 2: the GL 3.3 dusk-ocean scene, same SDL session ----
+      printf("Scene 2/2 : Dusk Ocean (GL 3.3)\n");
       fflush(stdout);
-      SDL_Quit(); // TideBench recreates the window with a GL 3.3 core context
+      SDL_Quit(); // the ocean scene recreates the window with a GL 3.3 core context
       bool gaveUp = false;
-      int rc = RunTideBenchFused(&gaveUp);
+      int rc = RunOceanScene(&gaveUp);
       if (rc == 0) {
         gFusedTideRan = true;
-        printf("Fused Results - ElectroBench : %.0f | TideBench : %.0f | Average : %.0f\n",
+        printf("Fused Results - ElectroBench : %.0f | Dusk Ocean : %.0f | Average : %.0f\n",
                gFusedOgScore, gFusedTideScore,
                0.5 * (gFusedOgScore + gFusedTideScore));
       } else if (rc == 2) {
-        // user quit during the TideBench scene — leave without the combined screen
+        // user quit during the ocean scene — leave without the combined screen
         SDL_Quit();
         exit(0);
       } else {
-        printf("TideBench skipped: no OpenGL 3.3 core context on this device\n");
+        printf("Dusk ocean scene skipped: no OpenGL 3.3 core context on this device\n");
       }
       fflush(stdout);
-      // TideBench tore SDL down either way; bring the window back (a fresh
+      // The ocean scene tore SDL down either way; bring the window back (a fresh
       // GL 2.1 context is all the immediate-mode results text needs).
       initialiseWindow();
       glewInit();
@@ -1117,22 +1117,22 @@ int main(int argc, char **argv) {
       gNoShadow = true;
     } else if (arg == "--og-only") {
       gFusedEnabled = false; // run only the OG scene even on GL 3.3 devices
-    } else if (arg == "--tide-only") {
-      gTideOnly = true; // run only the GL 3.3 ocean scene
+    } else if (arg == "--scene-only") {
+      gSceneOnly = true; // run only the GL 3.3 ocean scene
     }
   }
 
   // One binary owns the whole command line: forward the ocean scene's own
-  // flags to it and, with --tide-only, run that scene on its own.
-  if (TideBenchParseArgs(argc, argv) != EXIT_SUCCESS)
+  // flags to it and, with --scene-only, run that scene on its own.
+  if (OceanSceneParseArgs(argc, argv) != EXIT_SUCCESS)
     return EXIT_FAILURE;
   if (gShotPath != nullptr)
-    TideBenchSetScreenshot(gShotPath);
+    OceanSceneSetScreenshot(gShotPath);
 
-  if (gTideOnly) {
-    TideBenchSetStandalone(true);
+  if (gSceneOnly) {
+    OceanSceneSetStandalone(true);
     bool gaveUp = false;
-    int rc = RunTideBenchFused(&gaveUp);
+    int rc = RunOceanScene(&gaveUp);
     if (rc == 1) {
       fprintf(stderr, "ElectroBench: no OpenGL 3.3 core context on this device - "
                       "the ocean scene cannot run here\n");

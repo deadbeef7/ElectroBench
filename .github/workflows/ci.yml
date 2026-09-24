@@ -25,6 +25,6 @@ jobs:
 
       - name: Headless runtime smoke test (45 s ocean scene on llvmpipe)
         run: |
-          LIBGL_ALWAYS_SOFTWARE=1 timeout 240 xvfb-run -a -s "-screen 0 1366x768x24" ./build/ElectroBench --tide-only 2>&1 | tee run.log
+          LIBGL_ALWAYS_SOFTWARE=1 timeout 240 xvfb-run -a -s "-screen 0 1366x768x24" ./build/ElectroBench --scene-only 2>&1 | tee run.log
           grep -q "Benchmark Results" run.log
           cat run.log
