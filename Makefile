@@ -24,6 +24,14 @@ BUILD := build
 LEGACY_SRC := src/main.cxx
 TIDEBENCH_SRC := src/ps14_bench.cxx
 
+# Fused ElectroBench: the OG binary contains BOTH scenes. src/ps14_bench.cxx is
+# compiled a second time with -DFUSED_INTO_OG (entry point renamed, no main()),
+# and after the 60 s gun scene the binary probes a GL 3.3 core context: found,
+# it runs TideBench and shows per-scene + average scores; not found, TideBench
+# skips itself and the OG result stands. build/TideBench remains standalone.
+FUSED_CXXFLAGS := -DFUSED_INTO_OG
+LEGACY_OBJS := $(BUILD)/main.o $(BUILD)/ps14_bench_fused.o
+
 LEGACY_BIN = $(BUILD)/ElectroBench$(STATIC_SUFFIX)
 TIDEBENCH_BIN   = $(BUILD)/TideBench$(STATIC_SUFFIX)
 
@@ -131,21 +139,27 @@ $(BUILD):
 	mkdir -p $(BUILD)
 
 # ------------------------------------------------------------
-# Legacy ElectroBench
+# ElectroBench (fused: OG gun scene + TideBench ocean scene)
 # ------------------------------------------------------------
 
 .PHONY: legacy
 legacy: $(LEGACY_BIN)
 
-$(LEGACY_BIN): $(LEGACY_SRC) | $(BUILD)
+$(BUILD)/main.o: src/main.cxx | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@
+
+$(BUILD)/ps14_bench_fused.o: src/ps14_bench.cxx | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(FUSED_CXXFLAGS) -c $< -o $@
+
+$(LEGACY_BIN): $(LEGACY_OBJS) | $(BUILD)
 	@echo "========================================"
-	@echo " Building ElectroBench Legacy"
+	@echo " Building ElectroBench (OG + TideBench fused)"
 	@echo " Platform: $(PLATFORM)"
 	@echo "========================================"
 ifeq ($(STATIC),1)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(STATIC_LDFLAGS) $< -o $@ $(LDLIBS)
+	$(CXX) $(CXXFLAGS) $(STATIC_LDFLAGS) $(LEGACY_OBJS) -o $@ $(LDLIBS)
 else
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
+	$(CXX) $(CXXFLAGS) $(LEGACY_OBJS) -o $@ $(LDLIBS)
 endif
 
 # ------------------------------------------------------------

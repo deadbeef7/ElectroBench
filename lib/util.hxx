@@ -180,7 +180,7 @@ public:
           std::string file5 = prefix + str;
           load_texture_to_material(file5, m->texture5, 4);
         }
-        if (strstr(line.c_str(), "map_Ki %s")) {
+        if (strstr(line.c_str(), "map_Ki")) {
           sscanf(line.c_str(), "map_Ki %s", str);
           std::string file6 = prefix + str;
           load_texture_to_material(file6, m->texture6, 5);
@@ -195,10 +195,21 @@ public:
     Load_Texture_Swap(&img, file.c_str());
     glGenTextures(1, &texture);
     glBindTexture(GL_TEXTURE_2D, texture);
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    // mipmaps + trilinear: 2048^2 maps minified on the guns would shimmer and
+    // alias without them (void) i: textures are bound to their units once,
+    // after loading, in the renderer setup — never here.
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
+                    GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    // auto-mipmap on upload: the GL 1.4 GL_GENERATE_MIPMAP mode works on every
+    // target machine (glGenerateMipmap needs GL 3.0 and its pointer may not
+    // resolve on GL 2.1-only drivers)
+    glTexParameteri(GL_TEXTURE_2D, GL_GENERATE_MIPMAP, GL_TRUE);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, img.w, img.h, 0, GL_RGBA,
                  GL_UNSIGNED_BYTE, img.img);
-    glBindTexture(GL_TEXTURE_2D, i);
+    (void)i;
     Delete_Image(&img);
   }
   void add_face_3v(std::string &line) {

@@ -276,6 +276,19 @@ static void RenderHUD() {
   glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
 }
 
+// ---- fused scene support ------------------------------------------------
+// The OG binary is built from BOTH translation units (see the Makefile: the
+// TideBench one is compiled with -DFUSED_INTO_OG). After the 60 s gun run it
+// hands the SDL session to TideBench, which probes a GL 3.3 core context and
+// simply skips itself when the device cannot provide one.
+int RunTideBenchFused(bool *gaveUpOut); // TideBench scene entry (GL 3.3)
+extern double gFusedTideScore;          // TideBench's final score
+void changeSize(int w, int h);          // resize handler (defined below)
+
+static bool   gFusedEnabled = true; // --og-only forces the single OG scene
+static bool   gFusedTideRan = false;
+static double gFusedOgScore = 0.0;
+
 // Results screen: clear the window and show the final score big and centred.
 // Same dark panel + pale cyan text as the in-run HUD.
 static void RenderResults() {
@@ -303,8 +316,14 @@ static void RenderResults() {
   glClearColor(0.012f, 0.012f, 0.022f, 1.0f);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-  char big[96], timeLine[128], hint[96];
-  snprintf(big, sizeof(big), "SCORE : %.0f", gResultsScore);
+  char big[96], timeLine[128], hint[96], scene1[96], scene2[96];
+  if (gFusedEnabled && gFusedTideRan) {
+    // fused run: average of the scenes that ran, per-scene scores below
+    snprintf(big, sizeof(big), "AVERAGE SCORE : %.0f",
+             0.5 * (gFusedOgScore + gFusedTideScore));
+  } else {
+    snprintf(big, sizeof(big), "SCORE : %.0f", gResultsScore);
+  }
   snprintf(timeLine, sizeof(timeLine), "Time : %.1fs   Average FPS : %.1f",
            gResultsElapsed, gResultsFps);
   snprintf(hint, sizeof(hint), "Benchmark complete - ESC to exit");
@@ -333,11 +352,24 @@ static void RenderResults() {
         }
   }
 
-  // time + fps line and the hint, at HUD scale, centred
+  // time + fps line, per-scene breakdown (fused) and hint, HUD scale, centred
   glColor4f(0.55f, 0.72f, 0.82f, 1.0f);
   HudText(cx - (float)strlen(timeLine) * 6.0f * 0.5f, cy + 7.0f * 6.0f * 0.5f + 24.0f, timeLine);
-  glColor4f(0.40f, 0.48f, 0.55f, 1.0f);
-  HudText(cx - (float)strlen(hint) * 6.0f * 0.5f, cy + 7.0f * 6.0f * 0.5f + 56.0f, hint);
+  if (gFusedEnabled) {
+    snprintf(scene1, sizeof(scene1), "ElectroBench (guns)  : %.0f", gFusedOgScore);
+    if (gFusedTideRan)
+      snprintf(scene2, sizeof(scene2), "TideBench (ocean)    : %.0f", gFusedTideScore);
+    else
+      snprintf(scene2, sizeof(scene2), "TideBench (ocean)    : skipped (needs GL 3.3)");
+    glColor4f(0.60f, 0.78f, 0.88f, 1.0f);
+    HudText(cx - (float)strlen(scene1) * 6.0f * 0.5f, cy + 7.0f * 6.0f * 0.5f + 52.0f, scene1);
+    HudText(cx - (float)strlen(scene2) * 6.0f * 0.5f, cy + 7.0f * 6.0f * 0.5f + 68.0f, scene2);
+    glColor4f(0.40f, 0.48f, 0.55f, 1.0f);
+    HudText(cx - (float)strlen(hint) * 6.0f * 0.5f, cy + 7.0f * 6.0f * 0.5f + 96.0f, hint);
+  } else {
+    glColor4f(0.40f, 0.48f, 0.55f, 1.0f);
+    HudText(cx - (float)strlen(hint) * 6.0f * 0.5f, cy + 7.0f * 6.0f * 0.5f + 56.0f, hint);
+  }
 
   glEnable(GL_DEPTH_TEST);
   glMatrixMode(GL_PROJECTION);
@@ -802,12 +834,43 @@ void renderScene() {
     printf("Benchmark Results - Time : %.1fs, Average FPS : %.1f, Score : %.0f\n",
            elapsed, avgFps, score);
     fflush(stdout);
-    // Hand over to the results screen: the scene is cleared and the score is
-    // drawn on the window for kResultsScreenSeconds (ESC exits immediately).
     gResultsElapsed = elapsed;
     gResultsFps = avgFps;
     gResultsScore = score;
-    gResultsShownAt = elapsed;
+    gFusedOgScore = score;
+
+    if (gFusedEnabled) {
+      // ---- scene 2: TideBench (GL 3.3) on the same SDL session ----
+      printf("Scene 2/2 : TideBench (GL 3.3 dusk ocean)\n");
+      fflush(stdout);
+      SDL_Quit(); // TideBench recreates the window with a GL 3.3 core context
+      bool gaveUp = false;
+      int rc = RunTideBenchFused(&gaveUp);
+      if (rc == 0) {
+        gFusedTideRan = true;
+        printf("Fused Results - ElectroBench : %.0f | TideBench : %.0f | Average : %.0f\n",
+               gFusedOgScore, gFusedTideScore,
+               0.5 * (gFusedOgScore + gFusedTideScore));
+      } else if (rc == 2) {
+        // user quit during the TideBench scene — leave without the combined screen
+        SDL_Quit();
+        exit(0);
+      } else {
+        printf("TideBench skipped: no OpenGL 3.3 core context on this device\n");
+      }
+      fflush(stdout);
+      // TideBench tore SDL down either way; bring the window back (a fresh
+      // GL 2.1 context is all the immediate-mode results text needs).
+      initialiseWindow();
+      glewInit();
+      changeSize(gWinW, gWinH);
+      gResultsShownAt =
+          (double)(SDL_GetPerformanceCounter() - gPerfStartTick) / gPerfFreq;
+    } else {
+      gResultsShownAt = elapsed;
+    }
+    // Hand over to the results screen: the scene is cleared and the score is
+    // drawn on the window for kResultsScreenSeconds (ESC exits immediately).
     gResultsShown = true;
   }
 }
@@ -1039,6 +1102,8 @@ int main(int argc, char **argv) {
       gDumpShadow = true;
     } else if (arg == "--no-shadow") {
       gNoShadow = true;
+    } else if (arg == "--og-only") {
+      gFusedEnabled = false; // run only the OG scene even on GL 3.3 devices
     }
   }
 

@@ -131,13 +131,27 @@ it — a fair curve from office PCs to gaming rigs. Both binaries print
 
 # The results screen
 
-When the 45/60 second run ends, **both benchmarks clear the window and print the final score
-on screen** — a big centred score with the time and average FPS underneath — and leave it up
+When the 45/60 second run ends, **the benchmark clears the window and prints the final score
+on screen** — a big centred score with the time and average FPS underneath — and leaves it up
 for about ten seconds (or until you press `ESC`). The same line is also printed to stdout.
 
 ```sh
 Benchmark Results - Time : 45.0s, Average FPS : 12.4, Score : 308
 ```
+
+# One binary, two scenes
+
+`build/ElectroBench` now contains **both scenes**. It runs the OG 60-second gun benchmark
+first, then probes an OpenGL 3.3 core context:
+
+- **found** — TideBench (the dusk ocean) runs as scene 2 on the same session, and the final
+  results screen shows **per-scene scores and the average**:
+  `Fused Results - ElectroBench : 308 | TideBench : 42 | Average : 175`
+- **not found** (GL 2.1-only drivers, old iGPUs) — TideBench skips itself cleanly and the OG
+  result stands, so the binary still runs on the ancient hardware it targets
+
+Pass `--og-only` to run just the gun scene even on GL 3.3-capable devices.
+`./build/TideBench` remains available to run the ocean scene on its own.
 
 # Windows (MSYS2)
 
