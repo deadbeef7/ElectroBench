@@ -7,7 +7,7 @@ It ships **one** executable that contains **both** scenes — no second binary, 
 | Scene | Renderer | Contents |
 |---|---|---|
 | **ElectroBench** (the OG) | OpenGL 2.1 / GLSL 1.2, fixed-function pipeline | **110 UZIs** on a shadow-mapped concrete floor, lit by a warm sun |
-| **TideBench** (scene 2) | OpenGL 3.3 core, pixel-shader workloads | A dusk ocean under volumetric clouds (3DMark2001 SE "Nature" recreation) |
+| **TideBench** (scene 2) | OpenGL 3.3 core, pixel-shader workloads | An ocean under volumetric clouds (3DMark2001 SE "Nature" recreation) |
 
 
 
@@ -21,9 +21,9 @@ Close-up — mags resting on the ground, shadows clearly visible under each gun:
 
 ![Close-up: UZIs with mags on the ground and per-gun shadows](docs/screenshots/uzi_close.png)
 
-The dusk-ocean scene — long cloud banks with sunward silver linings, a narrow orange glitter path down the middle of the sea, dark blue-purple water either side, raised swell banks:
+The TideBench ocean scene — long cloud banks with sunward silver linings, a narrow orange glitter path down the middle of the sea, dark blue-purple water either side, raised swell banks:
 
-![ElectroBench dusk ocean scene](docs/screenshots/ps14_dusk_t36.png)
+![ElectroBench TideBench scene](docs/screenshots/ps14_dusk_t36.png)
 
 # How to build ?
 
@@ -68,19 +68,20 @@ of the run.
 
 # Scene 2 — TideBench
 
-The dusk ocean is **scene 2 of the same ElectroBench binary** and is written in **OpenGL 3.3 core**.
-It pushes a heavy, realistic dusk-ocean workload —
+TideBench is **scene 2 of the same ElectroBench binary** and is written in **OpenGL 3.3 core**.
+It pushes a heavy, realistic ocean workload —
 high-resolution environment reflections, a dense displaced ocean mesh, and a real volumetric
 light-transport model for the clouds. It is heavy **on purpose**: the goal is to push old and new
 hardware alike, so low single-digit FPS on a low-end machine means the workload is doing its job.
 
 What it renders :
 - A procedural **sky dome** rendered **directly at full screen resolution**: dusk gradient with a
-  bright horizon band, a compact orange sun, and a handful of **volumetric cloud banks** — each
-  visible cloud point ray-marches density toward the sun and shades with real light transport
-  (optical-depth self-shadowing, Henyey-Greenstein forward-scatter silver linings, dark anti-sun
-  bulk, skylight tops, powder-dense cores, aerial perspective). Coverage is exact by construction:
-  a few long banks with real gaps, no noise-texture mottle
+  bright horizon band, a compact orange sun, and seven **volumetric cloud banks**. Each bank combines
+  eight anisotropic 3D lobes with low-frequency boundary erosion, then integrates seven density probes
+  toward the sun through three energy-conserving scattering octaves. This produces layered cauliflower
+  silhouettes, thin silver linings, warm transmission through shoulders, cool dense bases, powdery
+  cores, and aerial perspective without sampling a cloud texture. Hand-placed banks preserve exact
+  clear-sky gaps instead of producing noise-texture mottle
 - A **4 km ocean patch** on a dense GPU-displaced grid: long rolling swells with crest-skewed banks,
   per-pixel analytic wave normals plus near-camera detail wavelets
 - High-resolution **environment cubemap** reflections with roughness-matched LOD (the sun smears
@@ -88,10 +89,10 @@ What it renders :
   sun's azimuth (bright path down the middle, dark blue-purple water either side),
   slope-gated crest foam, sun-path-gated subsurface glow in thin crests, and distance haze that converges into the
   actual per-azimuth sky colour so the far sea melts into the horizon
-- **Cloud shadows on the water**: each sea fragment is projected along its sun ray into the same
-  analytic cloud layout the sky renders — where a cloud blocks the sun the direct light dies, foam
-  stops breaking and the sea goes much darker, in coherent patches that sit exactly under the
-  clouds that cast them. Off-sun water sinks to near-black indigo
+- **Cloud shadows on the water**: each sea fragment is projected along its sun ray into the same 620 m
+  cloud deck and matched 3D-lobe density field the sky renders — where a cloud blocks the sun the
+  direct light dies, foam stops breaking and the sea goes much darker, in coherent moving patches that
+  sit exactly under the clouds that cast them. Off-sun water sinks to near-black indigo
 - A clean in-engine **FPS readout** (the score belongs to the final results line) and the same score
   formula as the main benchmark, over a 45 second run
 
@@ -140,9 +141,9 @@ Benchmark Results - Time : 45.0s, Average FPS : 12.4, Score : 308
 `build/ElectroBench` is the **only** binary, and it contains both scenes. It runs the OG 60-second gun scene
 first, then probes an OpenGL 3.3 core context:
 
-- **found** — the dusk-ocean scene runs as scene 2 on the same session, and the final
+- **found** — TideBench runs as scene 2 on the same session, and the final
   results screen shows **per-scene scores and the average**:
-  `Fused Results - ElectroBench : 308 | Dusk Ocean : 42 | Average : 175`
+  `Fused Results - ElectroBench : 308 | TideBench : 42 | Average : 175`
 - **not found** (GL 2.1-only drivers, old iGPUs) — the ocean scene skips itself cleanly and the
   OG result stands, so the binary still runs on the ancient hardware it targets
 
