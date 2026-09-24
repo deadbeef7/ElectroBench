@@ -1,6 +1,7 @@
 // Libraries to include
 #include "../lib/asset_path.hxx"
 #include "../lib/util.hxx"
+#include "font_atlas.hxx" // shared 8x8 HUD font atlas (same one the ocean scene uses)
 
 SDL_Window *window;
 SDL_GLContext glContext;
@@ -170,78 +171,78 @@ static long gTotalFrames = 0;
 static inline double BenchScore(double fps) { return fps * fps * 2.0; }
 
 // ---------------------------------------------------------------------------
-// FPS HUD (OpenGL 2.1 fixed function): 5x7 bitmap font drawn as immediate-mode
-// quads after the 3D pass, with a dark backing panel for readability.
+// FPS HUD (OpenGL 2.1 fixed function): the shared 8x8 font atlas from
+// src/font_atlas.hxx, uploaded once as an RGBA texture and drawn as
+// immediate-mode textured quads after the 3D pass, with a dark backing panel
+// for readability. The GL 3.3 ocean scene draws the SAME atlas through
+// shaders/ps14/hud_*.glsl, so both scenes render identical HUD text.
 // ---------------------------------------------------------------------------
-static const unsigned char kHudFont[95][5] = {
-    {0x00,0x00,0x00,0x00,0x00}, {0x05,0x05,0x05,0x00,0x05}, {0x0A,0x0A,0x00,0x00,0x00},
-    {0x0A,0x0A,0x1F,0x0A,0x1F}, {0x04,0x0F,0x05,0x0E,0x09}, {0x19,0x12,0x04,0x09,0x13},
-    {0x0C,0x12,0x14,0x12,0x0D}, {0x04,0x04,0x02,0x00,0x00}, {0x02,0x04,0x04,0x04,0x02},
-    {0x08,0x04,0x04,0x04,0x08}, {0x00,0x15,0x0E,0x00,0x00}, {0x00,0x04,0x0E,0x04,0x00},
-    {0x00,0x00,0x00,0x04,0x08}, {0x00,0x00,0x0E,0x00,0x00}, {0x00,0x00,0x00,0x04,0x00},
-    {0x01,0x02,0x02,0x02,0x01}, {0x0E,0x11,0x11,0x11,0x0E}, {0x04,0x0C,0x04,0x04,0x0E},
-    {0x0E,0x01,0x0E,0x10,0x0F}, {0x0E,0x01,0x06,0x01,0x0E}, {0x11,0x11,0x0F,0x01,0x01},
-    {0x0F,0x10,0x0E,0x01,0x0E}, {0x0E,0x10,0x0E,0x11,0x0E}, {0x1F,0x01,0x02,0x04,0x08},
-    {0x0E,0x11,0x0E,0x11,0x0E}, {0x0E,0x11,0x07,0x01,0x0E}, {0x00,0x04,0x00,0x04,0x00},
-    {0x00,0x04,0x00,0x04,0x08}, {0x02,0x04,0x08,0x04,0x02}, {0x00,0x00,0x0E,0x00,0x0E},
-    {0x08,0x04,0x02,0x04,0x08}, {0x0E,0x01,0x06,0x04,0x00}, {0x0E,0x11,0x15,0x15,0x0E},
-    {0x0E,0x11,0x11,0x1F,0x11}, {0x1E,0x09,0x0E,0x09,0x1E}, {0x0E,0x11,0x10,0x11,0x0E},
-    {0x1C,0x12,0x11,0x12,0x1C}, {0x0F,0x10,0x1E,0x10,0x0F}, {0x0F,0x10,0x1E,0x10,0x10},
-    {0x0E,0x10,0x13,0x11,0x0F}, {0x11,0x11,0x1F,0x11,0x11}, {0x0E,0x04,0x04,0x04,0x0E},
-    {0x07,0x02,0x02,0x12,0x0C}, {0x11,0x12,0x1C,0x12,0x11}, {0x10,0x10,0x10,0x10,0x0F},
-    {0x11,0x1B,0x15,0x11,0x11}, {0x11,0x19,0x15,0x13,0x11}, {0x0E,0x11,0x11,0x11,0x0E},
-    {0x1E,0x11,0x1E,0x10,0x10}, {0x0E,0x11,0x11,0x15,0x16}, {0x1E,0x11,0x1E,0x12,0x11},
-    {0x0F,0x10,0x0E,0x01,0x1E}, {0x1F,0x04,0x04,0x04,0x04}, {0x11,0x11,0x11,0x11,0x0E},
-    {0x11,0x11,0x11,0x0A,0x04}, {0x11,0x11,0x15,0x15,0x0A}, {0x11,0x0A,0x04,0x0A,0x11},
-    {0x11,0x11,0x0E,0x04,0x04}, {0x1F,0x02,0x04,0x08,0x1F}, {0x0E,0x08,0x08,0x08,0x0E},
-    {0x01,0x02,0x02,0x04,0x08}, {0x0E,0x02,0x02,0x02,0x0E}, {0x04,0x0E,0x15,0x04,0x04},
-    {0x00,0x00,0x00,0x00,0x1F}, {0x08,0x04,0x02,0x00,0x00}, {0x00,0x0E,0x01,0x07,0x0F},
-    {0x10,0x1E,0x11,0x11,0x1E}, {0x00,0x0F,0x10,0x10,0x0F}, {0x01,0x0E,0x11,0x11,0x0E},
-    {0x00,0x0E,0x11,0x1E,0x10}, {0x07,0x08,0x0E,0x08,0x07}, {0x10,0x1E,0x11,0x11,0x11},
-    {0x04,0x00,0x0E,0x11,0x11}, {0x08,0x02,0x02,0x02,0x0C}, {0x04,0x02,0x02,0x12,0x0C},
-    {0x10,0x10,0x1E,0x11,0x1E}, {0x10,0x10,0x10,0x10,0x0E}, {0x00,0x0A,0x15,0x15,0x0A},
-    {0x00,0x0E,0x11,0x11,0x0E}, {0x00,0x1E,0x11,0x1E,0x10}, {0x00,0x0E,0x11,0x11,0x0E},
-    {0x00,0x0F,0x10,0x0F,0x01}, {0x08,0x0E,0x10,0x08,0x04}, {0x00,0x1D,0x12,0x04,0x09},
-    {0x00,0x0E,0x0A,0x0E,0x02}, {0x0B,0x0C,0x0E,0x02,0x06}, {0x04,0x04,0x04,0x04,0x04},
-    {0x04,0x04,0x0E,0x00,0x00}, {0x09,0x12,0x1F,0x12,0x09}, {0x0A,0x0A,0x0A,0x0A,0x0A},
-    {0x04,0x0F,0x11,0x0F,0x04}};
+static bool gFontAtlasTexInit = false;
+static GLuint gFontAtlasTex = 0;
 
-// The font is 5x5: kHudFont[c - 32] holds the FIVE rows of a glyph, one byte
-// per row, bit 4 = leftmost column (e.g. 'H' = 0x11,0x11,0x1F,0x11,0x11).
-// Drawing it as 7 rows — which this file used to do — read two bytes PAST the
-// end of every glyph, i.e. into its neighbour in the table, and painted those
-// as two junk rows under each character. That is why the HUD text looked
-// broken/janky. Everything below now derives from these constants.
-static const int kGlyphW = 5;            // glyph width in pixels
-static const int kGlyphH = 5;            // glyph height in pixels
-static const float kGlyphAdvance = 6.0f; // 5 px glyph + 1 px gap
-static const float kGlyphScale = 6.0f;   // results screen: 30x30 px glyphs
-static const float kHudPanelH = 15.0f;   // backing strip: 5 px above + below
-
-// Draws one glyph with each font pixel scaled by `scale`.
-static void HudGlyphScaled(int c, float x, float y, float scale) {
-  if (c < 32 || c > 126) return;
-  const unsigned char *g = kHudFont[c - 32];
-  glBegin(GL_QUADS);
-  for (int row = 0; row < kGlyphH; row++) {
-    for (int col = 0; col < kGlyphW; col++) {
-      if (!(g[row] & (1 << (kGlyphW - 1 - col)))) continue;
-      float x0 = x + col * scale, y0 = y + row * scale;
-      glVertex2f(x0, y0);
-      glVertex2f(x0 + scale, y0);
-      glVertex2f(x0 + scale, y0 + scale);
-      glVertex2f(x0, y0 + scale);
-    }
-  }
-  glEnd();
+// Uploads the shared atlas once per GL context. The ocean scene tears SDL down
+// and main brings the window back for the results screen, so reset
+// gFontAtlasTexInit there; calling this from every text pass is a no-op after
+// the first upload.
+static void EnsureFontAtlasTexture() {
+  if (gFontAtlasTexInit) return;
+  std::vector<unsigned char> px((size_t)kFontAtlasW * kFontAtlasH * 4);
+  FontAtlasFillRGBA(px.data(), px.size());
+  glGenTextures(1, &gFontAtlasTex);
+  glBindTexture(GL_TEXTURE_2D, gFontAtlasTex);
+  // GL_RGBA is intentional: the OG renderer requests a compatibility GL 2.1
+  // context, where sized internal formats such as GL_RGBA8 are not available.
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, kFontAtlasW, kFontAtlasH, 0,
+               GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  gFontAtlasTexInit = true;
 }
 
-// Draws a string of 5x5 glyphs, 1 px apart, and returns the width drawn.
+static const float kGlyphW = (float)kFontAtlasGlyphW;
+static const float kGlyphH = (float)kFontAtlasCell;
+static const float kGlyphAdvance = (float)kFontAtlasCell; // monospaced, no gap
+static const float kGlyphScale = 8.0f;   // results screen: 64x64 px glyphs
+static const float kHudPanelH = 18.0f;   // backing strip: 8 px text + padding
+
+// Draws one string of 8x8 atlas glyphs as textured quads and returns the
+// width drawn, so callers can centre text. glColor tints the white glyphs
+// (GL_MODULATE); blend must be on for the linear-filtered glyph edges.
 static float HudTextScaled(float x, float y, const char *text, float scale) {
+  EnsureFontAtlasTexture();
+  glEnable(GL_TEXTURE_2D);
+  glBindTexture(GL_TEXTURE_2D, gFontAtlasTex);
+  glBegin(GL_QUADS);
   float pen = x;
-  for (const char *p = text; *p; ++p, pen += kGlyphAdvance * scale)
-    HudGlyphScaled((unsigned char)*p, pen, y, scale);
+  for (const char *p = text; *p; ++p) {
+    unsigned char c = (unsigned char)*p;
+    if (!FontAtlasHasGlyph(c)) { // no glyph in the atlas: narrow gap, skip
+      pen += kGlyphAdvance * scale * 0.75f;
+      continue;
+    }
+    float uv[4];
+    FontAtlasGlyphUV(c, uv); // half-texel inset: no neighbour-edge bleed
+    float x0 = pen, y0 = y;
+    float x1 = pen + kGlyphW * scale, y1 = y + kGlyphH * scale;
+    glTexCoord2f(uv[0], uv[1]); glVertex2f(x0, y0);
+    glTexCoord2f(uv[2], uv[1]); glVertex2f(x1, y0);
+    glTexCoord2f(uv[2], uv[3]); glVertex2f(x1, y1);
+    glTexCoord2f(uv[0], uv[3]); glVertex2f(x0, y1);
+    pen += kGlyphAdvance * scale;
+  }
+  glEnd();
   return pen - x;
+}
+
+// Width a string will occupy at `scale` without drawing it (for centring).
+static float HudTextWidth(const char *text, float scale) {
+  float w = 0.0f;
+  for (const char *p = text; *p; ++p)
+    w += kGlyphAdvance * scale *
+         (FontAtlasHasGlyph((unsigned char)*p) ? 1.0f : 0.75f);
+  return w;
 }
 
 static void HudText(float x, float y, const char *text) {
@@ -265,19 +266,19 @@ static void RenderHUD() {
 
   glDisable(GL_DEPTH_TEST);
   glDisable(GL_LIGHTING);
-  glDisable(GL_BLEND);
 
   // The gun pass leaves textures bound and GL_TEXTURE_2D enabled on non-active
-  // units; glDisable only touches the ACTIVE unit, so unit 0 would keep
-  // modulating these quads by the dark gunmetal texture. Reset unit 0 first.
+  // units; glActiveTexture + explicit unit-0 state keeps these quads clean.
+  // HudTextScaled binds the atlas itself; keep the env mode / blend it needs.
   glActiveTexture(GL_TEXTURE0);
-  glDisable(GL_TEXTURE_2D);
-  glBindTexture(GL_TEXTURE_2D, 0);
-  glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+  glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
   // dark backing panel: solid strip so the text reads on any background
+  glDisable(GL_TEXTURE_2D);
   glColor4f(0.02f, 0.02f, 0.04f, 1.0f);
-  float w = (float)strlen(line) * kGlyphAdvance + 12.0f;
+  float w = HudTextWidth(line, 1.0f) + 12.0f;
   glBegin(GL_QUADS);
   glVertex2f(0.0f, 0.0f);
   glVertex2f(w, 0.0f);
@@ -285,8 +286,8 @@ static void RenderHUD() {
   glVertex2f(0.0f, kHudPanelH);
   glEnd();
 
-  glColor4f(0.72f, 0.93f, 1.0f, 1.0f); // pale cyan, matches the PS1.4 HUD
-  HudText(6.0f, 0.5f * (kHudPanelH - (float)kGlyphH), line);
+  glColor4f(0.72f, 0.93f, 1.0f, 1.0f); // pale cyan, matches the ocean HUD
+  HudText(6.0f, 0.5f * (kHudPanelH - kGlyphH), line);
 
   glEnable(GL_DEPTH_TEST);
   glMatrixMode(GL_PROJECTION);
@@ -297,7 +298,7 @@ static void RenderHUD() {
 }
 
 // ---- scene 2 support ----------------------------------------------------
-// This is ONE executable: src/ps14_bench.cxx is the ocean scene module (it has
+// This is ONE executable: src/tidebench.cxx is the ocean scene module (it has
 // no main of its own) and is linked straight into this binary. After the 60 s
 // gun run this file hands the SDL session to it, and the ocean scene probes a
 // GL 3.3 core context, skipping itself when the device cannot provide one.
@@ -330,12 +331,13 @@ static void RenderResults() {
   glDisable(GL_BLEND);
 
   // unit-0 texture state must be reset here too (see RenderHUD): the gun pass
-  // leaves GL_TEXTURE_2D enabled on non-active units, which would modulate
-  // these quads by the gunmetal texture.
+  // leaves GL_TEXTURE_2D enabled on non-active units. HudTextScaled binds the
+  // shared font atlas itself; keep the env mode / blend it expects.
   glActiveTexture(GL_TEXTURE0);
+  glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
   glDisable(GL_TEXTURE_2D);
-  glBindTexture(GL_TEXTURE_2D, 0);
-  glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
 
   glClearColor(0.012f, 0.012f, 0.022f, 1.0f);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -355,15 +357,15 @@ static void RenderResults() {
   float cx = 0.5f * (float)gWinW;
   float cy = 0.5f * (float)gWinH;
 
-  // big score, centred: 5x5 glyphs scaled up
+  // big score, centred: 8x8 atlas glyphs scaled up
   glColor4f(0.72f, 0.93f, 1.0f, 1.0f);
-  HudTextScaled(cx - (float)strlen(big) * kGlyphAdvance * kGlyphScale * 0.5f,
-                cy - (float)kGlyphH * kGlyphScale * 0.5f, big, kGlyphScale);
+  HudTextScaled(cx - HudTextWidth(big, kGlyphScale) * 0.5f,
+                cy - kGlyphH * kGlyphScale * 0.5f, big, kGlyphScale);
 
   // time + fps line, per-scene breakdown (fused) and hint, HUD scale, centred
   glColor4f(0.55f, 0.72f, 0.82f, 1.0f);
-  HudText(cx - (float)strlen(timeLine) * kGlyphAdvance * 0.5f,
-          cy + (float)kGlyphH * kGlyphScale * 0.5f + 24.0f, timeLine);
+  HudText(cx - HudTextWidth(timeLine, 1.0f) * 0.5f,
+          cy + kGlyphH * kGlyphScale * 0.5f + 24.0f, timeLine);
   if (gFusedEnabled) {
     snprintf(scene1, sizeof(scene1), "ElectroBench (guns)  : %.0f", gFusedOgScore);
     if (gFusedTideRan)
@@ -371,17 +373,17 @@ static void RenderResults() {
     else
       snprintf(scene2, sizeof(scene2), "Dusk Ocean (scene 2) : skipped (needs GL 3.3)");
     glColor4f(0.60f, 0.78f, 0.88f, 1.0f);
-    HudText(cx - (float)strlen(scene1) * kGlyphAdvance * 0.5f,
-            cy + (float)kGlyphH * kGlyphScale * 0.5f + 52.0f, scene1);
-    HudText(cx - (float)strlen(scene2) * kGlyphAdvance * 0.5f,
-            cy + (float)kGlyphH * kGlyphScale * 0.5f + 68.0f, scene2);
+    HudText(cx - HudTextWidth(scene1, 1.0f) * 0.5f,
+            cy + kGlyphH * kGlyphScale * 0.5f + 52.0f, scene1);
+    HudText(cx - HudTextWidth(scene2, 1.0f) * 0.5f,
+            cy + kGlyphH * kGlyphScale * 0.5f + 68.0f, scene2);
     glColor4f(0.40f, 0.48f, 0.55f, 1.0f);
-    HudText(cx - (float)strlen(hint) * kGlyphAdvance * 0.5f,
-            cy + (float)kGlyphH * kGlyphScale * 0.5f + 96.0f, hint);
+    HudText(cx - HudTextWidth(hint, 1.0f) * 0.5f,
+            cy + kGlyphH * kGlyphScale * 0.5f + 96.0f, hint);
   } else {
     glColor4f(0.40f, 0.48f, 0.55f, 1.0f);
-    HudText(cx - (float)strlen(hint) * kGlyphAdvance * 0.5f,
-            cy + (float)kGlyphH * kGlyphScale * 0.5f + 56.0f, hint);
+    HudText(cx - HudTextWidth(hint, 1.0f) * 0.5f,
+            cy + kGlyphH * kGlyphScale * 0.5f + 56.0f, hint);
   }
 
   glEnable(GL_DEPTH_TEST);
@@ -873,7 +875,10 @@ void renderScene() {
       }
       fflush(stdout);
       // The ocean scene tore SDL down either way; bring the window back (a fresh
-      // GL 2.1 context is all the immediate-mode results text needs).
+      // GL 2.1 context is all the immediate-mode results text needs). The font
+      // atlas texture lived in the dead context; force a re-upload.
+      gFontAtlasTexInit = false;
+      gFontAtlasTex = 0;
       initialiseWindow();
       glewInit();
       changeSize(gWinW, gWinH);

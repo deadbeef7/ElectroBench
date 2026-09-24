@@ -161,7 +161,7 @@ On Windows the easiest route is [MSYS2](https://www.msys2.org/), which provides 
 ```sh
 g++ -std=c++17 -O2 -march=x86-64 -mtune=generic \
     src/main.cxx \
-    src/ps14_bench.cxx \
+    src/tidebench.cxx \
     -o build/ElectroBench.exe \
     $(pkg-config --cflags --libs sdl2) \
     -lglew32 \
@@ -169,7 +169,7 @@ g++ -std=c++17 -O2 -march=x86-64 -mtune=generic \
     -lopengl32
 ```
 
-Both scenes are linked into that one binary: `src/ps14_bench.cxx` is a scene module (it has no
+Both scenes are linked into that one binary: `src/tidebench.cxx` is a scene module (it has no
 `main()` of its own) that `src/main.cxx` hands the same SDL session to. To link statically, add
 `-static -static-libgcc -static-libstdc++` and use `pkg-config --static` (same as `make STATIC=1`).
 
