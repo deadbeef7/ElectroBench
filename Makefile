@@ -131,7 +131,7 @@ all: legacy tidebench
 # ------------------------------------------------------------
 
 $(BUILD):
-	mkdir -p $(BUILD)
+        mkdir -p $(BUILD)
 
 # ------------------------------------------------------------
 # ElectroBench (fused: OG gun scene + TideBench ocean scene)
@@ -141,38 +141,20 @@ $(BUILD):
 legacy: $(LEGACY_BIN)
 
 $(BUILD)/main.o: src/main.cxx | $(BUILD)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@
+        $(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@
 
 $(BUILD)/ps14_bench_fused.o: src/ps14_bench.cxx | $(BUILD)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(FUSED_CXXFLAGS) -c $< -o $@
+        $(CXX) $(CPPFLAGS) $(CXXFLAGS) $(FUSED_CXXFLAGS) -c $< -o $@
 
 $(LEGACY_BIN): $(LEGACY_OBJS) | $(BUILD)
-	@echo "========================================"
-	@echo " Building ElectroBench (OG + TideBench fused)"
-	@echo " Platform: $(PLATFORM)"
-	@echo "========================================"
+        @echo "========================================"
+        @echo " Building ElectroBench (OG + TideBench fused)"
+        @echo " Platform: $(PLATFORM)"
+        @echo "========================================"
 ifeq ($(STATIC),1)
-	$(CXX) $(CXXFLAGS) $(STATIC_LDFLAGS) $(LEGACY_OBJS) -o $@ $(LDLIBS)
+        $(CXX) $(CXXFLAGS) $(STATIC_LDFLAGS) $(LEGACY_OBJS) -o $@ $(LDLIBS)
 else
-	$(CXX) $(CXXFLAGS) $(LEGACY_OBJS) -o $@ $(LDLIBS)
-endif
-
-# ------------------------------------------------------------
-# TideBench (dusk ocean benchmark)
-# ------------------------------------------------------------
-
-.PHONY: tidebench
-tidebench: $(TIDEBENCH_BIN)
-
-$(TIDEBENCH_BIN): $(TIDEBENCH_SRC) | $(BUILD)
-	@echo "========================================"
-	@echo " Building TideBench"
-	@echo " Platform: $(PLATFORM)"
-	@echo "========================================"
-ifeq ($(STATIC),1)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(STATIC_LDFLAGS) $< -o $@ $(LDLIBS)
-else
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
+        $(CXX) $(CXXFLAGS) $(LEGACY_OBJS) -o $@ $(LDLIBS)
 endif
 
 # ------------------------------------------------------------
@@ -181,19 +163,9 @@ endif
 
 .PHONY: clean
 clean:
-	rm -rf $(BUILD)
+        rm -rf $(BUILD)
 
-# ------------------------------------------------------------
-# Run
-# ------------------------------------------------------------
 
-.PHONY: run
-run: legacy
-	./$(LEGACY_BIN)
-
-.PHONY: run-tidebench
-run-tidebench: tidebench
-	./$(TIDEBENCH_BIN)
 
 # ------------------------------------------------------------
 # Info
@@ -201,10 +173,10 @@ run-tidebench: tidebench
 
 .PHONY: info
 info:
-	@echo "ElectroBench build configuration"
-	@echo "---------------------------------"
-	@echo "Platform : $(PLATFORM)"
-	@echo "Compiler : $(CXX)"
-	@echo "CXXFLAGS : $(CXXFLAGS)"
-	@echo "Static   : $(STATIC)"
-	@echo "Libraries: $(LDLIBS)"
+        @echo "ElectroBench build configuration"
+        @echo "---------------------------------"
+        @echo "Platform : $(PLATFORM)"
+        @echo "Compiler : $(CXX)"
+        @echo "CXXFLAGS : $(CXXFLAGS)"
+        @echo "Static   : $(STATIC)"
+        @echo "Libraries: $(LDLIBS)"
