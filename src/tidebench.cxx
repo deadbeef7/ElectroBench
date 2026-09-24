@@ -8,9 +8,10 @@
 // binary, no child process).
 //
 // What is rendered, in the spirit of the 2001 original:
-//   * Procedural sky dome with two drifting fBm cloud layers, captured once
-//     per frame into a cubemap (the PS1.4-era trick to get dynamic
-//     reflections without true reflectors).
+//   * Procedural sky dome with drifting 3D cumulus lobes, analytic boundary
+//     erosion, and multi-scatter sunset lighting, captured once per frame into
+//     a cubemap (the PS1.4-era trick to get dynamic reflections without true
+//     reflectors).
 //   * A large ocean grid displaced by a 6-octave wave function in the vertex
 //     shader (PS1.4 had no vertex textures; this is the GPU-age upgrade).
 //   * The water fragment shader mirrors the phases of an asm ps_1_4 shader:
@@ -57,15 +58,14 @@ static const float kSeaSize = 4096.0f;   // world size of the ocean patch: reach
 static const int kEnvMapSize = 768;      // cubemap face resolution — higher fidelity reflections
 static const int kNoiseSize = 256;       // fBm noise texture size
 static const int kRippleSize = 256;      // ripple gradient texture size
-#define MAX_CLOUDS 6                     // must match sky_frag.glsl
-// Long low cumulus banks: azimuth, centre elevation, angular half-HEIGHT and
-// azimuthal stretch (>1 = elongated). Small radii + stretch give the wide,
-// shallow masses the reference shows; the mid elevations keep them in the
-// upper sky instead of hugging the horizon.
-static const float kCloudAzim[MAX_CLOUDS] = {0.35f, 0.78f, 5.92f, 2.20f, 3.95f, 4.60f};
-static const float kCloudElev[MAX_CLOUDS] = {0.245f, 0.330f, 0.200f, 0.290f, 0.360f, 0.150f};
-static const float kCloudRad[MAX_CLOUDS]  = {0.042f, 0.034f, 0.038f, 0.033f, 0.031f, 0.020f};
-static const float kCloudStretch[MAX_CLOUDS] = {2.8f, 2.5f, 2.6f, 2.3f, 2.2f, 3.6f};
+#define MAX_CLOUDS 7                     // must match sky_frag.glsl and sea_frag.glsl
+// Seven varied cumulus banks surround the orbit while leaving a clear solar
+// corridor. Larger stretched masses establish depth; smaller towers keep the
+// sun-facing composition from becoming a ceiling of featureless puffs.
+static const float kCloudAzim[MAX_CLOUDS] = {0.18f, 0.88f, 1.75f, 2.65f, 3.75f, 4.65f, 5.75f};
+static const float kCloudElev[MAX_CLOUDS] = {0.190f, 0.300f, 0.250f, 0.380f, 0.220f, 0.330f, 0.160f};
+static const float kCloudRad[MAX_CLOUDS]  = {0.048f, 0.037f, 0.030f, 0.043f, 0.027f, 0.036f, 0.050f};
+static const float kCloudStretch[MAX_CLOUDS] = {3.3f, 2.4f, 2.1f, 2.8f, 2.2f, 2.3f, 3.6f};
 static const int kFoamSize = 256;        // foam texture size
 
 // Slow wind drift: cloud azimuths crawl a little every second so the banks
@@ -73,7 +73,7 @@ static const int kFoamSize = 256;        // foam texture size
 // the same drifted array, so shadows always sit exactly under their clouds.
 // Signs chosen so no bank drifts into the sun's azimuth (~0.54 rad): the
 // glitter path and sun disc must survive the whole run.
-static const float kCloudDrift[MAX_CLOUDS] = {-0.004f, 0.004f, -0.003f, 0.003f, 0.0035f};
+static const float kCloudDrift[MAX_CLOUDS] = {-0.0025f, 0.0032f, -0.0018f, 0.0022f, -0.0027f, 0.0015f, 0.0020f};
 static float gCloudAzimDrift[MAX_CLOUDS];
 static void UpdateCloudAzim(float t) {
   for (int i = 0; i < MAX_CLOUDS; i++)
@@ -579,21 +579,15 @@ static void BindSkyUniforms(const Mat4 &vp) {
   glUniform3f(gSkyProg.loc("uHorizonColor"), 0.115f, 0.055f, 0.062f); // warm maroon horizon band
   glUniform3f(gSkyProg.loc("uSunColor"), 1.55f, 0.72f, 0.30f);        // deeper orange sun
 
-  // Explicit cloud masses: a FEW fat cumulus with real clear-sky gaps between
-  // them (the 3DMark Nature look). Hand-placed, time-static — uploaded once.
-  // Coverage is exact by construction; nothing depends on noise-texture
-  // statistics, which is what previously mottled the whole sky on real GPUs.
-  static bool cloudsUploaded = false;
-  if (!cloudsUploaded) {
-    // 5 clouds spread around the horizon ring; three sit in the camera's
-    // sun-facing view, two populate the rest of the sky for the orbit.
-    glUniform1i(gSkyProg.loc("uCloudCount"), MAX_CLOUDS);
-    glUniform1fv(gSkyProg.loc("uCloudAzim"), MAX_CLOUDS, gCloudAzimDrift);
-    glUniform1fv(gSkyProg.loc("uCloudElev"), MAX_CLOUDS, kCloudElev);
-    glUniform1fv(gSkyProg.loc("uCloudRadius"), MAX_CLOUDS, kCloudRad);
-    glUniform1fv(gSkyProg.loc("uCloudStretch"), MAX_CLOUDS, kCloudStretch);
-    cloudsUploaded = true;
-  }
+  // Re-upload the small cloud layout every draw. The 28 floats are negligible,
+  // and unlike the old one-shot upload this keeps all six cubemap faces, the
+  // full-resolution dome, and the sea shadows on exactly the same drifting
+  // azimuths within the frame.
+  glUniform1i(gSkyProg.loc("uCloudCount"), MAX_CLOUDS);
+  glUniform1fv(gSkyProg.loc("uCloudAzim"), MAX_CLOUDS, gCloudAzimDrift);
+  glUniform1fv(gSkyProg.loc("uCloudElev"), MAX_CLOUDS, kCloudElev);
+  glUniform1fv(gSkyProg.loc("uCloudRadius"), MAX_CLOUDS, kCloudRad);
+  glUniform1fv(gSkyProg.loc("uCloudStretch"), MAX_CLOUDS, kCloudStretch);
 }
 
 static void DrawSkyToEnvMap(const Mat4 &proj) {

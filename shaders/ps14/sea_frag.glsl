@@ -32,7 +32,7 @@ uniform vec3  uSunDir;
 uniform vec3  uHorizonColor;
 uniform vec3  uWaterColor;
 
-#define MAX_CLOUDS 6             // must match sky_frag.glsl and tidebench.cxx
+#define MAX_CLOUDS 7             // must match sky_frag.glsl and tidebench.cxx
 uniform int   uCloudCount;
 uniform float uCloudAzim[MAX_CLOUDS];   // centre azimuth, radians
 uniform float uCloudElev[MAX_CLOUDS];   // centre elevation, radians
@@ -59,56 +59,105 @@ float waveHeight(vec2 p, float t) {
     return h;
 }
 
-// CLOUD SHADOWS: project the fragment onto the sky along its sun ray and
-// evaluate the SAME analytic puffs the sky renders. Where a cloud occludes
-// the sun, direct light dies on the water — the sea goes much darker there,
-// exactly under the cloud that casts it (physically consistent with the sky,
-// no textures, nothing that can grid or block).
-float cloudShadow(vec3 world, vec3 sd, vec3 dir) {
-    vec3 sunTan = sd - dir * dot(sd, dir);
-    float stLen = length(sunTan);
-    float shadow = 1.0;
-    if (stLen < 0.02) return 1.0;
-    sunTan /= stLen;
+// CLOUD SHADOWS: intersect each water fragment's sun ray with the same 620 m
+// cloud deck used by the sky. The eight 3D lobes, morph, and boundary erosion
+// below intentionally match sky_frag.glsl, so the moving shadow footprint
+// tracks the visible cloud instead of being a separate decorative mask.
+float cloudHash21(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+float cloudValueNoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = cloudHash21(i);
+    float b = cloudHash21(i + vec2(1.0, 0.0));
+    float c = cloudHash21(i + vec2(0.0, 1.0));
+    float d = cloudHash21(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+float cloudErosion(vec2 p) {
+    float n = 0.57 * cloudValueNoise(p);
+    p = mat2(0.80, -0.60, 0.60, 0.80) * p * 2.03 + 17.1;
+    n += 0.29 * cloudValueNoise(p);
+    p = mat2(0.80, -0.60, 0.60, 0.80) * p * 2.01 + 11.7;
+    return n + 0.14 * cloudValueNoise(p);
+}
+
+float cloudSmoothMax(float a, float b, float k) {
+    float h = clamp(0.5 + 0.5 * (a - b) / k, 0.0, 1.0);
+    return mix(b, a, h) + k * h * (1.0 - h);
+}
+
+float projectedCloudDensity(vec3 dir) {
+    float density = 0.0;
+    dir = normalize(dir);
     for (int i = 0; i < MAX_CLOUDS; i++) {
         if (i >= uCloudCount) break;
         vec3 c = vec3(cos(uCloudElev[i]) * cos(uCloudAzim[i]),
                       sin(uCloudElev[i]),
                       cos(uCloudElev[i]) * sin(uCloudAzim[i]));
-        float R = uCloudRadius[i];
-        float stretch = max(uCloudStretch[i], 1.0);
+        vec3 delta = dir - c;
         vec3 t1 = normalize(vec3(-sin(c.z), 0.0, cos(c.z)));
         vec3 t2 = normalize(cross(c, t1));
-        // march the sun ray up to the cloud's tangent-plane shell (~600m up)
-        vec3 hitDir = normalize(world + sunTan * (620.0 / max(sd.y, 0.15)));
-        vec3 rel = hitDir - c * dot(hitDir, c);
-        vec2 p = vec2(dot(rel, t1) / stretch, dot(rel, t2));
-        if (dot(p, p) > R * R * 2.4) continue;
-        const int PUFFS = 5;
-        vec2 off[PUFFS];
-        off[0] = vec2( 0.00,  0.00); off[1] = vec2( 0.78,  0.14); off[2] = vec2(-0.72,  0.20);
-        off[3] = vec2( 0.34, -0.20); off[4] = vec2(-0.34, -0.16);
-        float prad[PUFFS];
-        prad[0] = 0.60; prad[1] = 0.42; prad[2] = 0.38; prad[3] = 0.34; prad[4] = 0.32;
+        vec3 p = vec3(dot(delta, t1) / max(uCloudStretch[i], 1.0),
+                      dot(delta, t2), dot(delta, c));
+        float R = max(uCloudRadius[i], 0.001);
+        if (dot(p, p) > R * R * 3.1) continue;
+
+        const int PUFFS = 8;
+        vec3 offsets[PUFFS];
+        offsets[0] = vec3( 0.00,  0.00,  0.00);
+        offsets[1] = vec3( 0.68,  0.02,  0.03);
+        offsets[2] = vec3(-0.62,  0.10, -0.04);
+        offsets[3] = vec3( 0.25,  0.28,  0.06);
+        offsets[4] = vec3(-0.27,  0.35, -0.02);
+        offsets[5] = vec3( 0.05,  0.53,  0.08);
+        offsets[6] = vec3( 0.43, -0.12, -0.07);
+        offsets[7] = vec3(-0.40, -0.10,  0.05);
+        float radii[PUFFS];
+        radii[0] = 0.55; radii[1] = 0.39; radii[2] = 0.37; radii[3] = 0.34;
+        radii[4] = 0.31; radii[5] = 0.27; radii[6] = 0.30; radii[7] = 0.29;
+
         float local = 0.0;
         for (int j = 0; j < PUFFS; j++) {
-            vec2 q = p - off[j] * R;
+            vec3 q = p - offsets[j] * R;
             float ang = atan(q.y, q.x);
-            // keep in sync with sky_frag.glsl: same time-morph + silhouette
-            // wobble so the shadows track the visible cloud shapes exactly
-            float morph = 0.05 * sin(uTime * 0.11 + uCloudAzim[i] * 9.0 + float(j) * 1.7)
-                        + 0.04 * cos(uTime * 0.07 + uCloudAzim[i] * 5.0 + float(j) * 2.9);
-            float rj = R * prad[j] * (1.0
-                + 0.15 * sin(ang * 3.0 + uCloudAzim[i] * 7.0 + float(j) * 2.1)
-                + 0.09 * sin(ang * 5.0 - uCloudAzim[i] * 11.0 + float(j) * 4.7)
+            float morph = 0.045 * sin(uTime * 0.10 + uCloudAzim[i] * 9.0 + float(j) * 1.7)
+                        + 0.035 * cos(uTime * 0.065 + uCloudAzim[i] * 5.0 + float(j) * 2.9);
+            float rj = R * radii[j] * (1.0
+                + 0.11 * sin(ang * 3.0 + uCloudAzim[i] * 7.0 + float(j) * 2.1)
+                + 0.065 * sin(ang * 5.0 - uCloudAzim[i] * 11.0 + float(j) * 4.7)
                 + morph);
-            local = max(local, 1.0 - smoothstep(rj * 0.68, rj * 1.28, length(q)));
+            vec3 metric = vec3(q.x / rj, q.y / (rj * 0.92), q.z / (rj * 1.18));
+            local = cloudSmoothMax(local, 1.0 - smoothstep(0.62, 1.12, length(metric)), 0.10);
         }
-        float lenP = length(p) * (1.0 + 0.06 * sin(atan(p.y, p.x) * 4.0 + uCloudAzim[i] * 13.0));
-        local *= 1.0 - smoothstep(R * 0.95, R * 1.55, lenP) * 0.78;
-        shadow *= 1.0 - 0.85 * local;   // up to 85% direct-light loss per cloud
+
+        vec2 envelopeP = p.xy / R;
+        float ang = atan(envelopeP.y, envelopeP.x);
+        float envelopeRadius = length(envelopeP)
+            * (1.0 + 0.055 * sin(ang * 4.0 + uCloudAzim[i] * 13.0));
+        float envelope = 1.0 - smoothstep(0.96, 1.56, envelopeRadius);
+        float n = cloudErosion(envelopeP * 3.2 + vec2(uCloudAzim[i] * 5.1, i * 7.3));
+        float shoulder = 1.0 - smoothstep(0.10, 0.82, local);
+        local = smoothstep(0.055, 0.72, local * (0.76 + 0.40 * n - 0.20 * shoulder))
+               * envelope;
+        float baseCut = smoothstep(-0.78, -0.48, envelopeP.y + (n - 0.5) * 0.18);
+        local *= baseCut * (1.0 - 0.12 * smoothstep(0.48, 0.95, envelopeP.y));
+        density = cloudSmoothMax(density, clamp(local, 0.0, 1.0), 0.07);
     }
-    return clamp(shadow, 0.15, 1.0);
+    return clamp(density, 0.0, 1.0);
+}
+
+float cloudShadow(vec3 world, vec3 sd) {
+    float travel = max((620.0 - world.y) / max(sd.y, 0.15), 0.0);
+    vec3 hitDir = normalize(world - uEyePos + sd * travel);
+    float local = projectedCloudDensity(hitDir);
+    return clamp(exp(-local * 2.4), 0.12, 1.0);
 }
 
 // Three octaves of small analytic wavelets: extra normal detail that would
@@ -196,7 +245,7 @@ void main() {
     float warmGate = pow(sunAlign, 3.0);
 
     // cloud shadows: the projected puffs gate ALL direct sun terms
-    float shadow = cloudShadow(vWorld, sd, dir);
+    float shadow = cloudShadow(vWorld, sd);
 
     // MUCH darker water where the sun's light doesn't reach: off-path base
     // drops to near-black indigo, and cloud shadows multiply direct light
