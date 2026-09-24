@@ -4,12 +4,12 @@
 #
 # ONE executable: build/ElectroBench contains BOTH scenes (the OG GL 2.1 gun
 # scene and the GL 3.3 dusk-ocean scene). There is no second binary and no
-# child process: src/ps14_bench.cxx is linked straight into this program as a
+# child process: src/tidebench.cxx is linked straight into this program as a
 # scene module and handed the same SDL session by src/main.cxx.
 #
 # This file defines exactly ONE binary target ($(BIN)). There is no tidebench,
-# legacy or per-scene target, and no -DFUSED_INTO_OG second compile: the two
-# .cxx files are just the two object files of the one executable.
+# legacy or per-scene target, and no per-scene second compile: the two .cxx
+# files are just the two object files of the one executable.
 # ============================================================
 
 CXX ?= g++
@@ -25,18 +25,17 @@ STATIC_LDFLAGS :=
 
 BUILD := build
 
-OBJS := $(BUILD)/main.o $(BUILD)/ps14_bench.o
+OBJS := $(BUILD)/main.o $(BUILD)/tidebench.o
 
 BIN = $(BUILD)/ElectroBench$(STATIC_SUFFIX)
 
 # Obsolete second-executable artifacts. Older revisions built the ocean scene as
 # its own binary (build/TideBench, ElectroBenchPS14, the CMake tree in
-# build-debug/) or folded it in with a -DFUSED_INTO_OG object. Nothing builds
-# them any more, so `make` deletes any that an older build left behind.
+# build-debug/). Nothing builds them any more, so `make` deletes any that an
+# older build left behind.
 OBSOLETE := $(BUILD)/TideBench $(BUILD)/TideBench.exe \
             $(BUILD)/TideBench-static $(BUILD)/TideBench-static.exe \
             $(BUILD)/ElectroBenchPS14 $(BUILD)/ElectroBenchPS14.exe \
-            $(BUILD)/ps14_bench_fused.o \
             ElectroBenchPS14 ElectroBenchPS14.exe
 
 # ------------------------------------------------------------
@@ -151,10 +150,10 @@ $(BUILD):
 # ElectroBench (the single binary: OG gun scene + ocean scene)
 # ------------------------------------------------------------
 
-$(BUILD)/main.o: src/main.cxx | $(BUILD)
+$(BUILD)/main.o: src/main.cxx src/font_atlas.hxx | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@
 
-$(BUILD)/ps14_bench.o: src/ps14_bench.cxx | $(BUILD)
+$(BUILD)/tidebench.o: src/tidebench.cxx src/font_atlas.hxx | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@
 
 $(BIN): $(OBJS) | $(BUILD)

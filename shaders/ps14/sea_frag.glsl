@@ -32,7 +32,7 @@ uniform vec3  uSunDir;
 uniform vec3  uHorizonColor;
 uniform vec3  uWaterColor;
 
-#define MAX_CLOUDS 6             // must match sky_frag.glsl and ps14_bench.cxx
+#define MAX_CLOUDS 6             // must match sky_frag.glsl and tidebench.cxx
 uniform int   uCloudCount;
 uniform float uCloudAzim[MAX_CLOUDS];   // centre azimuth, radians
 uniform float uCloudElev[MAX_CLOUDS];   // centre elevation, radians
