@@ -133,6 +133,10 @@ float projectedCloudDensity(vec3 dir) {
                 + 0.11 * sin(ang * 3.0 + uCloudAzim[i] * 7.0 + float(j) * 2.1)
                 + 0.065 * sin(ang * 5.0 - uCloudAzim[i] * 11.0 + float(j) * 4.7)
                 + morph);
+            float lobeNoise = cloudErosion(vec2(
+                cos(ang) * 1.8 + uCloudAzim[i] * 3.7,
+                sin(ang) * 1.8 + float(j) * 2.1 + uCloudElev[i] * 9.0));
+            rj *= 0.91 + 0.16 * lobeNoise;
             vec3 metric = vec3(q.x / rj, q.y / (rj * 0.92), q.z / (rj * 1.18));
             local = cloudSmoothMax(local, 1.0 - smoothstep(0.62, 1.12, length(metric)), 0.10);
         }
@@ -143,8 +147,10 @@ float projectedCloudDensity(vec3 dir) {
             * (1.0 + 0.055 * sin(ang * 4.0 + uCloudAzim[i] * 13.0));
         float envelope = 1.0 - smoothstep(0.96, 1.56, envelopeRadius);
         float n = cloudErosion(envelopeP * 3.2 + vec2(uCloudAzim[i] * 5.1, i * 7.3));
+        float fine = cloudErosion(envelopeP * 7.8 + vec2(uCloudAzim[i] * 11.0, i * 13.0));
         float shoulder = 1.0 - smoothstep(0.10, 0.82, local);
-        local = smoothstep(0.055, 0.72, local * (0.76 + 0.40 * n - 0.20 * shoulder))
+        local = smoothstep(0.035, 0.78,
+               local * (0.70 + 0.30 * n + 0.12 * fine - 0.20 * shoulder))
                * envelope;
         float baseCut = smoothstep(-0.78, -0.48, envelopeP.y + (n - 0.5) * 0.18);
         local *= baseCut * (1.0 - 0.12 * smoothstep(0.48, 0.95, envelopeP.y));
@@ -224,6 +230,8 @@ void main() {
     // vertical glow (real water behaviour) instead of texel squares.
     float reflDist = dist;
     vec3 reflColor = textureLod(uSkyEnvTex, R, clamp(1.5 + reflDist * 0.0012, 1.0, 5.0)).rgb;
+    float offSun = 1.0 - smoothstep(0.08, 0.45, sunAlign);
+    reflColor *= mix(1.0, 0.46, offSun);
 
     // ---- fresnel: sea is a mirror at grazing angles, glass straight down ----
     float NdV = max(dot(N, V), 0.0);
@@ -249,8 +257,9 @@ void main() {
 
     // MUCH darker water where the sun's light doesn't reach: off-path base
     // drops to near-black indigo, and cloud shadows multiply direct light
-    body *= 0.50 + 0.55 * sunDiffuse * warmGate * shadow + 0.18 * sunDiffuse * (0.35 + 0.65 * shadow);
-    body *= mix(0.38, 1.0, warmGate * shadow + (1.0 - warmGate) * 0.35 * shadow); // dark off-path + shadowed body
+    body *= 0.44 + 0.40 * sunDiffuse * warmGate * shadow + 0.12 * sunDiffuse * (0.35 + 0.65 * shadow);
+    body *= mix(0.40, 1.0, warmGate * shadow + (1.0 - warmGate) * 0.25 * shadow); // dark off-path + shadowed body
+    body *= mix(0.52, 1.0, 1.0 - offSun);
     body += vec3(1.05, 0.42, 0.20) * pow(sunDiffuse, 3.0) * warmGate * shadow * 0.42; // warm slopes in the path
 
     // ---- slope-gated crest foam ----
@@ -298,7 +307,7 @@ void main() {
     // sparkle variance rides the ripple chaos.
     vec3 H = normalize(L + V);
     float NdH = max(dot(N, H), 0.0);
-    float pathGate = pow(sunAlign, 6.0) * 0.90 + 0.10;
+    float pathGate = pow(sunAlign, 10.0) * 0.96 + 0.04;
     float sparkleGate = (0.55 + 0.90 * chaos);
     float glint = pow(NdH, 520.0) * 6.0;              // pinpoint sparkles
     float glintMid = pow(NdH, 90.0) * 0.55;           // mid falloff keeps it grainy
