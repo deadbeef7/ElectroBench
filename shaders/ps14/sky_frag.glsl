@@ -114,7 +114,10 @@ vec4 cloudSample(vec3 dir) {
             float wobble = 0.11 * sin(ang * 3.0 + uCloudAzim[i] * 7.0 + float(j) * 2.1)
                          + 0.065 * sin(ang * 5.0 - uCloudAzim[i] * 11.0 + float(j) * 4.7)
                          + morph;
-            float rj = R * radii[j] * (1.0 + wobble);
+            float lobeNoise = erosionNoise(vec2(
+                cos(ang) * 1.8 + uCloudAzim[i] * 3.7,
+                sin(ang) * 1.8 + float(j) * 2.1 + uCloudElev[i] * 9.0));
+            float rj = R * radii[j] * (1.0 + wobble) * (0.91 + 0.16 * lobeNoise);
             // Wider than deep in the angular local frame: cloud shoulders stay
             // broad while the depth term gives the lobes a rounded volume.
             vec3 metric = vec3(q.x / rj, q.y / (rj * 0.92), q.z / (rj * 1.18));
@@ -131,9 +134,10 @@ vec4 cloudSample(vec3 dir) {
         // Noise modifies the boundary density rather than replacing it. Core
         // lobes stay solid; only the 0..1 shoulder gets cauliflower erosion.
         float n = erosionNoise(envelopeP * 3.2 + vec2(uCloudAzim[i] * 5.1, i * 7.3));
+        float fine = erosionNoise(envelopeP * 7.8 + vec2(uCloudAzim[i] * 11.0, i * 13.0));
         float shoulder = 1.0 - smoothstep(0.10, 0.82, local);
-        float breakup = 0.76 + 0.40 * n - 0.20 * shoulder;
-        local = smoothstep(0.055, 0.72, local * breakup) * envelope;
+        float breakup = 0.70 + 0.30 * n + 0.12 * fine - 0.20 * shoulder;
+        local = smoothstep(0.035, 0.78, local * breakup) * envelope;
 
         // Cumulus condensation line: soften the very bottom, preserve a mostly
         // level base, and let the upper lobes rise into rounded towers.
@@ -244,30 +248,31 @@ void main() {
         float direct = (0.10 + 1.55 * phase)
                      * (transmit0 + transmit1 + transmit2);
 
-        vec3 sunCol = vec3(1.38, 0.72, 0.36);
-        vec3 skyAmb = vec3(0.27, 0.36, 0.56);
-        float upLight = mix(0.22, 1.0, 0.62 * surface.y + 0.38 * heightWeight);
+        vec3 sunCol = vec3(1.24, 0.67, 0.34);
+        vec3 skyAmb = vec3(0.23, 0.30, 0.46);
+        float upLight = mix(0.20, 1.0, 0.62 * surface.y + 0.38 * heightWeight);
         float baseLight = 1.0 - 0.34 * surface.z;
 
-        vec3 col = vec3(0.82, 0.86, 0.94) * skyAmb * upLight * 0.92;
-        col += sunCol * (direct * 0.90 + multiple);
+        vec3 col = vec3(0.68, 0.71, 0.79) * skyAmb * upLight * 0.86;
+        col += sunCol * (direct * 0.74 + multiple * 0.62);
 
         // Thin, forward-facing edges transmit much more than the bulk. Gate it
         // by the thin-edge field and optical depth so it never becomes a rim.
         float silver = pow(max(sunAmount, 0.0), 6.0) * surface.w
                      * transmit0 * (0.35 + 0.85 * phase);
-        col += sunCol * silver * 0.34;
+        col += sunCol * silver * 0.22;
 
         // Dense droplets absorb more and read as powdery charcoal; flat bases
         // stay cool and dark while upper cauliflower remains blue-white.
         float powder = 1.0 - exp(-tau * 2.4);
-        col *= (1.0 - 0.17 * powder) * baseLight;
+        col *= (1.0 - 0.28 * powder) * baseLight;
 
         float apFade = (1.0 - smoothstep(0.018, 0.24, h)) * 0.44;
         col = mix(col, vec3(0.31, 0.17, 0.13), apFade);
+        col = mix(col, vec3(0.29, 0.31, 0.37), 0.14);
 
-        float alpha = 1.0 - exp(-cl * 2.65);
-        sky = mix(sky, col, clamp(alpha, 0.0, 0.985));
+        float alpha = 1.0 - exp(-cl * 2.15);
+        sky = mix(sky, col, clamp(alpha * 0.86, 0.0, 0.90));
     }
 
     // compact orange disc with a TIGHT halo — the reference sun is a defined
