@@ -94,12 +94,18 @@ float cloudShadow(vec3 world, vec3 sd, vec3 dir) {
         for (int j = 0; j < PUFFS; j++) {
             vec2 q = p - off[j] * R;
             float ang = atan(q.y, q.x);
+            // keep in sync with sky_frag.glsl: same time-morph + silhouette
+            // wobble so the shadows track the visible cloud shapes exactly
+            float morph = 0.05 * sin(uTime * 0.11 + uCloudAzim[i] * 9.0 + float(j) * 1.7)
+                        + 0.04 * cos(uTime * 0.07 + uCloudAzim[i] * 5.0 + float(j) * 2.9);
             float rj = R * prad[j] * (1.0
                 + 0.15 * sin(ang * 3.0 + uCloudAzim[i] * 7.0 + float(j) * 2.1)
-                + 0.09 * sin(ang * 5.0 - uCloudAzim[i] * 11.0 + float(j) * 4.7));
+                + 0.09 * sin(ang * 5.0 - uCloudAzim[i] * 11.0 + float(j) * 4.7)
+                + morph);
             local = max(local, 1.0 - smoothstep(rj * 0.68, rj * 1.28, length(q)));
         }
-        local *= 1.0 - smoothstep(R * 0.95, R * 1.55, length(p)) * 0.78;
+        float lenP = length(p) * (1.0 + 0.06 * sin(atan(p.y, p.x) * 4.0 + uCloudAzim[i] * 13.0));
+        local *= 1.0 - smoothstep(R * 0.95, R * 1.55, lenP) * 0.78;
         shadow *= 1.0 - 0.85 * local;   // up to 85% direct-light loss per cloud
     }
     return clamp(shadow, 0.15, 1.0);

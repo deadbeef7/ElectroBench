@@ -86,11 +86,12 @@ float cloudDensityOnly(vec3 dir) {
 }
 
 // Full evaluation at the visible point. Returns density in [0,1] plus the
-// height-inside-mass factor for the ambient gradient and the silhouette-edge
-// softness for edge detail.
-float cloudField(vec3 dir, out float upness, out float edge) {
+// height-inside-mass factor for the ambient gradient, the silhouette-edge
+// softness for edge detail and the base-coverage factor for flat undersides.
+float cloudField(vec3 dir, out float upness, out float edge, out float baseN) {
     float density = 0.0;
     float heightSum = 0.0;
+    float baseSum = 0.0;
     float weight = 0.0;
     float e = 1.0;
 
@@ -126,19 +127,31 @@ float cloudField(vec3 dir, out float upness, out float edge) {
             // branch, the shapes stay big and smooth at screen resolution,
             // and there is zero texture content so nothing can grid/block).
             float ang = atan(q.y, q.x);
+            // slow time-morph: puffs breathe over ~a minute so the banks are
+            // never static between two runs of the benchmark
+            float morph = 0.05 * sin(uTime * 0.11 + uCloudAzim[i] * 9.0 + float(j) * 1.7)
+                        + 0.04 * cos(uTime * 0.07 + uCloudAzim[i] * 5.0 + float(j) * 2.9);
             float rj = R * prad[j] * (1.0
                 + 0.15 * sin(ang * 3.0 + uCloudAzim[i] * 7.0 + float(j) * 2.1)
-                + 0.09 * sin(ang * 5.0 - uCloudAzim[i] * 11.0 + float(j) * 4.7));
+                + 0.09 * sin(ang * 5.0 - uCloudAzim[i] * 11.0 + float(j) * 4.7)
+                + morph);
             float dj = length(q);
             local = max(local, 1.0 - smoothstep(rj * 0.68, rj * 1.28, dj));
         }
+        // ragged envelope: a low-frequency angular wobble on the dissolve
+        // radius tears the silhouette edge organically
+        float lenP = length(p) * (1.0 + 0.06 * sin(atan(p.y, p.x) * 4.0 + uCloudAzim[i] * 13.0));
         // overall envelope fade so the long ends dissolve into the sky
-        local *= 1.0 - smoothstep(R * 0.95, R * 1.55, length(p)) * 0.78;
+        local *= 1.0 - smoothstep(R * 0.95, R * 1.55, lenP) * 0.78;
 
         if (local > 0.001) {
             // height inside the mass: drives the skylight-from-above gradient
             float hn = clamp(p.y / R + 0.5, 0.0, 1.0);
             heightSum += hn * local;
+            // coverage near the bottom of the mass: real cumulus have flat,
+            // darker grey undersides where the base condensation sits
+            float baseT = 1.0 - smoothstep(-R * 0.45, -R * 0.05, p.y);
+            baseSum += baseT * local;
             weight += local;
             e = min(e, local);
         }
@@ -146,6 +159,7 @@ float cloudField(vec3 dir, out float upness, out float edge) {
     }
 
     upness = weight > 0.001 ? heightSum / weight : 0.0;
+    baseN = weight > 0.001 ? baseSum / weight : 0.0;
     edge = e;
     return clamp(density, 0.0, 1.0);
 }
@@ -193,8 +207,8 @@ void main() {
     sky += vec3(0.20, 0.10, 0.115) * belt * 0.55;
 
     // ---- explicit volumetric clouds composite over the glow ----
-    float upn, edgeF;
-    float cl = cloudField(dir, upn, edgeF);
+    float upn, edgeF, baseN;
+    float cl = cloudField(dir, upn, edgeF, baseN);
 
     if (cl > 0.004) {
         // ---- self-shadowing: integrate optical depth toward the sun ----
@@ -236,6 +250,9 @@ void main() {
 
         // powder effect: dense cores read slightly darker even when lit
         col *= 1.0 - 0.20 * cl * cl;
+        // flat grey bases: darken where the fragment sits in the bottom band
+        // of the mass (real cumulus undersides)
+        col *= 1.0 - 0.28 * baseN;
 
         // aerial perspective: banks near the horizon sink into the haze colour
         float apFade = (1.0 - smoothstep(0.015, 0.22, h)) * 0.40;

@@ -38,6 +38,16 @@
 #include "../lib/asset_path.hxx"
 
 // ------------------------------------------------------------------ constants
+#ifdef FUSED_INTO_OG
+// Fused build: TideBench is compiled into the OG ElectroBench binary and runs
+// as the second scene after it. main() stays in main.cxx; this file exports
+// RunTideBenchFused() instead. Build both objects on one g++ command line
+// with -DFUSED_INTO_OG ONLY for the OG binary (see the Makefile).
+#define PS14_MAIN_NAME RunTideBenchFused
+#else
+#define PS14_MAIN_NAME main
+#endif
+
 #define NAME "ElectroBench - TideBench"
 #define WIDTH 1366
 #define HEIGHT 768
@@ -55,10 +65,10 @@ static const int kRippleSize = 256;      // ripple gradient texture size
 // azimuthal stretch (>1 = elongated). Small radii + stretch give the wide,
 // shallow masses the reference shows; the mid elevations keep them in the
 // upper sky instead of hugging the horizon.
-static const float kCloudAzim[MAX_CLOUDS] = {0.35f, 0.78f, 5.92f, 2.20f, 3.95f};
-static const float kCloudElev[MAX_CLOUDS] = {0.245f, 0.330f, 0.200f, 0.290f, 0.360f};
-static const float kCloudRad[MAX_CLOUDS]  = {0.042f, 0.034f, 0.038f, 0.033f, 0.031f};
-static const float kCloudStretch[MAX_CLOUDS] = {2.8f, 2.5f, 2.6f, 2.3f, 2.2f};
+static const float kCloudAzim[MAX_CLOUDS] = {0.35f, 0.78f, 5.92f, 2.20f, 3.95f, 4.60f};
+static const float kCloudElev[MAX_CLOUDS] = {0.245f, 0.330f, 0.200f, 0.290f, 0.360f, 0.150f};
+static const float kCloudRad[MAX_CLOUDS]  = {0.042f, 0.034f, 0.038f, 0.033f, 0.031f, 0.020f};
+static const float kCloudStretch[MAX_CLOUDS] = {2.8f, 2.5f, 2.6f, 2.3f, 2.2f, 3.6f};
 static const int kFoamSize = 256;        // foam texture size
 
 // Slow wind drift: cloud azimuths crawl a little every second so the banks
@@ -510,7 +520,23 @@ static double gStartTime = 0.0;
 static bool gResultsShown = false;
 static double gResultsElapsed = 0.0, gResultsFps = 0.0, gResultsScore = 0.0;
 static double gResultsShownAt = 0.0;
+#ifdef FUSED_INTO_OG
+// The fused OG binary shows the combined per-scene + average screen right
+// after this one, so keep the single-scene display short.
+static const double kResultsScreenSeconds = 4.0;
+#else
 static const double kResultsScreenSeconds = 10.0;
+#endif
+#ifdef FUSED_INTO_OG
+// Label shown on this scene's results screen (distinguishes it from the OG's).
+static const char *gSceneName = "TideBench";
+// Final score of this scene, read by the OG's fused main for the combined
+// per-scene + average results screen.
+double gFusedTideScore = 0.0;
+// Fused mode: when the results screen is done, hand control back to the OG's
+// main instead of exiting the process (the OG then shows the combined screen).
+static bool gFusedDone = false;
+#endif
 static int gFrame = 0, gFps = 0, gFrameAccum = 0;
 static double gFpsTimer = 0.0;
 static double gSmoothFps = 0.0;
@@ -735,10 +761,12 @@ static void RenderText(float x, float y, const char *text, float scale = 2.0f) {
     if (c < 32 || c > 126) { pen += 8.0f * scale * 0.75f; continue; }
     int g = c - 32;
     int col = g % 16, row = g / 16;
-    float u0 = col * 8.0f / (float)kHudTexW;
-    float v0 = row * 8.0f / (float)kHudTexH;
-    float u1 = (col + 1) * 8.0f / (float)kHudTexW;
-    float v1 = (row + 1) * 8.0f / (float)kHudTexH;
+    // half-texel UV inset: with LINEAR filtering, full-cell UVs bleed the
+    // neighbouring glyphs' edge texels into each glyph — the janky fringes.
+    float u0 = (col * 8.0f + 0.5f) / (float)kHudTexW;
+    float v0 = (row * 8.0f + 0.5f) / (float)kHudTexH;
+    float u1 = (col * 8.0f + 7.5f) / (float)kHudTexW;
+    float v1 = (row * 8.0f + 7.5f) / (float)kHudTexH;
     float x0 = pen, y0 = y, x1 = pen + 8.0f * scale, y1 = y + 8.0f * scale;
     // two triangles, CCW in screen space (y down)
     auto push = [&](float px, float py, float u, float v) {
@@ -882,7 +910,11 @@ static void RenderResults() {
   std::snprintf(big, sizeof(big), "SCORE : %.0f", gResultsScore);
   std::snprintf(timeLine, sizeof(timeLine), "Time : %.1fs   Average FPS : %.1f",
                 gResultsElapsed, gResultsFps);
+#ifdef FUSED_INTO_OG
+  std::snprintf(hint, sizeof(hint), "%s score", gSceneName);
+#else
   std::snprintf(hint, sizeof(hint), "Benchmark complete - ESC to exit");
+#endif
 
   float cx = 0.5f * (float)gWindowWidth;
   float cy = 0.5f * (float)gWindowHeight;
@@ -902,8 +934,12 @@ static void RenderScene() {
     RenderResults();
     SDL_GL_SwapWindow(gWindow);
     if (now - gResultsShownAt >= kResultsScreenSeconds) {
+#ifdef FUSED_INTO_OG
+      gFusedDone = true; // back to the OG's combined results screen
+#else
       SDL_Quit();
       std::exit(0);
+#endif
     }
     return;
   }
@@ -982,6 +1018,9 @@ static void RenderScene() {
     std::printf("Benchmark Results - Time : %.1fs, Average FPS : %.1f, Score : %.0f\n",
                 elapsed, fps, score);
     std::fflush(stdout);
+#ifdef FUSED_INTO_OG
+    gFusedTideScore = score; // for the OG's combined results screen
+#endif
     // Hand over to the results screen: the scene is cleared and the score is
     // drawn on the window for kResultsScreenSeconds (ESC exits immediately).
     gResultsElapsed = elapsed;
@@ -1075,7 +1114,16 @@ static void WriteScreenshotPPM(const char *path) {
 }
 
 // ------------------------------------------------------------------- main
+#ifdef FUSED_INTO_OG
+// Entry point used by the fused OG binary: runs the TideBench scene after the
+// OG scene on the same SDL session. Sets *gaveUp = true when the GL 3.3 core
+// context could not be created and the scene was skipped.
+int RunTideBenchFused(bool *gaveUpOut) {
+  if (gaveUpOut) *gaveUpOut = false;
+#else
 int main(int argc, char **argv) {
+#endif
+#ifndef FUSED_INTO_OG
   for (int i = 1; i < argc; i++) {
     if (!std::strcmp(argv[i], "--screenshot") && i + 1 < argc) {
       gScreenshotPath = argv[++i];
@@ -1093,6 +1141,7 @@ int main(int argc, char **argv) {
       return EXIT_FAILURE;
     }
   }
+#endif
 
   if (SDL_Init(SDL_INIT_VIDEO) < 0) {
     std::fprintf(stderr, "SDL could not initialize! SDL_Error: %s\n", SDL_GetError());
@@ -1125,8 +1174,17 @@ int main(int argc, char **argv) {
   }
   gContext = SDL_GL_CreateContext(gWindow);
   if (!gContext) {
+#ifdef FUSED_INTO_OG
+    // No GL 3.3 core context on this device: skip the scene, keep the OG's result.
+    std::printf("TideBench: OpenGL 3.3 core context unavailable — skipping this scene\n");
+    std::fflush(stdout);
+    SDL_Quit();
+    if (gaveUpOut) *gaveUpOut = true;
+    return 1;
+#else
     std::fprintf(stderr, "OpenGL 3.3 context could not be created! SDL_Error: %s\n", SDL_GetError());
     return EXIT_FAILURE;
+#endif
   }
   SDL_GL_SetSwapInterval(0); // unclamped, like a benchmark should be
 
@@ -1143,7 +1201,11 @@ int main(int argc, char **argv) {
   gFpsTimer = gStartTime;
 
   SDL_Event event;
+#ifdef FUSED_INTO_OG
+  while (!gQuit && !gFusedDone) {
+#else
   while (!gQuit) {
+#endif
     while (SDL_PollEvent(&event) != 0) {
       if (event.type == SDL_QUIT) {
         gQuit = true;
@@ -1166,5 +1228,8 @@ int main(int argc, char **argv) {
   SDL_GL_DeleteContext(gContext);
   SDL_DestroyWindow(gWindow);
   SDL_Quit();
+#ifdef FUSED_INTO_OG
+  if (gQuit) return 2; // user quit during this scene: exit the whole bench
+#endif
   return 0;
 }
