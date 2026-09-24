@@ -38,7 +38,7 @@
 #include "../lib/asset_path.hxx"
 
 // ------------------------------------------------------------------ constants
-#define NAME "ElectroBench - DuskTide"
+#define NAME "ElectroBench - TideBench"
 #define WIDTH 1366
 #define HEIGHT 768
 #define BENCH_MILLISECONDS 45000 // 45 s like the original ElectroBench
@@ -60,6 +60,18 @@ static const float kCloudElev[MAX_CLOUDS] = {0.245f, 0.330f, 0.200f, 0.290f, 0.3
 static const float kCloudRad[MAX_CLOUDS]  = {0.042f, 0.034f, 0.038f, 0.033f, 0.031f};
 static const float kCloudStretch[MAX_CLOUDS] = {2.8f, 2.5f, 2.6f, 2.3f, 2.2f};
 static const int kFoamSize = 256;        // foam texture size
+
+// Slow wind drift: cloud azimuths crawl a little every second so the banks
+// slide across the sky. Both the sky pass and the sea's cloud shadows upload
+// the same drifted array, so shadows always sit exactly under their clouds.
+// Signs chosen so no bank drifts into the sun's azimuth (~0.54 rad): the
+// glitter path and sun disc must survive the whole run.
+static const float kCloudDrift[MAX_CLOUDS] = {-0.004f, 0.004f, -0.003f, 0.003f, 0.0035f};
+static float gCloudAzimDrift[MAX_CLOUDS];
+static void UpdateCloudAzim(float t) {
+  for (int i = 0; i < MAX_CLOUDS; i++)
+    gCloudAzimDrift[i] = kCloudAzim[i] + kCloudDrift[i] * t;
+}
 
 // ------------------------------------------------------------ tiny math utils
 struct Vec3 {
@@ -492,6 +504,13 @@ static int gXOld = 0, gYOld = 0;
 static int gCurrentScroll = 10;
 
 static double gStartTime = 0.0;
+
+// Results screen: when the run ends the scene is cleared and the final score
+// is drawn on the window for a few seconds (ESC skips the wait).
+static bool gResultsShown = false;
+static double gResultsElapsed = 0.0, gResultsFps = 0.0, gResultsScore = 0.0;
+static double gResultsShownAt = 0.0;
+static const double kResultsScreenSeconds = 10.0;
 static int gFrame = 0, gFps = 0, gFrameAccum = 0;
 static double gFpsTimer = 0.0;
 static double gSmoothFps = 0.0;
@@ -600,7 +619,7 @@ static void BindSkyUniforms(const Mat4 &vp) {
     // 5 clouds spread around the horizon ring; three sit in the camera's
     // sun-facing view, two populate the rest of the sky for the orbit.
     glUniform1i(gSkyProg.loc("uCloudCount"), MAX_CLOUDS);
-    glUniform1fv(gSkyProg.loc("uCloudAzim"), MAX_CLOUDS, kCloudAzim);
+    glUniform1fv(gSkyProg.loc("uCloudAzim"), MAX_CLOUDS, gCloudAzimDrift);
     glUniform1fv(gSkyProg.loc("uCloudElev"), MAX_CLOUDS, kCloudElev);
     glUniform1fv(gSkyProg.loc("uCloudRadius"), MAX_CLOUDS, kCloudRad);
     glUniform1fv(gSkyProg.loc("uCloudStretch"), MAX_CLOUDS, kCloudStretch);
@@ -703,15 +722,14 @@ static void BuildFontAtlas() {
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 }
 
-static void RenderText(float x, float y, const char *text) {
+static void RenderText(float x, float y, const char *text, float scale = 2.0f) {
   // Append one quad per glyph to a streaming buffer (position xy + uv).
   // Glyph quads are CCW in pixel space; the HUD vertex shader maps that to CW
   // in clip space (y-down pixel -> y-up NDC), so face culling must be off
   // while drawing text or every glyph is discarded.
   static std::vector<float> buf;
   buf.clear();
-  float pen = x;
-  const float scale = 2.0f; // 8px glyphs -> 16px on screen
+  float pen = x; // 8px glyphs scaled up (default 2 -> 16px on screen)
   for (const char *p = text; *p; ++p) {
     unsigned char c = (unsigned char)*p;
     if (c < 32 || c > 126) { pen += 8.0f * scale * 0.75f; continue; }
@@ -813,7 +831,7 @@ static void DrawSea(const Mat4 &view, double timeSec, const Vec3 &eye) {
   // the sky along sun rays and evaluates the SAME analytic puffs, so the
   // cloud shadows on the water land exactly under the clouds that cast them.
   glUniform1i(gSeaProg.loc("uCloudCount"), MAX_CLOUDS);
-  glUniform1fv(gSeaProg.loc("uCloudAzim"), MAX_CLOUDS, kCloudAzim);
+  glUniform1fv(gSeaProg.loc("uCloudAzim"), MAX_CLOUDS, gCloudAzimDrift);
   glUniform1fv(gSeaProg.loc("uCloudElev"), MAX_CLOUDS, kCloudElev);
   glUniform1fv(gSeaProg.loc("uCloudRadius"), MAX_CLOUDS, kCloudRad);
   glUniform1fv(gSeaProg.loc("uCloudStretch"), MAX_CLOUDS, kCloudStretch);
@@ -854,12 +872,44 @@ static void RenderHUD() {
   RenderText(16.0f, 16.0f, line1);
 }
 
+// Results screen: clear the window and show the final score big and centred.
+static void RenderResults() {
+  glViewport(0, 0, gWindowWidth, gWindowHeight);
+  glClearColor(0.012f, 0.012f, 0.022f, 1.0f);
+  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+  char big[96], timeLine[128], hint[96];
+  std::snprintf(big, sizeof(big), "SCORE : %.0f", gResultsScore);
+  std::snprintf(timeLine, sizeof(timeLine), "Time : %.1fs   Average FPS : %.1f",
+                gResultsElapsed, gResultsFps);
+  std::snprintf(hint, sizeof(hint), "Benchmark complete - ESC to exit");
+
+  float cx = 0.5f * (float)gWindowWidth;
+  float cy = 0.5f * (float)gWindowHeight;
+  RenderText(cx - (float)std::strlen(big) * 8.0f * 2.0f, cy - 42.0f, big, 4.0f);
+  RenderText(cx - (float)std::strlen(timeLine) * 8.0f, cy + 30.0f, timeLine);
+  RenderText(cx - (float)std::strlen(hint) * 8.0f, cy + 64.0f, hint);
+}
+
 // Renders the scene and calculates FPS (same pattern as the original bench).
 static void WriteScreenshotPPM(const char *path);
 
 static void RenderScene() {
   double now = NowSeconds();
+
+  // ---- results screen: scene cleared, score on the window, then exit ----
+  if (gResultsShown) {
+    RenderResults();
+    SDL_GL_SwapWindow(gWindow);
+    if (now - gResultsShownAt >= kResultsScreenSeconds) {
+      SDL_Quit();
+      std::exit(0);
+    }
+    return;
+  }
+
   float t = (float)(now - gStartTime); // camera time is benchmark-relative so --shot-times are deterministic
+  UpdateCloudAzim(t);
 
   // ---- camera ----
   if (gAutoCam) {
@@ -932,8 +982,13 @@ static void RenderScene() {
     std::printf("Benchmark Results - Time : %.1fs, Average FPS : %.1f, Score : %.0f\n",
                 elapsed, fps, score);
     std::fflush(stdout);
-    SDL_Quit();
-    std::exit(0);
+    // Hand over to the results screen: the scene is cleared and the score is
+    // drawn on the window for kResultsScreenSeconds (ESC exits immediately).
+    gResultsElapsed = elapsed;
+    gResultsFps = fps;
+    gResultsScore = score;
+    gResultsShownAt = now;
+    gResultsShown = true;
   }
 }
 
