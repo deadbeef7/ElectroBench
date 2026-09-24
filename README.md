@@ -1,5 +1,5 @@
 # ElectroBench
-ElectroBench is a 45-second long benchmark specifiacally designed to run on old and modern PCs, don't critise it by it using OpenGL 2.1, and GLSL 1.2, Even office PCs have low scores at it.
+ElectroBench is a 45+60 second long dual scene benchmark specifiacally designed to run on old and modern PCs, don't critise it by it using OpenGL 2.1, and GLSL 1.2, Even office PCs have low scores at it.
 It uses OpenGL 2.1/3.3, and C++, and uses make for compilation. It is designed to be a replacement for glmark (even though it is great and I used it before).
 
 It ships **one** executable that contains **both** scenes — no second binary, no child process:
@@ -7,7 +7,7 @@ It ships **one** executable that contains **both** scenes — no second binary, 
 | Scene | Renderer | Contents |
 |---|---|---|
 | **ElectroBench** (the OG) | OpenGL 2.1 / GLSL 1.2, fixed-function pipeline | **110 UZIs** on a shadow-mapped concrete floor, lit by a warm sun |
-| **Dusk Ocean** (scene 2) | OpenGL 3.3 core, pixel-shader workloads | A dusk ocean under volumetric clouds (3DMark2001 SE "Nature" recreation) |
+| **TideBench** (scene 2) | OpenGL 3.3 core, pixel-shader workloads | A dusk ocean under volumetric clouds (3DMark2001 SE "Nature" recreation) |
 
 
 
@@ -66,7 +66,7 @@ into the scene), `ESC` quits. The FPS counter is a true frame-count average (SDL
 every frame accounted) — the on-screen value is a smoothed window, the final score uses **all** frames
 of the run.
 
-# Scene 2 — the dusk ocean
+# Scene 2 — TideBench
 
 The dusk ocean is **scene 2 of the same ElectroBench binary** and is written in **OpenGL 3.3 core**.
 It pushes a heavy, realistic dusk-ocean workload —
@@ -114,8 +114,7 @@ Headless visual-test flags (used to verify the render output in CI-like environm
 
 # How the score is calculated ?
 
-Both scenes use the same formula, computed from the **average FPS over the whole run** (all
-frames, not the last second):
+Both scenes use the same formula, computed from the **average FPS over the whole run**:
 
 ```
 score = fps² × 2
@@ -148,7 +147,7 @@ first, then probes an OpenGL 3.3 core context:
   OG result stands, so the binary still runs on the ancient hardware it targets
 
 Scene selection flags: `--og-only` runs just the gun scene even on GL 3.3-capable devices,
-`--scene-only` runs just the ocean scene (handy for the headless visual test).
+`--scene-only` runs just the ocean scene.
 
 # Windows (MSYS2)
 
