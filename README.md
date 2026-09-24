@@ -2,9 +2,9 @@
 ElectroBench is a 45-second long benchmark specifiacally designed to run on old and modern PCs, don't critise it by it using OpenGL 2.1, and GLSL 1.2, Even office PCs have low scores at it.
 It uses OpenGL 2.1/3.3, and C++, and uses make for compilation. It is designed to be a replacement for glmark (even though it is great and I used it before).
 
-It ships **two** benchmarks :
+It ships **one** executable that contains **both** scenes — no second binary, no child process:
 
-| Benchmark | Renderer | Scene |
+| Scene | Renderer | Contents |
 |---|---|---|
 | **ElectroBench** (the OG) | OpenGL 2.1 / GLSL 1.2, fixed-function pipeline | **110 UZIs** on a shadow-mapped concrete floor, lit by a warm sun |
 | **TideBench** | OpenGL 3.3 core, pixel-shader workloads | A dusk ocean under volumetric clouds (3DMark2001 SE "Nature" recreation) |
@@ -21,7 +21,7 @@ Close-up — mags resting on the ground, shadows clearly visible under each gun:
 
 ![Close-up: UZIs with mags on the ground and per-gun shadows](docs/screenshots/uzi_close.png)
 
-The PS1.4 sea benchmark — long cloud banks with sunward silver linings, a narrow orange glitter path down the middle of the sea, dark blue-purple water either side, raised swell banks:
+The TideBench ocean scene — long cloud banks with sunward silver linings, a narrow orange glitter path down the middle of the sea, dark blue-purple water either side, raised swell banks:
 
 ![TideBench dusk ocean benchmark](docs/screenshots/ps14_dusk_t36.png)
 
@@ -31,18 +31,15 @@ Dependencies : `make`, `g++`, SDL2, GLEW, GLU (+ dev headers). On Debian/Ubuntu 
 `libsdl2-dev libglew-dev libglu1-mesa-dev`; on Windows use MSYS2 (`pacman -S mingw-w64-x86_64-{gcc,SDL2,glew}`); on macOS `brew install sdl2 glew` (you may need `brew install make` for a GNU make).
 
 ```sh
-make            # builds BOTH benchmarks
-make legacy     # only the OG GL 2.1 benchmark
-make tidebench   # only TideBench
+make            # builds the single ElectroBench binary (both scenes linked in)
+make run        # builds it and runs it
 ```
 
-Binaries land in `build/` :
+The one binary lands in `build/` :
 
 ```sh
-./build/ElectroBench          # OG 2.1 benchmark (Linux / macOS)
+./build/ElectroBench          # Linux / macOS
 ./build/ElectroBench.exe      # Windows (MSYS2)
-./build/TideBench             # dusk ocean benchmark (Linux / macOS)
-./build/TideBench.exe         # Windows (MSYS2)
 ```
 
 ## Static build
@@ -51,9 +48,7 @@ Pass `STATIC=1` to link everything statically (`-static -static-libgcc -static-l
 dependency archives) — handy for dropping a single exe on old machines:
 
 ```sh
-make STATIC=1            # -> build/ElectroBench-static(.exe), build/TideBench-static(.exe)
-make STATIC=1 legacy     # just the OG, statically linked
-make STATIC=1 tidebench   # just TideBench, statically linked
+make STATIC=1            # -> build/ElectroBench-static(.exe)
 ```
 
 This requires the **static archives** of every dependency (e.g. MSYS2's `mingw-w64-x86_64-SDL2` ships
@@ -71,9 +66,10 @@ into the scene), `ESC` quits. The FPS counter is a true frame-count average (SDL
 every frame accounted) — the on-screen value is a smoothed window, the final score uses **all** frames
 of the run.
 
-# TideBench — the dusk ocean benchmark
+# TideBench — the dusk ocean scene
 
-TideBench is written in **OpenGL 3.3 core** and pushes a heavy, realistic dusk-ocean workload —
+TideBench is **scene 2 of the same ElectroBench binary** and is written in **OpenGL 3.3 core**.
+It pushes a heavy, realistic dusk-ocean workload —
 high-resolution environment reflections, a dense displaced ocean mesh, and a real volumetric
 light-transport model for the clouds. It is heavy **on purpose**: the goal is to push old and new
 hardware alike, so low single-digit FPS on a low-end machine means the workload is doing its job.
@@ -99,12 +95,12 @@ What it renders :
 - A clean in-engine **FPS readout** (the score belongs to the final results line) and the same score
   formula as the main benchmark, over a 45 second run
 
-Build and run it with :
+Run the ocean scene on its own with :
 
 ```sh
 make
-./build/TideBench          # Linux / macOS
-./build/TideBench.exe      # Windows (MSYS2)
+./build/ElectroBench --tide-only          # Linux / macOS
+./build/ElectroBench.exe --tide-only      # Windows (MSYS2)
 ```
 
 Controls : `F` toggles the automatic fly-over camera, long-click + move orbits the camera, mouse wheel zooms, arrow keys look around, `ESC` quits.
@@ -112,13 +108,13 @@ Controls : `F` toggles the automatic fly-over camera, long-click + move orbits t
 Headless visual-test flags (used to verify the render output in CI-like environments):
 
 ```sh
-./build/TideBench --width 960 --screenshot /tmp/shot.ppm --shot-times 6,20,38
-./build/ElectroBench --screenshot /tmp/shot.ppm --shot-time 3
+./build/ElectroBench --tide-only --width 960 --screenshot /tmp/shot.ppm --shot-times 6,20,38
+./build/ElectroBench --og-only --screenshot /tmp/shot.ppm --shot-time 3
 ```
 
 # How the score is calculated ?
 
-Both benchmarks use the same formula, computed from the **average FPS over the whole run** (all
+Both scenes use the same formula, computed from the **average FPS over the whole run** (all
 frames, not the last second):
 
 ```
@@ -126,22 +122,23 @@ score = fps² × 2
 ```
 
 It is linear in nothing: twice the frames means twice the score, twice the load means a quarter of
-it — a fair curve from office PCs to gaming rigs. Both binaries print
-`Time / Average FPS / Score` at the end, and the OG also shows live FPS + score in its HUD.
+it — a fair curve from office PCs to gaming rigs. The binary prints
+`Time / Average FPS / Score` at the end, and the OG scene also shows live FPS + score in its HUD.
 
 # The results screen
 
-When the 45/60 second run ends, **the benchmark clears the window and prints the final score
-on screen** — a big centred score with the time and average FPS underneath — and leaves it up
-for about ten seconds (or until you press `ESC`). The same line is also printed to stdout.
+When a scene's 45/60 second run ends, **the benchmark clears the window and prints that scene's
+score on screen** — a big centred score with the time and average FPS underneath — and leaves it
+up for a few seconds (the final combined screen for about ten, or until you press `ESC`).
+The same line is also printed to stdout.
 
 ```sh
 Benchmark Results - Time : 45.0s, Average FPS : 12.4, Score : 308
 ```
 
-# One binary, two scenes
+# One executable, two scenes
 
-`build/ElectroBench` now contains **both scenes**. It runs the OG 60-second gun benchmark
+`build/ElectroBench` is the **only** binary, and it contains both scenes. It runs the OG 60-second gun scene
 first, then probes an OpenGL 3.3 core context:
 
 - **found** — TideBench (the dusk ocean) runs as scene 2 on the same session, and the final
@@ -150,12 +147,12 @@ first, then probes an OpenGL 3.3 core context:
 - **not found** (GL 2.1-only drivers, old iGPUs) — TideBench skips itself cleanly and the OG
   result stands, so the binary still runs on the ancient hardware it targets
 
-Pass `--og-only` to run just the gun scene even on GL 3.3-capable devices.
-`./build/TideBench` remains available to run the ocean scene on its own.
+Scene selection flags: `--og-only` runs just the gun scene even on GL 3.3-capable devices,
+`--tide-only` runs just the ocean scene (handy for the headless visual test).
 
 # Windows (MSYS2)
 
-On Windows the easiest route is [MSYS2](https://www.msys2.org/), which provides gcc, cmake and prebuilt SDL2/GLEW/GLU packages. Both benchmarks build and run unmodified.
+On Windows the easiest route is [MSYS2](https://www.msys2.org/), which provides gcc, cmake and prebuilt SDL2/GLEW/GLU packages. The single binary builds and runs unmodified.
 
 **1. Install MSYS2** from [msys2.org](https://www.msys2.org/) to the default `C:\msys64`.
 
@@ -164,20 +161,17 @@ On Windows the easiest route is [MSYS2](https://www.msys2.org/), which provides 
 ```sh
 g++ -std=c++17 -O2 -march=x86-64 -mtune=generic \
     src/main.cxx \
+    src/ps14_bench.cxx \
     -o build/ElectroBench.exe \
     $(pkg-config --cflags --libs sdl2) \
     -lglew32 \
     -lglu32 \
     -lopengl32
-
-# PS1.4 sea benchmark (GL 3.3, no GLU needed)
-g++ -std=c++17 -O2 -march=x86-64 -mtune=generic \
-    src/ps14_bench.cxx \
-    -o build/TideBench.exe \
-    $(pkg-config --cflags --libs sdl2) \
-    -lglew32 \
-    -lopengl32
 ```
+
+Both scenes are linked into that one binary: `src/ps14_bench.cxx` is a scene module (it has no
+`main()` of its own) that `src/main.cxx` hands the same SDL session to. To link statically, add
+`-static -static-libgcc -static-libstdc++` and use `pkg-config --static` (same as `make STATIC=1`).
 
 Notes for the direct g++ build :
 - `-march=x86-64 -mtune=generic` is the key: it emits baseline x86-64 code that runs on any 64-bit CPU, so the resulting exe won't illegal-instruction even where the prebuilt MSYS2 tools do.
@@ -186,9 +180,9 @@ Notes for the direct g++ build :
 - This was verified end-to-end on a Toshiba Satellite P200 (Core 2 Duo, pre-x86-64-v2) — all three shader programs compiled and linked on hardware.
 
 Notes :
-- The headless screenshot flags work too — just use a Windows-style path: `./build/TideBench.exe --width 960 --screenshot shot.ppm --shot-times 6,20,38`
-- Any GPU with drivers from ~2010 onward handles both targets (PS14 needs GL 3.3; the main bench's GL 2.1 request gets a compatibility context — drivers ignore the profile hint below 3.2, per spec).
-- Run the exes from the repo root or via `build\...` — the asset resolver checks the current directory and then the executable's parent, so `shaders/` and `assets/UZI.obj` are found either way.
+- The headless screenshot flags work too — just use a Windows-style path: `./build/ElectroBench.exe --tide-only --width 960 --screenshot shot.ppm --shot-times 6,20,38`
+- Any GPU with drivers from ~2010 onward handles both scenes (the ocean scene needs GL 3.3; the gun scene's GL 2.1 request gets a compatibility context — drivers ignore the profile hint below 3.2, per spec).
+- Run the exe from the repo root or via `build\...` — the asset resolver checks the current directory and then the executable's parent, so `shaders/` and `assets/UZI.obj` are found either way.
 
 # Contributions
 

@@ -1,6 +1,15 @@
 # ============================================================
 # ElectroBench Makefile
 # Windows (MSYS2), macOS (Homebrew), Linux
+#
+# ONE executable: build/ElectroBench contains BOTH scenes (the OG GL 2.1 gun
+# scene and the GL 3.3 dusk-ocean scene). There is no second binary and no
+# child process: src/ps14_bench.cxx is linked straight into this program as a
+# scene module and handed the same SDL session by src/main.cxx.
+#
+# This file defines exactly ONE binary target ($(BIN)). There is no tidebench,
+# legacy or per-scene target, and no -DFUSED_INTO_OG second compile: the two
+# .cxx files are just the two object files of the one executable.
 # ============================================================
 
 CXX ?= g++
@@ -16,19 +25,19 @@ STATIC_LDFLAGS :=
 
 BUILD := build
 
-LEGACY_SRC := src/main.cxx
-TIDEBENCH_SRC := src/ps14_bench.cxx
+OBJS := $(BUILD)/main.o $(BUILD)/ps14_bench.o
 
-# Fused ElectroBench: the OG binary contains BOTH scenes. src/ps14_bench.cxx is
-# compiled a second time with -DFUSED_INTO_OG (entry point renamed, no main()),
-# and after the 60 s gun scene the binary probes a GL 3.3 core context: found,
-# it runs TideBench and shows per-scene + average scores; not found, TideBench
-# skips itself and the OG result stands. build/TideBench remains standalone.
-FUSED_CXXFLAGS := -DFUSED_INTO_OG
-LEGACY_OBJS := $(BUILD)/main.o $(BUILD)/ps14_bench_fused.o
+BIN = $(BUILD)/ElectroBench$(STATIC_SUFFIX)
 
-LEGACY_BIN = $(BUILD)/ElectroBench$(STATIC_SUFFIX)
-TIDEBENCH_BIN   = $(BUILD)/TideBench$(STATIC_SUFFIX)
+# Obsolete second-executable artifacts. Older revisions built the ocean scene as
+# its own binary (build/TideBench, ElectroBenchPS14, the CMake tree in
+# build-debug/) or folded it in with a -DFUSED_INTO_OG object. Nothing builds
+# them any more, so `make` deletes any that an older build left behind.
+OBSOLETE := $(BUILD)/TideBench $(BUILD)/TideBench.exe \
+            $(BUILD)/TideBench-static $(BUILD)/TideBench-static.exe \
+            $(BUILD)/ElectroBenchPS14 $(BUILD)/ElectroBenchPS14.exe \
+            $(BUILD)/ps14_bench_fused.o \
+            ElectroBenchPS14 ElectroBenchPS14.exe
 
 # ------------------------------------------------------------
 # Platform detection
@@ -77,10 +86,7 @@ ifeq ($(PLATFORM),windows)
                   -lopengl32
     endif
 
-ifeq ($(PLATFORM),windows)
-    LEGACY_BIN := $(BUILD)/ElectroBench$(STATIC_SUFFIX).exe
-    TIDEBENCH_BIN   := $(BUILD)/TideBench$(STATIC_SUFFIX).exe
-endif
+    BIN := $(BUILD)/ElectroBench$(STATIC_SUFFIX).exe
 
 else ifeq ($(PLATFORM),macos)
 
@@ -124,37 +130,42 @@ endif
 # ------------------------------------------------------------
 
 .PHONY: all
-all: legacy tidebench
+all: clean-obsolete $(BIN)
+
+.PHONY: electrobench
+electrobench: $(BIN)
+
+# Removes only the obsolete second-executable artifacts listed above.
+.PHONY: clean-obsolete
+clean-obsolete:
+	@rm -f $(OBSOLETE)
 
 # ------------------------------------------------------------
 # Build directory
 # ------------------------------------------------------------
 
 $(BUILD):
-        mkdir -p $(BUILD)
+	mkdir -p $(BUILD)
 
 # ------------------------------------------------------------
-# ElectroBench (fused: OG gun scene + TideBench ocean scene)
+# ElectroBench (the single binary: OG gun scene + ocean scene)
 # ------------------------------------------------------------
-
-.PHONY: legacy
-legacy: $(LEGACY_BIN)
 
 $(BUILD)/main.o: src/main.cxx | $(BUILD)
-        $(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@
 
-$(BUILD)/ps14_bench_fused.o: src/ps14_bench.cxx | $(BUILD)
-        $(CXX) $(CPPFLAGS) $(CXXFLAGS) $(FUSED_CXXFLAGS) -c $< -o $@
+$(BUILD)/ps14_bench.o: src/ps14_bench.cxx | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@
 
-$(LEGACY_BIN): $(LEGACY_OBJS) | $(BUILD)
-        @echo "========================================"
-        @echo " Building ElectroBench (OG + TideBench fused)"
-        @echo " Platform: $(PLATFORM)"
-        @echo "========================================"
+$(BIN): $(OBJS) | $(BUILD)
+	@echo "========================================"
+	@echo " Building ElectroBench (both scenes in one binary)"
+	@echo " Platform: $(PLATFORM)"
+	@echo "========================================"
 ifeq ($(STATIC),1)
-        $(CXX) $(CXXFLAGS) $(STATIC_LDFLAGS) $(LEGACY_OBJS) -o $@ $(LDLIBS)
+	$(CXX) $(CXXFLAGS) $(STATIC_LDFLAGS) $(OBJS) -o $@ $(LDLIBS)
 else
-        $(CXX) $(CXXFLAGS) $(LEGACY_OBJS) -o $@ $(LDLIBS)
+	$(CXX) $(CXXFLAGS) $(OBJS) -o $@ $(LDLIBS)
 endif
 
 # ------------------------------------------------------------
@@ -162,10 +173,16 @@ endif
 # ------------------------------------------------------------
 
 .PHONY: clean
-clean:
-        rm -rf $(BUILD)
+clean: clean-obsolete
+	rm -rf $(BUILD)
 
+# ------------------------------------------------------------
+# Run
+# ------------------------------------------------------------
 
+.PHONY: run
+run: $(BIN)
+	./$(BIN)
 
 # ------------------------------------------------------------
 # Info
@@ -173,10 +190,11 @@ clean:
 
 .PHONY: info
 info:
-        @echo "ElectroBench build configuration"
-        @echo "---------------------------------"
-        @echo "Platform : $(PLATFORM)"
-        @echo "Compiler : $(CXX)"
-        @echo "CXXFLAGS : $(CXXFLAGS)"
-        @echo "Static   : $(STATIC)"
-        @echo "Libraries: $(LDLIBS)"
+	@echo "ElectroBench build configuration"
+	@echo "---------------------------------"
+	@echo "Platform : $(PLATFORM)"
+	@echo "Compiler : $(CXX)"
+	@echo "CXXFLAGS : $(CXXFLAGS)"
+	@echo "Static   : $(STATIC)"
+	@echo "Binary   : $(BIN)"
+	@echo "Libraries: $(LDLIBS)"

@@ -206,26 +206,46 @@ static const unsigned char kHudFont[95][5] = {
     {0x04,0x04,0x0E,0x00,0x00}, {0x09,0x12,0x1F,0x12,0x09}, {0x0A,0x0A,0x0A,0x0A,0x0A},
     {0x04,0x0F,0x11,0x0F,0x04}};
 
-static void HudGlyph(int c, float x, float y) {
+// The font is 5x5: kHudFont[c - 32] holds the FIVE rows of a glyph, one byte
+// per row, bit 4 = leftmost column (e.g. 'H' = 0x11,0x11,0x1F,0x11,0x11).
+// Drawing it as 7 rows — which this file used to do — read two bytes PAST the
+// end of every glyph, i.e. into its neighbour in the table, and painted those
+// as two junk rows under each character. That is why the HUD text looked
+// broken/janky. Everything below now derives from these constants.
+static const int kGlyphW = 5;            // glyph width in pixels
+static const int kGlyphH = 5;            // glyph height in pixels
+static const float kGlyphAdvance = 6.0f; // 5 px glyph + 1 px gap
+static const float kGlyphScale = 6.0f;   // results screen: 30x30 px glyphs
+static const float kHudPanelH = 15.0f;   // backing strip: 5 px above + below
+
+// Draws one glyph with each font pixel scaled by `scale`.
+static void HudGlyphScaled(int c, float x, float y, float scale) {
   if (c < 32 || c > 126) return;
   const unsigned char *g = kHudFont[c - 32];
   glBegin(GL_QUADS);
-  for (int row = 0; row < 7; row++) {
-    for (int col = 0; col < 5; col++) {
-      if (g[row] & (1 << (4 - col))) {
-        glVertex2f(x + col, y + row);
-        glVertex2f(x + col + 1, y + row);
-        glVertex2f(x + col + 1, y + row + 1);
-        glVertex2f(x + col, y + row + 1);
-      }
+  for (int row = 0; row < kGlyphH; row++) {
+    for (int col = 0; col < kGlyphW; col++) {
+      if (!(g[row] & (1 << (kGlyphW - 1 - col)))) continue;
+      float x0 = x + col * scale, y0 = y + row * scale;
+      glVertex2f(x0, y0);
+      glVertex2f(x0 + scale, y0);
+      glVertex2f(x0 + scale, y0 + scale);
+      glVertex2f(x0, y0 + scale);
     }
   }
   glEnd();
 }
 
-static void HudText(float x, float y, const char *text) {
+// Draws a string of 5x5 glyphs, 1 px apart, and returns the width drawn.
+static float HudTextScaled(float x, float y, const char *text, float scale) {
   float pen = x;
-  for (const char *p = text; *p; ++p, pen += 6.0f) HudGlyph((unsigned char)*p, pen, y);
+  for (const char *p = text; *p; ++p, pen += kGlyphAdvance * scale)
+    HudGlyphScaled((unsigned char)*p, pen, y, scale);
+  return pen - x;
+}
+
+static void HudText(float x, float y, const char *text) {
+  HudTextScaled(x, y, text, 1.0f);
 }
 
 static void RenderHUD() {
@@ -257,16 +277,16 @@ static void RenderHUD() {
 
   // dark backing panel: solid strip so the text reads on any background
   glColor4f(0.02f, 0.02f, 0.04f, 1.0f);
-  float w = (float)strlen(line) * 6.0f + 12.0f;
+  float w = (float)strlen(line) * kGlyphAdvance + 12.0f;
   glBegin(GL_QUADS);
   glVertex2f(0.0f, 0.0f);
   glVertex2f(w, 0.0f);
-  glVertex2f(w, 16.0f);
-  glVertex2f(0.0f, 16.0f);
+  glVertex2f(w, kHudPanelH);
+  glVertex2f(0.0f, kHudPanelH);
   glEnd();
 
   glColor4f(0.72f, 0.93f, 1.0f, 1.0f); // pale cyan, matches the PS1.4 HUD
-  HudText(6.0f, 5.0f, line);
+  HudText(6.0f, 0.5f * (kHudPanelH - (float)kGlyphH), line);
 
   glEnable(GL_DEPTH_TEST);
   glMatrixMode(GL_PROJECTION);
@@ -276,16 +296,20 @@ static void RenderHUD() {
   glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
 }
 
-// ---- fused scene support ------------------------------------------------
-// The OG binary is built from BOTH translation units (see the Makefile: the
-// TideBench one is compiled with -DFUSED_INTO_OG). After the 60 s gun run it
-// hands the SDL session to TideBench, which probes a GL 3.3 core context and
-// simply skips itself when the device cannot provide one.
-int RunTideBenchFused(bool *gaveUpOut); // TideBench scene entry (GL 3.3)
-extern double gFusedTideScore;          // TideBench's final score
-void changeSize(int w, int h);          // resize handler (defined below)
+// ---- scene 2 support ----------------------------------------------------
+// This is ONE executable: src/ps14_bench.cxx is the ocean scene module (it has
+// no main of its own) and is linked straight into this binary. After the 60 s
+// gun run this file hands the SDL session to it, and the ocean scene probes a
+// GL 3.3 core context, skipping itself when the device cannot provide one.
+int RunTideBenchFused(bool *gaveUpOut);   // scene 2 entry (GL 3.3 ocean)
+extern double gFusedTideScore;           // scene 2's final score
+int  TideBenchParseArgs(int argc, char **argv);  // scene 2's CLI flags
+void TideBenchSetScreenshot(const char *path);   // share --screenshot
+void TideBenchSetStandalone(bool standalone);    // --tide-only
+void changeSize(int w, int h);            // resize handler (defined below)
 
 static bool   gFusedEnabled = true; // --og-only forces the single OG scene
+static bool   gTideOnly = false;    // --tide-only runs the ocean scene alone
 static bool   gFusedTideRan = false;
 static double gFusedOgScore = 0.0;
 
@@ -331,30 +355,15 @@ static void RenderResults() {
   float cx = 0.5f * (float)gWinW;
   float cy = 0.5f * (float)gWinH;
 
-  // big score, centred: 5x7 glyphs scaled 6x, gap of 6 px per glyph
+  // big score, centred: 5x5 glyphs scaled up
   glColor4f(0.72f, 0.93f, 1.0f, 1.0f);
-  {
-    float s = 6.0f;
-    float pen = cx - (float)strlen(big) * 6.0f * s * 0.5f;
-    float y = cy - 7.0f * s * 0.5f;
-    for (const char *p = big; *p; ++p, pen += 6.0f * s)
-      for (int row = 0; row < 7; row++)
-        for (int col = 0; col < 5; col++) {
-          const unsigned char *g = kHudFont[(unsigned char)*p - 32];
-          if (!(g[row] & (1 << (4 - col)))) continue;
-          float x0 = pen + col * s, y0 = y + row * s;
-          glBegin(GL_QUADS);
-          glVertex2f(x0, y0);
-          glVertex2f(x0 + s, y0);
-          glVertex2f(x0 + s, y0 + s);
-          glVertex2f(x0, y0 + s);
-          glEnd();
-        }
-  }
+  HudTextScaled(cx - (float)strlen(big) * kGlyphAdvance * kGlyphScale * 0.5f,
+                cy - (float)kGlyphH * kGlyphScale * 0.5f, big, kGlyphScale);
 
   // time + fps line, per-scene breakdown (fused) and hint, HUD scale, centred
   glColor4f(0.55f, 0.72f, 0.82f, 1.0f);
-  HudText(cx - (float)strlen(timeLine) * 6.0f * 0.5f, cy + 7.0f * 6.0f * 0.5f + 24.0f, timeLine);
+  HudText(cx - (float)strlen(timeLine) * kGlyphAdvance * 0.5f,
+          cy + (float)kGlyphH * kGlyphScale * 0.5f + 24.0f, timeLine);
   if (gFusedEnabled) {
     snprintf(scene1, sizeof(scene1), "ElectroBench (guns)  : %.0f", gFusedOgScore);
     if (gFusedTideRan)
@@ -362,13 +371,17 @@ static void RenderResults() {
     else
       snprintf(scene2, sizeof(scene2), "TideBench (ocean)    : skipped (needs GL 3.3)");
     glColor4f(0.60f, 0.78f, 0.88f, 1.0f);
-    HudText(cx - (float)strlen(scene1) * 6.0f * 0.5f, cy + 7.0f * 6.0f * 0.5f + 52.0f, scene1);
-    HudText(cx - (float)strlen(scene2) * 6.0f * 0.5f, cy + 7.0f * 6.0f * 0.5f + 68.0f, scene2);
+    HudText(cx - (float)strlen(scene1) * kGlyphAdvance * 0.5f,
+            cy + (float)kGlyphH * kGlyphScale * 0.5f + 52.0f, scene1);
+    HudText(cx - (float)strlen(scene2) * kGlyphAdvance * 0.5f,
+            cy + (float)kGlyphH * kGlyphScale * 0.5f + 68.0f, scene2);
     glColor4f(0.40f, 0.48f, 0.55f, 1.0f);
-    HudText(cx - (float)strlen(hint) * 6.0f * 0.5f, cy + 7.0f * 6.0f * 0.5f + 96.0f, hint);
+    HudText(cx - (float)strlen(hint) * kGlyphAdvance * 0.5f,
+            cy + (float)kGlyphH * kGlyphScale * 0.5f + 96.0f, hint);
   } else {
     glColor4f(0.40f, 0.48f, 0.55f, 1.0f);
-    HudText(cx - (float)strlen(hint) * 6.0f * 0.5f, cy + 7.0f * 6.0f * 0.5f + 56.0f, hint);
+    HudText(cx - (float)strlen(hint) * kGlyphAdvance * 0.5f,
+            cy + (float)kGlyphH * kGlyphScale * 0.5f + 56.0f, hint);
   }
 
   glEnable(GL_DEPTH_TEST);
@@ -1104,7 +1117,28 @@ int main(int argc, char **argv) {
       gNoShadow = true;
     } else if (arg == "--og-only") {
       gFusedEnabled = false; // run only the OG scene even on GL 3.3 devices
+    } else if (arg == "--tide-only") {
+      gTideOnly = true; // run only the GL 3.3 ocean scene
     }
+  }
+
+  // One binary owns the whole command line: forward the ocean scene's own
+  // flags to it and, with --tide-only, run that scene on its own.
+  if (TideBenchParseArgs(argc, argv) != EXIT_SUCCESS)
+    return EXIT_FAILURE;
+  if (gShotPath != nullptr)
+    TideBenchSetScreenshot(gShotPath);
+
+  if (gTideOnly) {
+    TideBenchSetStandalone(true);
+    bool gaveUp = false;
+    int rc = RunTideBenchFused(&gaveUp);
+    if (rc == 1) {
+      fprintf(stderr, "ElectroBench: no OpenGL 3.3 core context on this device - "
+                      "the ocean scene cannot run here\n");
+      return EXIT_FAILURE;
+    }
+    return 0;
   }
 
   initialiseWindow();

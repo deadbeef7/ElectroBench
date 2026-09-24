@@ -1,5 +1,11 @@
-// ElectroBench PS1.4 — a recreation of the 3DMark2001 SE "Nature" pixel
-// shader 1.4 workload (sea + sky + clouds + reflections) on OpenGL 3.3 core.
+// ElectroBench — the ocean scene of the single ElectroBench binary: a
+// recreation of the 3DMark2001 SE "Nature" pixel shader 1.4 workload
+// (sea + sky + clouds + reflections) on OpenGL 3.3 core.
+//
+// This translation unit is NOT a program of its own any more. It exports
+// RunTideBenchFused(), which main.cxx calls as the second scene of the one and
+// only ElectroBench executable (the same in-process SDL session; no second
+// binary, no child process).
 //
 // What is rendered, in the spirit of the 2001 original:
 //   * Procedural sky dome with two drifting fBm cloud layers, captured once
@@ -38,16 +44,6 @@
 #include "../lib/asset_path.hxx"
 
 // ------------------------------------------------------------------ constants
-#ifdef FUSED_INTO_OG
-// Fused build: TideBench is compiled into the OG ElectroBench binary and runs
-// as the second scene after it. main() stays in main.cxx; this file exports
-// RunTideBenchFused() instead. Build both objects on one g++ command line
-// with -DFUSED_INTO_OG ONLY for the OG binary (see the Makefile).
-#define PS14_MAIN_NAME RunTideBenchFused
-#else
-#define PS14_MAIN_NAME main
-#endif
-
 #define NAME "ElectroBench - TideBench"
 #define WIDTH 1366
 #define HEIGHT 768
@@ -520,23 +516,20 @@ static double gStartTime = 0.0;
 static bool gResultsShown = false;
 static double gResultsElapsed = 0.0, gResultsFps = 0.0, gResultsScore = 0.0;
 static double gResultsShownAt = 0.0;
-#ifdef FUSED_INTO_OG
-// The fused OG binary shows the combined per-scene + average screen right
-// after this one, so keep the single-scene display short.
+// The combined per-scene + average screen is shown right after this one, so
+// keep the single-scene display short.
 static const double kResultsScreenSeconds = 4.0;
-#else
-static const double kResultsScreenSeconds = 10.0;
-#endif
-#ifdef FUSED_INTO_OG
 // Label shown on this scene's results screen (distinguishes it from the OG's).
 static const char *gSceneName = "TideBench";
-// Final score of this scene, read by the OG's fused main for the combined
-// per-scene + average results screen.
+// Final score of this scene, read by main.cxx for the combined per-scene +
+// average results screen.
 double gFusedTideScore = 0.0;
-// Fused mode: when the results screen is done, hand control back to the OG's
-// main instead of exiting the process (the OG then shows the combined screen).
+// When the results screen is done, hand control back to main.cxx instead of
+// exiting the process (the OG scene then shows the combined screen).
 static bool gFusedDone = false;
-#endif
+// --tide-only: this scene runs on its own (no OG scene first), so its own
+// results screen is the last thing the user sees and it exits the process.
+static bool gStandaloneScene = false;
 static int gFrame = 0, gFps = 0, gFrameAccum = 0;
 static double gFpsTimer = 0.0;
 static double gSmoothFps = 0.0;
@@ -910,11 +903,7 @@ static void RenderResults() {
   std::snprintf(big, sizeof(big), "SCORE : %.0f", gResultsScore);
   std::snprintf(timeLine, sizeof(timeLine), "Time : %.1fs   Average FPS : %.1f",
                 gResultsElapsed, gResultsFps);
-#ifdef FUSED_INTO_OG
   std::snprintf(hint, sizeof(hint), "%s score", gSceneName);
-#else
-  std::snprintf(hint, sizeof(hint), "Benchmark complete - ESC to exit");
-#endif
 
   float cx = 0.5f * (float)gWindowWidth;
   float cy = 0.5f * (float)gWindowHeight;
@@ -934,12 +923,11 @@ static void RenderScene() {
     RenderResults();
     SDL_GL_SwapWindow(gWindow);
     if (now - gResultsShownAt >= kResultsScreenSeconds) {
-#ifdef FUSED_INTO_OG
+      if (gStandaloneScene) {
+        SDL_Quit();
+        std::exit(0);
+      }
       gFusedDone = true; // back to the OG's combined results screen
-#else
-      SDL_Quit();
-      std::exit(0);
-#endif
     }
     return;
   }
@@ -1018,9 +1006,7 @@ static void RenderScene() {
     std::printf("Benchmark Results - Time : %.1fs, Average FPS : %.1f, Score : %.0f\n",
                 elapsed, fps, score);
     std::fflush(stdout);
-#ifdef FUSED_INTO_OG
-    gFusedTideScore = score; // for the OG's combined results screen
-#endif
+    gFusedTideScore = score; // for the combined results screen in main.cxx
     // Hand over to the results screen: the scene is cleared and the score is
     // drawn on the window for kResultsScreenSeconds (ESC exits immediately).
     gResultsElapsed = elapsed;
@@ -1095,6 +1081,31 @@ static bool ParseShotTimes(const char *arg) {
   return !gShotTimes.empty();
 }
 
+// ------------------------------------------------ option plumbing for main()
+// There is one executable now, so main.cxx owns the command line and forwards
+// the TideBench-specific flags here. Returns EXIT_FAILURE on a bad option.
+int TideBenchParseArgs(int argc, char **argv) {
+  for (int i = 1; i < argc; i++) {
+    if (!std::strcmp(argv[i], "--shot-times") && i + 1 < argc) {
+      if (!ParseShotTimes(argv[++i])) {
+        std::fprintf(stderr, "Bad --shot-times list: %s\n", argv[i]);
+        return EXIT_FAILURE;
+      }
+    } else if (!std::strcmp(argv[i], "--width") && i + 1 < argc) {
+      gWindowWidthOverride = std::atoi(argv[++i]);
+    } else if (!std::strcmp(argv[i], "--dump-env")) {
+      gDumpEnv = true;
+    }
+  }
+  return EXIT_SUCCESS;
+}
+
+// Shares main.cxx's --screenshot target with this scene.
+void TideBenchSetScreenshot(const char *path) { gScreenshotPath = path; }
+
+// --tide-only: this scene runs (and ends) on its own.
+void TideBenchSetStandalone(bool standalone) { gStandaloneScene = standalone; }
+
 static void WriteScreenshotPPM(const char *path) {
   const int w = gWindowWidth, h = gWindowHeight;
   std::vector<unsigned char> rgb((size_t)w * h * 3);
@@ -1113,35 +1124,12 @@ static void WriteScreenshotPPM(const char *path) {
   std::fflush(stdout);
 }
 
-// ------------------------------------------------------------------- main
-#ifdef FUSED_INTO_OG
-// Entry point used by the fused OG binary: runs the TideBench scene after the
-// OG scene on the same SDL session. Sets *gaveUp = true when the GL 3.3 core
-// context could not be created and the scene was skipped.
+// ------------------------------------------------------ scene entry point
+// Runs the TideBench scene on the SDL session handed over by main.cxx (either
+// straight after the OG gun scene, or alone with --tide-only). Sets
+// *gaveUp = true when the GL 3.3 core context could not be created.
 int RunTideBenchFused(bool *gaveUpOut) {
   if (gaveUpOut) *gaveUpOut = false;
-#else
-int main(int argc, char **argv) {
-#endif
-#ifndef FUSED_INTO_OG
-  for (int i = 1; i < argc; i++) {
-    if (!std::strcmp(argv[i], "--screenshot") && i + 1 < argc) {
-      gScreenshotPath = argv[++i];
-    } else if (!std::strcmp(argv[i], "--shot-times") && i + 1 < argc) {
-      if (!ParseShotTimes(argv[++i])) {
-        std::fprintf(stderr, "Bad --shot-times list: %s\n", argv[i]);
-        return EXIT_FAILURE;
-      }
-    } else if (!std::strcmp(argv[i], "--width") && i + 1 < argc) {
-      gWindowWidthOverride = std::atoi(argv[++i]);
-    } else if (!std::strcmp(argv[i], "--dump-env")) {
-      gDumpEnv = true;
-    } else {
-      std::fprintf(stderr, "Unknown or incomplete option: %s\n", argv[i]);
-      return EXIT_FAILURE;
-    }
-  }
-#endif
 
   if (SDL_Init(SDL_INIT_VIDEO) < 0) {
     std::fprintf(stderr, "SDL could not initialize! SDL_Error: %s\n", SDL_GetError());
@@ -1174,17 +1162,12 @@ int main(int argc, char **argv) {
   }
   gContext = SDL_GL_CreateContext(gWindow);
   if (!gContext) {
-#ifdef FUSED_INTO_OG
-    // No GL 3.3 core context on this device: skip the scene, keep the OG's result.
+    // No GL 3.3 core context on this device: skip the scene, keep the OG result.
     std::printf("TideBench: OpenGL 3.3 core context unavailable — skipping this scene\n");
     std::fflush(stdout);
     SDL_Quit();
     if (gaveUpOut) *gaveUpOut = true;
     return 1;
-#else
-    std::fprintf(stderr, "OpenGL 3.3 context could not be created! SDL_Error: %s\n", SDL_GetError());
-    return EXIT_FAILURE;
-#endif
   }
   SDL_GL_SetSwapInterval(0); // unclamped, like a benchmark should be
 
@@ -1201,11 +1184,7 @@ int main(int argc, char **argv) {
   gFpsTimer = gStartTime;
 
   SDL_Event event;
-#ifdef FUSED_INTO_OG
   while (!gQuit && !gFusedDone) {
-#else
-  while (!gQuit) {
-#endif
     while (SDL_PollEvent(&event) != 0) {
       if (event.type == SDL_QUIT) {
         gQuit = true;
@@ -1228,8 +1207,6 @@ int main(int argc, char **argv) {
   SDL_GL_DeleteContext(gContext);
   SDL_DestroyWindow(gWindow);
   SDL_Quit();
-#ifdef FUSED_INTO_OG
   if (gQuit) return 2; // user quit during this scene: exit the whole bench
-#endif
   return 0;
 }
