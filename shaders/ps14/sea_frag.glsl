@@ -8,6 +8,11 @@
 //   3) blend/address: add sun glitter, blend with deep-water color
 // Six texture fetches per phase is the PS1.4 budget; this uses far fewer.
 //
+// Noise discipline: every term here is analytic or texture-chaos MODULATED by
+// analytic gates. Free-floating glow terms (not tied to the sun path, cloud
+// shadows or crest height) show up as pale-teal speckle over the dark water —
+// they were the "light blue noise" artifact and must stay gated.
+//
 // Realism layer (this pass): on top of the displaced swell banks the shading
 // adds two octaves of ANALYTIC detail wavelets (extra normals, tiny amplitude,
 // no vertex cost), slope-gated crest foam (it appears where waves actually
@@ -206,9 +211,11 @@ void main() {
     foam *= crest * slopeFacing * (0.35 + 0.65 * chaos);
     body += vec3(0.55, 0.48, 0.58) * foam * 0.55; // dim warm-gray foam
 
-    // subsurface glow against the light: thin wave crests shine turquoise
-    float towardSun = max(dot(normalize(vec3(-V.x, 0.0, -V.z)), L), 0.0);
-    body += vec3(0.05, 0.20, 0.16) * towardSun * crest * 0.8;
+    // subsurface glow against the light: THIN CRESTS transmit a dim jade-green
+    // where sunlight actually passes through the water. Gated to the sun's
+    // azimuth AND to un-shadowed sun — ungated it speckled pale-teal noise
+    // across the dark off-path sea (the light-blue artifact).
+    body += vec3(0.05, 0.18, 0.14) * sunAlign * warmGate * shadow * crest * 0.55;
 
     vec3 color = mix(body, reflColor, fresnel);
 

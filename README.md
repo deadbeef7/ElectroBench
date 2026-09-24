@@ -7,7 +7,7 @@ It ships **two** benchmarks :
 | Benchmark | Renderer | Scene |
 |---|---|---|
 | **ElectroBench** (the OG) | OpenGL 2.1 / GLSL 1.2, fixed-function pipeline | **110 UZIs** on a shadow-mapped concrete floor, lit by a warm sun |
-| **DuskTide** | OpenGL 3.3 core, pixel-shader workloads | A dusk ocean under volumetric clouds (3DMark2001 SE "Nature" recreation) |
+| **TideBench** | OpenGL 3.3 core, pixel-shader workloads | A dusk ocean under volumetric clouds (3DMark2001 SE "Nature" recreation) |
 
 
 
@@ -23,7 +23,7 @@ Close-up — mags resting on the ground, shadows clearly visible under each gun:
 
 The PS1.4 sea benchmark — long cloud banks with sunward silver linings, a narrow orange glitter path down the middle of the sea, dark blue-purple water either side, raised swell banks:
 
-![DuskTide dusk ocean benchmark](docs/screenshots/ps14_dusk_t36.png)
+![TideBench dusk ocean benchmark](docs/screenshots/ps14_dusk_t36.png)
 
 # How to build ?
 
@@ -33,7 +33,7 @@ Dependencies : `make`, `g++`, SDL2, GLEW, GLU (+ dev headers). On Debian/Ubuntu 
 ```sh
 make            # builds BOTH benchmarks
 make legacy     # only the OG GL 2.1 benchmark
-make dusktide   # only DuskTide
+make tidebench   # only TideBench
 ```
 
 Binaries land in `build/` :
@@ -41,8 +41,8 @@ Binaries land in `build/` :
 ```sh
 ./build/ElectroBench          # OG 2.1 benchmark (Linux / macOS)
 ./build/ElectroBench.exe      # Windows (MSYS2)
-./build/DuskTide             # dusk ocean benchmark (Linux / macOS)
-./build/DuskTide.exe         # Windows (MSYS2)
+./build/TideBench             # dusk ocean benchmark (Linux / macOS)
+./build/TideBench.exe         # Windows (MSYS2)
 ```
 
 ## Static build
@@ -51,9 +51,9 @@ Pass `STATIC=1` to link everything statically (`-static -static-libgcc -static-l
 dependency archives) — handy for dropping a single exe on old machines:
 
 ```sh
-make STATIC=1            # -> build/ElectroBench-static(.exe), build/DuskTide-static(.exe)
+make STATIC=1            # -> build/ElectroBench-static(.exe), build/TideBench-static(.exe)
 make STATIC=1 legacy     # just the OG, statically linked
-make STATIC=1 dusktide   # just DuskTide, statically linked
+make STATIC=1 tidebench   # just TideBench, statically linked
 ```
 
 This requires the **static archives** of every dependency (e.g. MSYS2's `mingw-w64-x86_64-SDL2` ships
@@ -71,9 +71,9 @@ into the scene), `ESC` quits. The FPS counter is a true frame-count average (SDL
 every frame accounted) — the on-screen value is a smoothed window, the final score uses **all** frames
 of the run.
 
-# DuskTide — the dusk ocean benchmark
+# TideBench — the dusk ocean benchmark
 
-DuskTide is written in **OpenGL 3.3 core** and pushes a heavy, realistic dusk-ocean workload —
+TideBench is written in **OpenGL 3.3 core** and pushes a heavy, realistic dusk-ocean workload —
 high-resolution environment reflections, a dense displaced ocean mesh, and a real volumetric
 light-transport model for the clouds. It is heavy **on purpose**: the goal is to push old and new
 hardware alike, so low single-digit FPS on a low-end machine means the workload is doing its job.
@@ -90,7 +90,7 @@ What it renders :
 - High-resolution **environment cubemap** reflections with roughness-matched LOD (the sun smears
   into a glow, never texel squares), fresnel blending, sun-tinted **glitter** path gated to the
   sun's azimuth (bright path down the middle, dark blue-purple water either side),
-  slope-gated crest foam, subsurface glow in thin crests, and distance haze that converges into the
+  slope-gated crest foam, sun-path-gated subsurface glow in thin crests, and distance haze that converges into the
   actual per-azimuth sky colour so the far sea melts into the horizon
 - **Cloud shadows on the water**: each sea fragment is projected along its sun ray into the same
   analytic cloud layout the sky renders — where a cloud blocks the sun the direct light dies, foam
@@ -103,8 +103,8 @@ Build and run it with :
 
 ```sh
 make
-./build/DuskTide          # Linux / macOS
-./build/DuskTide.exe      # Windows (MSYS2)
+./build/TideBench          # Linux / macOS
+./build/TideBench.exe      # Windows (MSYS2)
 ```
 
 Controls : `F` toggles the automatic fly-over camera, long-click + move orbits the camera, mouse wheel zooms, arrow keys look around, `ESC` quits.
@@ -112,7 +112,7 @@ Controls : `F` toggles the automatic fly-over camera, long-click + move orbits t
 Headless visual-test flags (used to verify the render output in CI-like environments):
 
 ```sh
-./build/DuskTide --width 960 --screenshot /tmp/shot.ppm --shot-times 6,20,38
+./build/TideBench --width 960 --screenshot /tmp/shot.ppm --shot-times 6,20,38
 ./build/ElectroBench --screenshot /tmp/shot.ppm --shot-time 3
 ```
 
@@ -128,6 +128,16 @@ score = fps² × 2
 It is linear in nothing: twice the frames means twice the score, twice the load means a quarter of
 it — a fair curve from office PCs to gaming rigs. Both binaries print
 `Time / Average FPS / Score` at the end, and the OG also shows live FPS + score in its HUD.
+
+# The results screen
+
+When the 45/60 second run ends, **both benchmarks clear the window and print the final score
+on screen** — a big centred score with the time and average FPS underneath — and leave it up
+for about ten seconds (or until you press `ESC`). The same line is also printed to stdout.
+
+```sh
+Benchmark Results - Time : 45.0s, Average FPS : 12.4, Score : 308
+```
 
 # Contributions
 

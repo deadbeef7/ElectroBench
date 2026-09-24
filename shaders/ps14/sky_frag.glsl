@@ -184,6 +184,14 @@ void main() {
     float coreMask = pow(sunAmount, 320.0) * 0.85;
     sky = mix(sky, vec3(5.2, 2.1, 0.72), clamp(coreMask, 0.0, 0.90));
 
+    // Belt of Venus: the antisolar dusk band — a soft rose glow floating just
+    // above the horizon opposite the sun, beneath the rising blue-grey Earth
+    // shadow. Real dusks show it, and it gives the off-sun sea something true
+    // to reflect instead of flat black.
+    float anti = max(-sunAmount, 0.0);
+    float belt = pow(anti, 2.5) * smoothstep(0.0, 0.02, h) * (1.0 - smoothstep(0.03, 0.20, h));
+    sky += vec3(0.20, 0.10, 0.115) * belt * 0.55;
+
     // ---- explicit volumetric clouds composite over the glow ----
     float upn, edgeF;
     float cl = cloudField(dir, upn, edgeF);
@@ -239,8 +247,8 @@ void main() {
     // compact orange disc with a TIGHT halo — the reference sun is a defined
     // ball, not a bloom blob. Drawn last, attenuated by cloud cover.
     float cover = cl;
-    float disc = smoothstep(0.9977, 0.9992, sunAmount) * (1.0 - 0.80 * clamp(cover, 0.0, 1.0));
-    float halo = pow(sunAmount, 900.0) * 0.45 * (1.0 - 0.5 * clamp(cover, 0.0, 1.0));
+    float disc = smoothstep(0.9977, 0.9992, sunAmount) * (1.0 - 0.88 * clamp(cover, 0.0, 1.0));
+    float halo = pow(sunAmount, 900.0) * 0.45 * (1.0 - 0.6 * clamp(cover, 0.0, 1.0));
     sky = mix(sky, vec3(8.5, 4.6, 1.7), clamp(disc + halo, 0.0, 1.0));
 
     // Env-cubemap pass keeps HDR values (the sea shader tone maps after adding

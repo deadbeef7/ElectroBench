@@ -22,6 +22,13 @@ bool gDumpShadow = false;
 bool gNoShadow = false;
 bool gDollySet = false;
 
+// Results screen: when the run ends the scene is cleared and the final score
+// is drawn on the window for a few seconds (ESC skips the wait).
+static bool gResultsShown = false;
+static double gResultsElapsed = 0.0, gResultsFps = 0.0, gResultsScore = 0.0;
+static double gResultsShownAt = 0.0;
+static const double kResultsScreenSeconds = 10.0;
+
 // ---------------------------------------------------------------------------
 // Small column-major mat4 helpers
 // ---------------------------------------------------------------------------
@@ -269,6 +276,77 @@ static void RenderHUD() {
   glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
 }
 
+// Results screen: clear the window and show the final score big and centred.
+// Same dark panel + pale cyan text as the in-run HUD.
+static void RenderResults() {
+  glUseProgram(0);
+  glMatrixMode(GL_PROJECTION);
+  glPushMatrix();
+  glLoadIdentity();
+  glOrtho(0.0, (double)gWinW, (double)gWinH, 0.0, -1.0, 1.0);
+  glMatrixMode(GL_MODELVIEW);
+  glPushMatrix();
+  glLoadIdentity();
+
+  glDisable(GL_DEPTH_TEST);
+  glDisable(GL_LIGHTING);
+  glDisable(GL_BLEND);
+
+  // unit-0 texture state must be reset here too (see RenderHUD): the gun pass
+  // leaves GL_TEXTURE_2D enabled on non-active units, which would modulate
+  // these quads by the gunmetal texture.
+  glActiveTexture(GL_TEXTURE0);
+  glDisable(GL_TEXTURE_2D);
+  glBindTexture(GL_TEXTURE_2D, 0);
+  glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+
+  glClearColor(0.012f, 0.012f, 0.022f, 1.0f);
+  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+  char big[96], timeLine[128], hint[96];
+  snprintf(big, sizeof(big), "SCORE : %.0f", gResultsScore);
+  snprintf(timeLine, sizeof(timeLine), "Time : %.1fs   Average FPS : %.1f",
+           gResultsElapsed, gResultsFps);
+  snprintf(hint, sizeof(hint), "Benchmark complete - ESC to exit");
+
+  float cx = 0.5f * (float)gWinW;
+  float cy = 0.5f * (float)gWinH;
+
+  // big score, centred: 5x7 glyphs scaled 6x, gap of 6 px per glyph
+  glColor4f(0.72f, 0.93f, 1.0f, 1.0f);
+  {
+    float s = 6.0f;
+    float pen = cx - (float)strlen(big) * 6.0f * s * 0.5f;
+    float y = cy - 7.0f * s * 0.5f;
+    for (const char *p = big; *p; ++p, pen += 6.0f * s)
+      for (int row = 0; row < 7; row++)
+        for (int col = 0; col < 5; col++) {
+          const unsigned char *g = kHudFont[(unsigned char)*p - 32];
+          if (!(g[row] & (1 << (4 - col)))) continue;
+          float x0 = pen + col * s, y0 = y + row * s;
+          glBegin(GL_QUADS);
+          glVertex2f(x0, y0);
+          glVertex2f(x0 + s, y0);
+          glVertex2f(x0 + s, y0 + s);
+          glVertex2f(x0, y0 + s);
+          glEnd();
+        }
+  }
+
+  // time + fps line and the hint, at HUD scale, centred
+  glColor4f(0.55f, 0.72f, 0.82f, 1.0f);
+  HudText(cx - (float)strlen(timeLine) * 6.0f * 0.5f, cy + 7.0f * 6.0f * 0.5f + 24.0f, timeLine);
+  glColor4f(0.40f, 0.48f, 0.55f, 1.0f);
+  HudText(cx - (float)strlen(hint) * 6.0f * 0.5f, cy + 7.0f * 6.0f * 0.5f + 56.0f, hint);
+
+  glEnable(GL_DEPTH_TEST);
+  glMatrixMode(GL_PROJECTION);
+  glPopMatrix();
+  glMatrixMode(GL_MODELVIEW);
+  glPopMatrix();
+  glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+}
+
 // light-space matrix (world -> [0,1] shadow map coords)
 float light_matrix[16];
 
@@ -479,6 +557,19 @@ void applyCamera() {
 // Renders the scene (110 UZIs on a shadowed floor!) and calculates FPS
 void renderScene() {
   unsigned int timet = SDL_GetTicks();
+
+  // ---- results screen: scene cleared, score on the window, then exit ----
+  if (gResultsShown) {
+    RenderResults();
+    SDL_GL_SwapWindow(window);
+    double nowS = (double)(SDL_GetPerformanceCounter() - gPerfStartTick) / gPerfFreq;
+    if (nowS - gResultsShownAt >= kResultsScreenSeconds) {
+      SDL_Quit();
+      exit(0);
+    }
+    return;
+  }
+
   applyCamera();
 
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -710,8 +801,14 @@ void renderScene() {
     double score = avgFps * avgFps * 2.0;
     printf("Benchmark Results - Time : %.1fs, Average FPS : %.1f, Score : %.0f\n",
            elapsed, avgFps, score);
-    SDL_Quit();
-    exit(0);
+    fflush(stdout);
+    // Hand over to the results screen: the scene is cleared and the score is
+    // drawn on the window for kResultsScreenSeconds (ESC exits immediately).
+    gResultsElapsed = elapsed;
+    gResultsFps = avgFps;
+    gResultsScore = score;
+    gResultsShownAt = elapsed;
+    gResultsShown = true;
   }
 }
 
