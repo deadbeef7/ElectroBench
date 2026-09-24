@@ -159,41 +159,7 @@ On Windows the easiest route is [MSYS2](https://www.msys2.org/), which provides 
 
 **1. Install MSYS2** from [msys2.org](https://www.msys2.org/) to the default `C:\msys64`.
 
-**2. Open the UCRT64 shell** — from the Start menu pick **"MSYS2 UCRT64"** (pink/flamingo icon). Not "MSYS2 MSYS" (black icon): that's the wrong environment and the packages below won't be found.
-
-**3. Update pacman (first launch only)** — run twice if it asks to close the window:
-
-```sh
-pacman -Syu
-```
-
-**4. Install toolchain + libraries** (one command; if you prefer the MINGW64 shell instead of UCRT64, replace `ucrt-x86_64` with `x86_64` in every name — but stick to one and stay in the matching shell):
-
-```sh
-pacman -S --needed git mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake \
-  mingw-w64-ucrt-x86_64-ninja mingw-w64-ucrt-x86_64-pkgconf \
-  mingw-w64-ucrt-x86_64-SDL2 mingw-w64-ucrt-x86_64-glew mingw-w64-ucrt-x86_64-glu
-```
-
-**5. Clone and build** (Ninja is much faster than the default MinGW generator):
-
-```sh
-git clone https://github.com/deadbeef7/ElectroBench.git
-cd ElectroBench
-cmake -S . -B build -G Ninja
-cmake --build build
-```
-
-**6. Run** — from the same UCRT64 shell:
-
-```sh
-./build/ElectroBench.exe        # original GL 2.1 / GLSL 1.2 — 110 UZIs + shadows
-./build/TideBench.exe    # GL 3.3 — the PS1.4 dusk sea benchmark
-```
-
-Running from the shell matters: the SDL2/GLEW/GLU DLLs live in `C:\msys64\ucrt64\bin`, which is only on `PATH` inside that shell. To launch from Explorer instead, copy `SDL2.dll`, `glew32.dll`, `glu32.dll` (and `zlib1.dll` if it complains) next to the exe.
-
-**If `cmake` dies with `Illegal instruction`** — modern MSYS2 `mingw64`/`ucrt64` packages (including `cmake.exe` itself) are built for the x86-64-v2 microarchitecture (SSE4.2 + POPCNT), so they crash on older CPUs that lack those instructions (e.g. Core 2 Duo era laptops). If that happens, skip CMake entirely and build directly with g++, which the compiler will happily target at the baseline ISA:
+**2. Run:**
 
 ```sh
 g++ -std=c++17 -O2 -march=x86-64 -mtune=generic \
