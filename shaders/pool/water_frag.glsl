@@ -108,7 +108,7 @@ void main() {
     vec3 col = mix(body, refl, clamp(mirror, 0.0, 1.0));
     col += uLightTint * (spec * 2.4 + sheen * 0.35);  // the hidden light
     col += vec3(0.9) * foam * 0.22;                   // foam brightening
-    col += uTileA * 0.06;                             // ambient skylight
+    col += vec3(0.05, 0.004, 0.005);                  // ambient skylight (red room)
 
     // --- caustics: the hidden light focuses through the curved crown walls
     // and jet columns into bright webbed shafts on the water. Two crossing
@@ -126,7 +126,7 @@ void main() {
     // turquoise so the far water stays blue instead of greying out
     float dist = length(uEyePos - vWorld);
     float haze = 1.0 - exp(-dist * 0.004);
-    vec3 hazeCol = normalize3(mix(uLightTint, uTileA, 0.8)) * 0.75;
+    vec3 hazeCol = normalize3(mix(uLightTint, uTileB, 0.8)) * 0.75;
     col = mix(col, hazeCol, haze * 0.6);
 
     // The reflected sky colour is ALREADY tonemapped+gamma'd by sky_frag; a

@@ -19,22 +19,24 @@ uniform float uRadius;     // current crown radius
 uniform float uHeight;     // current crown height
 uniform float uTime;
 uniform float uSpike;      // spike amplitude
+uniform float uPhase;      // per-crown animation phase
 
 out vec3 vWorld;
 out vec3 vNormal;
 out float vParam;
+out float vAngle;
 
 float hash(float n) {
     return fract(sin(n * 127.1) * 43758.5453);
 }
 
 // smooth pseudo-noise around the ring: 8 fixed spikes + 13 wobble spikes
+// (+ a per-crown phase so a fleet of crowns never pulses in lockstep)
 float spikeField(float a, float t) {
     float v = 0.0;
     v += sin(a * 6.2831853 * 8.0 + t * 0.7) * 0.55;
     v += sin(a * 6.2831853 * 13.0 - t * 1.1) * 0.30;
     v += sin(a * 6.2831853 * 21.0 + t * 1.7) * 0.15;
-    // sharpen each lobe: pow-ish shaping via abs->sub->clamp trick
     return v;
 }
 
@@ -42,8 +44,12 @@ void main() {
     float ang = aAngleH.x * 6.2831853;
     float hp = aAngleH.y; // 0 base .. 1 rim
 
-    // spikes grow toward the rim; the ring wobbles as it expands
-    float spikes = spikeField(aAngleH.x, uTime);
+    // spikes grow toward the rim; the ring wobbles as it expands. The last
+    // term adds HIGH-frequency tearing that grows with the spike amplitude:
+    // the sheet disintegrates into fingers rather than wobbling smoothly.
+    float spikes = spikeField(aAngleH.x, uTime + uPhase);
+    spikes += uSpike * 0.35 * sin(aAngleH.x * 6.2831853 * 26.0 +
+                                  uTime * 2.3 + uPhase * 1.3);
     float hMul = 1.0 + uSpike * spikes * hp;
     float rMul = 1.0 + uSpike * 0.35 * spikes * hp;
 
@@ -55,8 +61,8 @@ void main() {
     vec3 radial = normalize(vec3(cos(ang), 0.0, sin(ang)));
     // approximate gradient numerically for a believable normal
     float e = 0.004;
-    float s1 = spikeField(aAngleH.x - e, uTime);
-    float s2 = spikeField(aAngleH.x + e, uTime);
+    float s1 = spikeField(aAngleH.x - e, uTime + uPhase);
+    float s2 = spikeField(aAngleH.x + e, uTime + uPhase);
     float grad = (s2 - s1) / (2.0 * e * 6.2831853);
     vec3 tang = normalize(vec3(-sin(ang), grad * uSpike * hp, cos(ang)));
     vec3 n = normalize(cross(radial, tang));
@@ -64,5 +70,6 @@ void main() {
     vWorld = pos;
     vNormal = n;
     vParam = hp;
+    vAngle = aAngleH.x;
     gl_Position = uViewProj * vec4(pos, 1.0);
 }

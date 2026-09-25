@@ -6,8 +6,8 @@ in vec2 vUV;
 in float vBright;
 
 uniform vec3 uLightTint;   // warm champagne light, also backlights the strands
-uniform vec3 uSkyA;   // turquoise checker tile  (matches the sky dome)
-uniform vec3 uSkyB;   // hot coral checker tile
+uniform vec3 uSkyA;   // white checker tile  (matches the sky dome)
+uniform vec3 uSkyB;   // deep red checker tile
 
 out vec4 fragColor;
 

@@ -37,8 +37,8 @@ void main() {
     float shininess = mix(96.0, 220.0, uWetness);
     float spec = pow(clamp(dot(N, H), 0.0, 1.0), shininess) * mix(0.45, 0.9, uWetness);
 
-    // ambient: cool bounce from the glowing ceiling + darker floor bounce
-    vec3 ambient = mix(vec3(0.030, 0.032, 0.040), vec3(0.075, 0.080, 0.095),
+    // ambient: red bounce from the glowing checker ceiling + darker floor
+    vec3 ambient = mix(vec3(0.030, 0.010, 0.011), vec3(0.090, 0.078, 0.075),
                        clamp(N.y * 0.5 + 0.5, 0.0, 1.0));
 
     vec3 col = base * (ambient + uLightTint * diff * 1.15)

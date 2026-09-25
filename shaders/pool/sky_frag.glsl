@@ -54,13 +54,13 @@ void main() {
                                                   // across the visible sky
     float c = checker(plane / cell + vec2(uTime * 0.006, 0.0));
 
-    // two VIVID tones — a coloured pool-room checker. These are deliberately
-    // oversaturated linear values: the tonemap knee + gamma at the end wash
-    // colours toward pastel, so this overshoot keeps the tiles reading as
-    // punchy turquoise / hot coral on screen. Must match kTileA/kTileB in
+    // two tones — the WHITE & RED pool-room checker. These are deliberately
+    // hot linear values: the tonemap knee + gamma at the end wash colours
+    // toward pastel, so this overshoot keeps the tiles reading as blazing
+    // white / deep pure red on screen. Must match kTileA/kTileB in
     // src/pool.cxx (the water uniforms).
-    vec3 tileA = vec3(0.020, 0.580, 0.780);   // turquoise / cyan
-    vec3 tileB = vec3(1.600, 0.110, 0.025);   // hot coral / orange
+    vec3 tileA = vec3(2.30, 2.30, 2.26);   // hot white
+    vec3 tileB = vec3(1.50, 0.008, 0.010); // deep pure red
     vec3 albedo = mix(tileB, tileA, c);
 
     // HIDDEN light: a broad directional wash, brighter toward the light.

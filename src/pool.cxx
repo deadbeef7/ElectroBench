@@ -71,7 +71,8 @@ unsigned lodepng_decode_file(unsigned char **out, unsigned *w, unsigned *h,
 #define HEIGHT 768
 #define BENCH_MILLISECONDS 45000 // 45 s, same as the other scenes
 
-#define MAX_RINGS 30             // must match water_frag.glsl; split into
+#define MAX_RINGS 54             // must match water_frag.glsl; split into
+                                 // private per-pot windows (54/18 = 3 each)
                                  // per-pot windows below
 
 static const int kWaterResolution = 220;  // grid verts per side (display grid;
@@ -81,10 +82,10 @@ static const float kWaterSize = 300.0f;   // water patch half-size reaches the
 static const int kDomeSeg = 48, kDomeRings = 28;
 static const float kDomeRadius = 800.0f;  // inside the far plane
 
-// palette — the COLOURED pool-room checker. Must match sky_frag.glsl's
+// palette — the WHITE & RED pool-room checker. Must match sky_frag.glsl's
 // tileA/tileB (the water shader receives these as uniforms).
-static const float kTileA[3] = {0.020f, 0.580f, 0.780f}; // turquoise / cyan tile
-static const float kTileB[3] = {1.600f, 0.110f, 0.025f}; // hot coral / orange tile
+static const float kTileA[3] = {2.30f, 2.30f, 2.26f}; // hot white tile (linear)
+static const float kTileB[3] = {1.50f, 0.008f, 0.010f}; // deep pure red tile
 static const float kLightTint[3] = {0.86f, 0.95f, 1.05f};// cool pool-room glow
 
 // hidden light: direction TOWARD the light, high and behind the default
@@ -617,23 +618,35 @@ struct TeapotPhysics {
 };
 
 // ---- the fleet ------------------------------------------------------------
-// Nine pots at scattered deterministic positions, sizes and drop heights,
-// spawned on a stagger so the pool rains teapots for the first ten seconds.
-// Ripple-ring slots are partitioned per pot (a private window each), so nine
+// Two waves of pots at scattered deterministic positions, sizes and drop
+// heights. Wave one (pots 0..8) rains down over the first ten seconds; wave
+// two (pots 9..17) starts once wave one has settled and splashes the OUTER
+// ring of the pool — fresh chaotic impact while the first wave bobs.
+// Ripple-ring slots are partitioned per pot (a private window each), so all
 // concurrent splashes never overwrite each other's rings.
-static const int kFleetCount = 9;
+static const int kFleetCount = 18;
 static const int kRingsPerPot = MAX_RINGS / kFleetCount;
 
 static const float kFleetPos[kFleetCount][2] = {
+    // wave one: inner field
     {0.0f, 0.0f},   {-4.8f, 2.6f},  {4.2f, -3.1f},  {-2.6f, -4.4f},
     {5.4f, 3.3f},   {-6.1f, -1.8f}, {1.9f, 5.2f},   {6.8f, -0.7f},
-    {-1.2f, -6.6f}};
+    {-1.2f, -6.6f},
+    // wave two: the outer ring, beyond wave one's splash field
+    {-7.4f, 5.8f},  {7.9f, 4.6f},   {8.6f, -4.2f},  {-5.9f, -7.8f},
+    {3.1f, 8.4f},   {9.3f, 0.9f},   {-9.0f, -2.7f}, {0.4f, -9.4f},
+    {5.7f, -8.6f}};
 static const float kFleetScale[kFleetCount] = {
-    1.00f, 0.85f, 1.20f, 0.72f, 0.92f, 1.10f, 0.78f, 0.88f, 1.05f};
+    1.00f, 0.85f, 1.20f, 0.72f, 0.92f, 1.10f, 0.78f, 0.88f, 1.05f,
+    0.95f, 0.80f, 1.14f, 0.68f, 1.02f, 0.90f, 0.84f, 1.08f, 0.76f};
 static const float kFleetDrop[kFleetCount] = {
-    8.0f, 10.0f, 9.0f, 11.5f, 8.6f, 10.6f, 9.4f, 12.0f, 11.0f};
+    8.0f, 10.0f, 9.0f, 11.5f, 8.6f, 10.6f, 9.4f, 12.0f, 11.0f,
+    13.0f, 14.5f, 12.4f, 15.0f, 13.6f, 14.0f, 12.8f, 15.5f, 13.2f};
 static const double kFleetDelay[kFleetCount] = {
-    0.0, 1.1, 2.2, 3.3, 4.4, 5.5, 6.6, 7.7, 8.8};
+    // wave one: one pot a second. Wave two starts at 11.2s — by then the
+    // wave-one pots have impacted, crowned and settled into their bob.
+    0.0, 1.1, 2.2, 3.3, 4.4, 5.5, 6.6, 7.7, 8.8,
+    11.2, 12.1, 13.0, 13.9, 14.8, 15.7, 16.6, 17.5, 18.4};
 
 // rings are POD: x, z, radius, strength — one private window per pot
 struct Ring { float x, z, radius, strength; };
@@ -669,6 +682,10 @@ struct JetColumn {
 };
 static JetColumn gJets[kFleetCount];
 
+// per-pot jet punch 0..1: how violently the Rayleigh jet fires on cavity
+// collapse (bigger pots hitting harder punch taller, thicker columns)
+static float gJetPunch[kFleetCount];
+
 struct Droplet {
   Vec3 pos;
   Vec3 vel;
@@ -701,6 +718,7 @@ static void SpawnRing(int pot, float x, float z, float strength) {
 }
 
 static void SpawnSplash(int pot, float x, float z, float impactSpeed, float scale) {
+  const bool waveTwo = pot >= 9;
   const float s = std::fmin(impactSpeed / 10.0f, 1.6f);
   SpawnRing(pot, x, z, std::fmin(1.0f, 0.55f + 0.45f * s));
 
@@ -712,19 +730,24 @@ static void SpawnSplash(int pot, float x, float z, float impactSpeed, float scal
   crown.center = {x, kWaterLevel, z};
   crown.age = 0.0f;
   crown.radius = 0.30f * scale;
-  crown.height = (0.22f + 0.55f * s) * scale;
+  crown.height = (0.22f + 0.55f * s) * scale * (waveTwo ? 1.12f : 1.0f);
   crown.spike = std::fmin(1.0f, 0.35f + 0.4f * s);
-  crown.life = 1.0f;
+  crown.life = waveTwo ? 1.1f : 1.0f;
 
   // ---- droplets: torn from the crown spikes, thrown ballistically. They
   // start AT the crown rim with mostly-outward velocities (a real crown
   // throws sheets/spears sideways-up, not a puff of spheres upward).
-  int n = 26 + (int)(16.0f * s);
+  // Wave-two pots fall higher (terminal speed is capped by the sim) so their
+  // crowns carry more energy: a thicker sheet, more ejecta, and torn sheet
+  // fragments (fat droplets) that break off the crown rim mid-air and land
+  // as their own secondary splashes.
+  int n = (26 + (int)(16.0f * s)) * (waveTwo ? 2 : 1);
   for (int i = 0; i < n; i++) {
     // fixed pseudo-random spread (deterministic across runs like the rest
     // of the bench)
     float a = (float)((i * 137 + pot * 61) % 360) * 3.14159265f / 180.0f;
     float r01 = ((i * 89 + pot * 37) % 100) / 100.0f;
+    bool fragment = waveTwo && ((i * 31 + pot * 17) % 7) == 0; // torn sheet chunk
     Droplet d;
     d.owner = pot;
     float rimR = crown.radius + 0.08f + 0.10f * r01;
@@ -736,7 +759,9 @@ static void SpawnSplash(int pot, float x, float z, float impactSpeed, float scal
     float up = 1.6f + 2.6f * s * r01;
     d.vel = {std::cos(a) * out, up, std::sin(a) * out};
     d.radius = (0.035f + 0.045f * ((i * 13) % 7) / 7.0f) * scale;
-    d.maxLife = d.life = 0.9f + 0.6f * ((i * 29) % 5) / 5.0f;
+    if (fragment) d.radius *= 2.3f; // heavy sheet chunk, lands hard
+    d.maxLife = d.life = (0.9f + 0.6f * ((i * 29) % 5) / 5.0f) *
+                         (waveTwo ? 1.15f : 1.0f);
     gDroplets.push_back(d);
   }
 
@@ -759,6 +784,7 @@ static void ResetFleet() {
     gCrowns[i] = CrownSplash{};
     gJets[i] = JetColumn{};
     gRingUsed[i] = 0;
+    gJetPunch[i] = 0.5f + 0.5f * ((i * 41) % 7) / 6.0f;
     Ring *win = RingWindow(i);
     for (int j = 0; j < kRingsPerPot; j++) win[j] = Ring{};
   }
@@ -814,10 +840,15 @@ static void UpdatePhysics(double now, double dt) {
       crown.life = 1.0f - t / 0.95f;
       if (crown.life <= 0.0f || crown.height < 0.03f) {
         crown.active = false;
-        // jet launches as the crown collapses; the cavity is slightly off the
-        // impact centre (the pot floats to one side of it), so the column
-        // rises beside the floating pot instead of hiding behind it
-        jet.velY = 4.6f;
+        // jet launches as the crown collapses — a real Rayleigh jet fires on
+        // the cavity's inertial collapse, roughly sqrt(r/g) after impact:
+        // bigger, faster splashes cavitate deeper and punch a taller column.
+        float s = gJetPunch[i];
+        jet.velY = 4.0f + 1.8f * s;
+        jet.radius *= (0.85f + 0.5f * s);
+        // the cavity is slightly off the impact centre (the pot floats to one
+        // side of it), so the column rises beside the floating pot instead of
+        // hiding behind it
         jet.center.x += 0.9f;
         jet.center.z += 0.4f;
       }
@@ -864,7 +895,12 @@ static void UpdatePhysics(double now, double dt) {
         p.inWater = true;
         p.splashed = true;
         p.splashTime = now;
-        SpawnSplash(i, p.pos.x, p.pos.z, speed, kFleetScale[i]);
+        // Wave-two pots plunge in from much higher drops and hit harder:
+        // their crowns are taller and their ejecta carries more energy.
+        SpawnSplash(i, p.pos.x, p.pos.z, speed * (i >= 9 ? 1.15f : 1.0f),
+                    kFleetScale[i]);
+        // a real impact throws a second, broader ring a beat behind the first
+        SpawnRing(i, p.pos.x, p.pos.z, 0.40f + 0.3f * std::fmin(speed / 9.0f, 1.0f));
         // small rebound then buoyancy takes over
         p.vel.y = speed * kBounce;
         p.yawVel *= 0.25f;
@@ -937,13 +973,15 @@ static int gHudVertexFloats = 0;
 
 // ------------------------------------------------------------- camera path
 static void UpdateAutoCamera(float t) {
-  // slow orbit focused on the teapot's splash point, easing in height so the
-  // drop, the splash and the bob are all framed
+  // slow orbit focused on the splash field, easing in height so the drops,
+  // splashes and the bob are all framed. As wave two opens up the outer ring
+  // (from ~11s), the camera drifts back so the whole fleet stays in frame.
   float a = 0.32f + t * 0.055f;
-  float radius = 7.6f + std::sin(t * 0.07f) * 1.1f;
+  float spread = t > 11.0f ? std::fmin((t - 11.0f) * 0.35f, 3.4f) : 0.0f;
+  float radius = 7.6f + std::sin(t * 0.07f) * 1.1f + spread;
   gCamPos.x = std::cos(a) * radius;
   gCamPos.z = std::sin(a) * radius;
-  gCamPos.y = 2.9f + std::sin(t * 0.045f) * 0.7f;
+  gCamPos.y = 2.9f + std::sin(t * 0.045f) * 0.7f + spread * 0.35f;
   gCamYaw = std::atan2(-gCamPos.x, -gCamPos.z); // look at the centre
   gCamPitch = -0.30f + 0.06f * std::sin(t * 0.03f);
 }
@@ -1220,6 +1258,8 @@ static void DrawCrowns(const Mat4 &view, double now) {
   glUniform3f(gSplashProg.loc("uEyePos"), gCamPos.x, gCamPos.y, gCamPos.z);
   glUniform3f(gSplashProg.loc("uLightDir"), kLightDir[0], kLightDir[1], kLightDir[2]);
   glUniform3f(gSplashProg.loc("uLightTint"), kLightTint[0], kLightTint[1], kLightTint[2]);
+  glUniform3f(gSplashProg.loc("uSkyA"), kTileA[0], kTileA[1], kTileA[2]);
+  glUniform3f(gSplashProg.loc("uSkyB"), kTileB[0], kTileB[1], kTileB[2]);
   glUniform1f(gSplashProg.loc("uTime"), (float)now);
   glDepthMask(GL_FALSE);
   glDisable(GL_CULL_FACE); // the sheet is seen from both sides
