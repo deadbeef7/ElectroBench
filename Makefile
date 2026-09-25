@@ -2,14 +2,15 @@
 # ElectroBench Makefile
 # Windows (MSYS2), macOS (Homebrew), Linux
 #
-# ONE executable: build/ElectroBench contains BOTH scenes (the OG GL 2.1 gun
-# scene and the GL 3.3 dusk-ocean scene). There is no second binary and no
-# child process: src/tidebench.cxx is linked straight into this program as a
-# scene module and handed the same SDL session by src/main.cxx.
+# ONE executable: build/ElectroBench contains ALL THREE scenes (the OG GL 2.1
+# gun scene, the GL 3.3 dusk-ocean scene, and the GL 3.3 pool-room scene).
+# There is no second binary and no child process: src/tidebench.cxx and
+# src/pool.cxx are linked straight into this program as scene modules and
+# handed the same SDL session by src/main.cxx.
 #
 # This file defines exactly ONE binary target ($(BIN)). There is no tidebench,
-# legacy or per-scene target, and no per-scene second compile: the two .cxx
-# files are just the two object files of the one executable.
+# poolbench, legacy or per-scene target, and no per-scene second compile: the
+# three .cxx files are just the three object files of the one executable.
 # ============================================================
 
 CXX ?= g++
@@ -33,7 +34,7 @@ else
     OBJDIR := $(BUILD)
 endif
 
-OBJS := $(OBJDIR)/main.o $(OBJDIR)/tidebench.o
+OBJS := $(OBJDIR)/main.o $(OBJDIR)/tidebench.o $(OBJDIR)/pool.o
 
 BIN = $(BUILD)/ElectroBench$(STATIC_SUFFIX)
 
@@ -44,7 +45,8 @@ BIN = $(BUILD)/ElectroBench$(STATIC_SUFFIX)
 OBSOLETE := $(BUILD)/TideBench $(BUILD)/TideBench.exe \
             $(BUILD)/TideBench-static $(BUILD)/TideBench-static.exe \
             $(BUILD)/ElectroBenchPS14 $(BUILD)/ElectroBenchPS14.exe \
-            ElectroBenchPS14 ElectroBenchPS14.exe
+            $(BUILD)/PoolBench $(BUILD)/PoolBench.exe \
+            ElectroBenchPS14 ElectroBenchPS14.exe PoolBench PoolBench.exe
 
 # ------------------------------------------------------------
 # Platform detection
@@ -157,7 +159,7 @@ $(OBJDIR):
 	mkdir -p $@
 
 # ------------------------------------------------------------
-# ElectroBench (the single binary: OG gun scene + ocean scene)
+# ElectroBench (the single binary: OG gun scene + ocean scene + pool scene)
 # ------------------------------------------------------------
 
 $(OBJDIR)/main.o: src/main.cxx src/font_atlas.hxx | $(OBJDIR)
@@ -166,9 +168,12 @@ $(OBJDIR)/main.o: src/main.cxx src/font_atlas.hxx | $(OBJDIR)
 $(OBJDIR)/tidebench.o: src/tidebench.cxx src/font_atlas.hxx | $(OBJDIR)
 	$(CXX) $(CPPFLAGS) $(PKG_CFLAGS) $(GLEW_CFLAGS) $(CXXFLAGS) -c $< -o $@
 
+$(OBJDIR)/pool.o: src/pool.cxx src/font_atlas.hxx | $(OBJDIR)
+	$(CXX) $(CPPFLAGS) $(PKG_CFLAGS) $(GLEW_CFLAGS) $(CXXFLAGS) -c $< -o $@
+
 $(BIN): $(OBJS) | $(OBJDIR)
 	@echo "========================================"
-	@echo " Building ElectroBench (both scenes in one binary)"
+	@echo " Building ElectroBench (all three scenes in one binary)"
 	@echo " Platform: $(PLATFORM)"
 	@echo "========================================"
 ifeq ($(STATIC),1)

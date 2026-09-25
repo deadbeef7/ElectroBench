@@ -1,0 +1,13 @@
+# ElectroBench scene 3 teapot material.
+# One material for the whole model; map_Kd points at the placeholder texture
+# (assets/teapot_placeholder.png) — swap that PNG for your own decal/glaze and
+# keep the file name, or edit this line to match a new texture name.
+newmtl teapot_glaze
+Ka 0.08 0.08 0.08
+Kd 0.75 0.75 0.75
+Ks 0.65 0.65 0.65
+Ns 96.0
+Ni 1.45
+d 1.0
+illum 2
+map_Kd teapot_placeholder.png
