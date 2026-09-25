@@ -297,21 +297,29 @@ static void RenderHUD() {
   glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
 }
 
-// ---- scene 2 support ----------------------------------------------------
-// This is ONE executable: src/tidebench.cxx is the ocean scene module (it has
-// no main of its own) and is linked straight into this binary. After the 60 s
-// gun run this file hands the SDL session to it, and the ocean scene probes a
-// GL 3.3 core context, skipping itself when the device cannot provide one.
+// ---- scene 2 + 3 support ------------------------------------------------
+// This is ONE executable: src/tidebench.cxx is the ocean scene module and
+// src/pool.cxx is the pool-room scene module (neither has a main of its own);
+// both are linked straight into this binary. After the 60 s gun run this file
+// hands the SDL session to them in turn, and each GL 3.3 scene probes its own
+// core context, skipping itself when the device cannot provide one.
 int RunOceanScene(bool *gaveUpOut);       // scene 2 entry (GL 3.3 ocean)
 extern double gFusedTideScore;            // scene 2's final score
 int  OceanSceneParseArgs(int argc, char **argv); // scene 2's CLI flags
 void OceanSceneSetScreenshot(const char *path);  // share --screenshot
 void OceanSceneSetStandalone(bool standalone);   // --scene-only
+int RunPoolScene(bool *gaveUpOut);        // scene 3 entry (GL 3.3 pool room)
+extern double gFusedPoolScore;            // scene 3's final score
+int  PoolSceneParseArgs(int argc, char **argv);  // scene 3's CLI flags
+void PoolSceneSetScreenshot(const char *path);   // share --screenshot
+void PoolSceneSetStandalone(bool standalone);    // --pool-only
 void changeSize(int w, int h);            // resize handler (defined below)
 
-static bool   gFusedEnabled = true; // --og-only forces the single OG scene
-static bool   gSceneOnly = false;   // --scene-only runs the ocean scene alone
+static bool   gFusedEnabled = true;  // --og-only forces the single OG scene
+static bool   gSceneOnly = false;    // --scene-only runs the ocean scene alone
+static bool   gPoolOnly = false;     // --pool-only runs the pool scene alone
 static bool   gFusedTideRan = false;
+static bool   gFusedPoolRan = false;
 static double gFusedOgScore = 0.0;
 
 // Results screen: clear the window and show the final score big and centred.
@@ -342,11 +350,14 @@ static void RenderResults() {
   glClearColor(0.012f, 0.012f, 0.022f, 1.0f);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-  char big[96], timeLine[128], hint[96], scene1[96], scene2[96];
-  if (gFusedEnabled && gFusedTideRan) {
+  char big[96], timeLine[128], hint[96], scene1[96], scene2[96], scene3[96];
+  int scenesRan = 1 + (gFusedTideRan ? 1 : 0) + (gFusedPoolRan ? 1 : 0);
+  if (gFusedEnabled && scenesRan > 1) {
     // fused run: average of the scenes that ran, per-scene scores below
-    snprintf(big, sizeof(big), "AVERAGE SCORE : %.0f",
-             0.5 * (gFusedOgScore + gFusedTideScore));
+    double sum = gFusedOgScore;
+    if (gFusedTideRan) sum += gFusedTideScore;
+    if (gFusedPoolRan) sum += gFusedPoolScore;
+    snprintf(big, sizeof(big), "AVERAGE SCORE : %.0f", sum / scenesRan);
   } else {
     snprintf(big, sizeof(big), "SCORE : %.0f", gResultsScore);
   }
@@ -368,18 +379,30 @@ static void RenderResults() {
           cy + kGlyphH * kGlyphScale * 0.5f + 24.0f, timeLine);
   if (gFusedEnabled) {
     snprintf(scene1, sizeof(scene1), "ElectroBench (guns)  : %.0f", gFusedOgScore);
-    if (gFusedTideRan)
-      snprintf(scene2, sizeof(scene2), "Dusk Ocean (scene 2) : %.0f", gFusedTideScore);
-    else
-      snprintf(scene2, sizeof(scene2), "Dusk Ocean (scene 2) : skipped (needs GL 3.3)");
+    snprintf(scene2, sizeof(scene2), "Dusk Ocean (scene 2) : %s",
+             gFusedTideRan ? "" : "skipped (needs GL 3.3)");
+    if (gFusedTideRan) {
+      char scoreTxt[24];
+      snprintf(scoreTxt, sizeof(scoreTxt), "%.0f", gFusedTideScore);
+      strncat(scene2, scoreTxt, sizeof(scene2) - strlen(scene2) - 1);
+    }
+    snprintf(scene3, sizeof(scene3), "Pool Room (scene 3)  : %s",
+             gFusedPoolRan ? "" : "skipped (needs GL 3.3)");
+    if (gFusedPoolRan) {
+      char scoreTxt[24];
+      snprintf(scoreTxt, sizeof(scoreTxt), "%.0f", gFusedPoolScore);
+      strncat(scene3, scoreTxt, sizeof(scene3) - strlen(scene3) - 1);
+    }
     glColor4f(0.60f, 0.78f, 0.88f, 1.0f);
     HudText(cx - HudTextWidth(scene1, 1.0f) * 0.5f,
             cy + kGlyphH * kGlyphScale * 0.5f + 52.0f, scene1);
     HudText(cx - HudTextWidth(scene2, 1.0f) * 0.5f,
             cy + kGlyphH * kGlyphScale * 0.5f + 68.0f, scene2);
+    HudText(cx - HudTextWidth(scene3, 1.0f) * 0.5f,
+            cy + kGlyphH * kGlyphScale * 0.5f + 84.0f, scene3);
     glColor4f(0.40f, 0.48f, 0.55f, 1.0f);
     HudText(cx - HudTextWidth(hint, 1.0f) * 0.5f,
-            cy + kGlyphH * kGlyphScale * 0.5f + 96.0f, hint);
+            cy + kGlyphH * kGlyphScale * 0.5f + 112.0f, hint);
   } else {
     glColor4f(0.40f, 0.48f, 0.55f, 1.0f);
     HudText(cx - HudTextWidth(hint, 1.0f) * 0.5f,
@@ -856,16 +879,15 @@ void renderScene() {
 
     if (gFusedEnabled) {
       // ---- scene 2: the GL 3.3 dusk-ocean scene, same SDL session ----
-      printf("Scene 2/2 : Dusk Ocean (GL 3.3)\n");
+      printf("Scene 2/3 : Dusk Ocean (GL 3.3)\n");
       fflush(stdout);
       SDL_Quit(); // the ocean scene recreates the window with a GL 3.3 core context
       bool gaveUp = false;
       int rc = RunOceanScene(&gaveUp);
       if (rc == 0) {
         gFusedTideRan = true;
-        printf("Fused Results - ElectroBench : %.0f | Dusk Ocean : %.0f | Average : %.0f\n",
-               gFusedOgScore, gFusedTideScore,
-               0.5 * (gFusedOgScore + gFusedTideScore));
+        printf("Fused Results - ElectroBench : %.0f | Dusk Ocean : %.0f\n",
+               gFusedOgScore, gFusedTideScore);
       } else if (rc == 2) {
         // user quit during the ocean scene — leave without the combined screen
         SDL_Quit();
@@ -874,7 +896,23 @@ void renderScene() {
         printf("Dusk ocean scene skipped: no OpenGL 3.3 core context on this device\n");
       }
       fflush(stdout);
-      // The ocean scene tore SDL down either way; bring the window back (a fresh
+
+      // ---- scene 3: the GL 3.3 pool-room scene (checker sky + water + teapot) ----
+      printf("Scene 3/3 : Pool Room (GL 3.3)\n");
+      fflush(stdout);
+      bool gaveUpPool = false;
+      int rcPool = RunPoolScene(&gaveUpPool);
+      if (rcPool == 0) {
+        gFusedPoolRan = true;
+      } else if (rcPool == 2) {
+        SDL_Quit();
+        exit(0);
+      } else {
+        printf("Pool room scene skipped: no OpenGL 3.3 core context on this device\n");
+      }
+      fflush(stdout);
+
+      // The GL 3.3 scenes tore SDL down either way; bring the window back (a fresh
       // GL 2.1 context is all the immediate-mode results text needs). The font
       // atlas texture lived in the dead context; force a re-upload.
       gFontAtlasTexInit = false;
@@ -1124,15 +1162,33 @@ int main(int argc, char **argv) {
       gFusedEnabled = false; // run only the OG scene even on GL 3.3 devices
     } else if (arg == "--scene-only") {
       gSceneOnly = true; // run only the GL 3.3 ocean scene
+    } else if (arg == "--pool-only") {
+      gPoolOnly = true; // run only the GL 3.3 pool-room scene
     }
   }
 
-  // One binary owns the whole command line: forward the ocean scene's own
-  // flags to it and, with --scene-only, run that scene on its own.
+  // One binary owns the whole command line: forward the GL 3.3 scenes' own
+  // flags to them and, with --scene-only / --pool-only, run that scene alone.
   if (OceanSceneParseArgs(argc, argv) != EXIT_SUCCESS)
     return EXIT_FAILURE;
-  if (gShotPath != nullptr)
+  if (PoolSceneParseArgs(argc, argv) != EXIT_SUCCESS)
+    return EXIT_FAILURE;
+  if (gShotPath != nullptr) {
     OceanSceneSetScreenshot(gShotPath);
+    PoolSceneSetScreenshot(gShotPath);
+  }
+
+  if (gPoolOnly) {
+    PoolSceneSetStandalone(true);
+    bool gaveUp = false;
+    int rc = RunPoolScene(&gaveUp);
+    if (rc == 1) {
+      fprintf(stderr, "ElectroBench: no OpenGL 3.3 core context on this device - "
+                      "the pool room scene cannot run here\n");
+      return EXIT_FAILURE;
+    }
+    return 0;
+  }
 
   if (gSceneOnly) {
     OceanSceneSetStandalone(true);

@@ -1,13 +1,14 @@
 # ElectroBench
-ElectroBench is a 45+60 second long dual scene benchmark specifiacally designed to run on old and modern PCs, don't critise it by it using OpenGL 2.1, and GLSL 1.2, Even office PCs have low scores at it.
+ElectroBench is a 45+60+45 second long triple scene benchmark specifiacally designed to run on old and modern PCs, don't critise it by it using OpenGL 2.1, and GLSL 1.2, Even office PCs have low scores at it.
 It uses OpenGL 2.1/3.3, and C++, and uses make for compilation. It is designed to be a replacement for glmark (even though it is great and I used it before).
 
-It ships **one** executable that contains **both** scenes — no second binary, no child process:
+It ships **one** executable that contains **all three** scenes — no second binary, no child process:
 
 | Scene | Renderer | Contents |
 |---|---|---|
 | **ElectroBench** (the OG) | OpenGL 2.1 / GLSL 1.2, fixed-function pipeline | **110 UZIs** on a shadow-mapped concrete floor, lit by a warm sun |
 | **TideBench** (scene 2) | OpenGL 3.3 core, pixel-shader workloads | An ocean under volumetric clouds (3DMark2001 SE "Nature" recreation) |
+| **PoolBench** (scene 3) | OpenGL 3.3 core, analytic shaders | A checkerboard-sky pool room with a hidden light and a falling, splashing teapot |
 
 
 
@@ -25,13 +26,17 @@ The TideBench ocean scene — long cloud banks with sunward silver linings, a na
 
 ![ElectroBench TideBench scene](docs/screenshots/ps14_dusk_t36.png)
 
+The PoolBench pool room — an infinite checkerboard sky mirrored on open water, lit only by a hidden light, with a teapot that falls from the sky, splashes down, and bobs to rest (splash rings and droplets included):
+
+![ElectroBench PoolBench scene](docs/screenshots/pool_teapot.png)
+
 # How to build ?
 
 Dependencies : `make`, `g++`, SDL2, GLEW, GLU (+ dev headers). On Debian/Ubuntu that is
 `libsdl2-dev libglew-dev libglu1-mesa-dev`; on Windows use MSYS2 (`pacman -S mingw-w64-x86_64-{gcc,SDL2,glew}`); on macOS `brew install sdl2 glew` (you may need `brew install make` for a GNU make).
 
 ```sh
-make            # builds the single ElectroBench binary (both scenes linked in)
+make            # builds the single ElectroBench binary (all three scenes linked in)
 make run        # builds it and runs it
 ```
 
@@ -109,16 +114,45 @@ make
 
 Controls : `F` toggles the automatic fly-over camera, long-click + move orbits the camera, mouse wheel zooms, arrow keys look around, `ESC` quits.
 
+# Scene 3 — PoolBench
+
+PoolBench is **scene 3 of the same ElectroBench binary**, also **OpenGL 3.3 core**. It is the
+pool-room illusion: an infinite checkerboard ceiling-sky mirrored perfectly on open water.
+
+What it renders :
+- A **checkerboard sky dome** with analytically antialiased tiles that project to the horizon, and a
+  soft directional wash toward a **hidden light source** — there is no sun disc, no lamp model:
+  the light is only ever visible through the shading it produces
+- **Open water** that analytically mirrors the same checker function the sky uses, so the reflection
+  lines up with the sky across the horizon, plus fresnel dimming, distance haze and foam brightening
+- A **teapot** (`assets/teapot.obj`, one material, placeholder texture you can swap) dropped from
+  the sky with real-ish physics: gravity and tumble in the air, splash with rebound on impact,
+  buoyancy + drag underwater, then a damped bob to rest while it slowly rights itself. `R` re-drops it
+- **Splash FX**: up to six concurrent expanding ripple rings disturb the water reflection, and
+  camera-billboarded droplets spray out with per-droplet gravity, fall back, and drip in as micro-rings
+
+Run the pool scene on its own with :
+
+```sh
+make
+./build/ElectroBench --pool-only          # Linux / macOS
+./build/ElectroBench.exe --pool-only      # Windows (MSYS2)
+```
+
+Controls : `F` toggles the automatic camera, long-click + move orbits, mouse wheel zooms, `R` re-drops
+the teapot, `ESC` quits.
+
 Headless visual-test flags (used to verify the render output in CI-like environments):
 
 ```sh
 ./build/ElectroBench --scene-only --width 960 --screenshot /tmp/shot.ppm --shot-times 6,20,38
+./build/ElectroBench --pool-only --width 960 --screenshot /tmp/shot.ppm --shot-times 2,3.2,5,12
 ./build/ElectroBench --og-only --screenshot /tmp/shot.ppm --shot-time 3
 ```
 
 # How the score is calculated ?
 
-Both scenes use the same formula, computed from the **average FPS over the whole run**:
+All scenes use the same formula, computed from the **average FPS over the whole run**:
 
 ```
 score = fps² × 2
@@ -139,19 +173,18 @@ The same line is also printed to stdout.
 Benchmark Results - Time : 45.0s, Average FPS : 12.4, Score : 308
 ```
 
-# One executable, two scenes
+# One executable, three scenes
 
-`build/ElectroBench` is the **only** binary, and it contains both scenes. It runs the OG 60-second gun scene
+`build/ElectroBench` is the **only** binary, and it contains all three scenes. It runs the OG 60-second gun scene
 first, then probes an OpenGL 3.3 core context:
 
-- **found** — TideBench runs as scene 2 on the same session, and the final
-  results screen shows **per-scene scores and the average**:
-  `Fused Results - ElectroBench : 308 | TideBench : 42 | Average : 175`
-- **not found** (GL 2.1-only drivers, old iGPUs) — the ocean scene skips itself cleanly and the
+- **found** — TideBench runs as scene 2, then PoolBench as scene 3, on the same session, and the final
+  results screen shows **per-scene scores and the average of the scenes that ran**
+- **not found** (GL 2.1-only drivers, old iGPUs) — both GL 3.3 scenes skip themselves cleanly and the
   OG result stands, so the binary still runs on the ancient hardware it targets
 
 Scene selection flags: `--og-only` runs just the gun scene even on GL 3.3-capable devices,
-`--scene-only` runs just the ocean scene.
+`--scene-only` runs just the ocean scene, `--pool-only` runs just the pool-room scene.
 
 # Windows (MSYS2)
 
@@ -165,6 +198,7 @@ On Windows the easiest route is [MSYS2](https://www.msys2.org/), which provides 
 g++ -std=c++17 -O2 -march=x86-64 -mtune=generic \
     src/main.cxx \
     src/tidebench.cxx \
+    src/pool.cxx \
     -o build/ElectroBench.exe \
     $(pkg-config --cflags --libs sdl2) \
     -lglew32 \
@@ -172,8 +206,9 @@ g++ -std=c++17 -O2 -march=x86-64 -mtune=generic \
     -lopengl32
 ```
 
-Both scenes are linked into that one binary: `src/tidebench.cxx` is a scene module (it has no
-`main()` of its own) that `src/main.cxx` hands the same SDL session to. For the static build, prefer
+All three scenes are linked into that one binary: `src/tidebench.cxx` and `src/pool.cxx` are scene
+modules (they have no `main()` of their own) that `src/main.cxx` hands the same SDL session to. For
+the static build, prefer
 `make STATIC=1`: it passes `-DGLEW_STATIC`, uses `pkg-config --static`, and keeps the static object
 files separate from the normal build. If invoking `g++` directly, use the same define and static
 GLEW archive consistently; do not compile with the DLL-import GLEW header and then link

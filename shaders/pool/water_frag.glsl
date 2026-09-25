@@ -1,0 +1,97 @@
+#version 330 core
+// Pool scene water. One fragment shader handles:
+//   * the checkerboard sky reflected through an analytic mirror ray into the
+//     SAME checker function the sky dome uses (identical pattern, exact
+//     alignment across the horizon — the pool-room illusion),
+//   * the hidden-light specular highlight (the only visible evidence of the
+//     light) with Blinn-Phong sheen and sun-strength falloff,
+//   * bobbing ripple rings from the teapot splash: up to N concurrent rings,
+//     positions/amplitudes streamed as uniforms from the scene module,
+//   * soft subsurface-ish body colour and distance haze into the sky tint.
+
+#define MAX_RINGS 6
+
+in vec3 vWorld;
+in vec3 vNormal;
+in vec2 vUV;
+
+uniform vec3 uEyePos;
+uniform vec3 uLightDir;
+uniform vec3 uLightTint;
+uniform vec3 uTileA;
+uniform vec3 uTileB;
+uniform float uTime;
+uniform int   uRingCount;
+uniform vec4  uRings[MAX_RINGS]; // xy = centre (world), z = radius, w = strength 0..1
+
+out vec4 fragColor;
+
+// ---- the SAME checker as sky_frag.glsl (copy kept intentional: one file
+// ---- cannot include the other without extension support on all drivers)
+float checker(vec2 p) {
+    vec2 w = fract(p) - 0.5;
+    vec2 a = abs(fract(p * 0.5) - 0.5) / fwidth(p * 0.5);
+    vec2 fade = clamp(a * 1.6 - 0.5, 0.0, 1.0);
+    float cw = min(fade.x, fade.y);
+    return mix(step(dot(w, w), 0.25), 0.5, cw);
+}
+
+// reflected ray into the dome-space checker, evaluated exactly like the sky:
+// mirror the view ray about the water plane, then unroll like the dome does.
+vec3 reflectedCheckerColor(vec3 dirToViewer, vec3 pos, float rippleBump) {
+    vec3 rd = reflect(dirToViewer, normalize(vec3(0.0, 1.0, 0.0)) + vec3(rippleBump, 0.0, rippleBump) * 0.35);
+    rd.y = abs(rd.y) * 0.85 + 0.02;      // keep rays skimming upward-ish
+    float up = clamp(rd.y, 0.02, 1.0);
+    // gnomic unroll with the SAME 1.05 gain as the sky dome, then the same
+    // 1.05-cell checker scale — tiles line up across the horizon line
+    vec2 plane = rd.xz / up * 1.05;
+    float c = checker(plane / 1.05);
+    vec3 albedo = mix(uTileB, uTileA, c);
+    // reflection dims with steep view angles and distance
+    float fres = pow(1.0 - clamp(dot(-dirToViewer, vec3(0.0, 1.0, 0.0)), 0.0, 1.0), 2.2);
+    return albedo * (0.55 + 0.45 * fres);
+}
+
+void main() {
+    vec3 V = normalize(uEyePos - vWorld);
+
+    // --- hidden light specular: the only light you ever see ---------------
+    vec3 H = normalize(V + normalize(uLightDir));
+    float spec = pow(clamp(dot(vec3(0.0, 1.0, 0.0), H), 0.0, 1.0), 220.0);
+    float sheen = pow(clamp(dot(vec3(0.0, 1.0, 0.0), H), 0.0, 1.0), 14.0);
+
+    // --- splash rings: expand + fade, disturb the reflection ---------------
+    float bump = 0.0;
+    float foam = 0.0;
+    for (int i = 0; i < MAX_RINGS; i++) {
+        if (i >= uRingCount) break;
+        vec4 r = uRings[i];
+        float d = length(vWorld.xz - r.xy);
+        float band = d - r.z;
+        float width = 0.30 + r.z * 0.05;
+        float ring = exp(-band * band / (width * width));
+        bump += ring * r.w * 0.55;
+        foam  += ring * r.w;
+    }
+    bump = clamp(bump, 0.0, 1.0);
+    foam = clamp(foam, 0.0, 1.0);
+
+    // --- colour ------------------------------------------------------------
+    vec3 refl = reflectedCheckerColor(-V, vWorld, bump);
+    vec3 body = mix(vec3(0.020, 0.038, 0.048), vec3(0.046, 0.085, 0.100),
+                    clamp(vWorld.y * 0.5 + 0.5, 0.0, 1.0));
+
+    vec3 col = mix(body, refl, 0.82);                 // mirror-first water
+    col += uLightTint * (spec * 2.4 + sheen * 0.35);  // the hidden light
+    col += vec3(0.9) * foam * 0.22;                   // foam brightening
+    col += uTileA * 0.035;                            // ambient skylight
+
+    // haze toward the horizon blends water into the sky glow
+    float dist = length(uEyePos - vWorld);
+    float haze = 1.0 - exp(-dist * 0.004);
+    col = mix(col, uLightTint * 0.55, haze * 0.65);
+
+    col = col / (col + vec3(0.35));
+    col = pow(col, vec3(1.0 / 2.2));
+    fragColor = vec4(col, 1.0);
+}
