@@ -89,7 +89,12 @@ void main() {
     vec3 body = mix(vec3(0.030, 0.180, 0.320), vec3(0.010, 0.090, 0.200),
                     clamp(dist01, 0.0, 1.0));
 
-    vec3 col = mix(body, refl, 0.72);                 // blue water, sky on top
+    // Fresnel-correct mix: grazing angles (far water) mirror the sky hard,
+    // steep angles (near camera) show the BLUE body through. Without this the
+    // coral tiles' reflections out-shout the blue everywhere and the whole
+    // pool reads orange.
+    float mirror = 0.28 + 0.62 * pow(1.0 - clamp(V.y, 0.0, 1.0), 1.6);
+    vec3 col = mix(body, refl, clamp(mirror, 0.0, 1.0));
     col += uLightTint * (spec * 2.4 + sheen * 0.35);  // the hidden light
     col += vec3(0.9) * foam * 0.22;                   // foam brightening
     col += uTileA * 0.06;                             // ambient skylight
