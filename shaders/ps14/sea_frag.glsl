@@ -32,7 +32,7 @@ uniform vec3  uSunDir;
 uniform vec3  uHorizonColor;
 uniform vec3  uWaterColor;
 
-#define MAX_CLOUDS 7             // must match sky_frag.glsl and tidebench.cxx
+#define MAX_CLOUDS 9             // must match sky_frag.glsl and tidebench.cxx
 uniform int   uCloudCount;
 uniform float uCloudAzim[MAX_CLOUDS];   // centre azimuth, radians
 uniform float uCloudElev[MAX_CLOUDS];   // centre elevation, radians
@@ -137,7 +137,9 @@ float projectedCloudDensity(vec3 dir) {
                 cos(ang) * 1.8 + uCloudAzim[i] * 3.7,
                 sin(ang) * 1.8 + float(j) * 2.1 + uCloudElev[i] * 9.0));
             rj *= 0.91 + 0.16 * lobeNoise;
-            vec3 metric = vec3(q.x / rj, q.y / (rj * 0.92), q.z / (rj * 1.18));
+            // The wisp squash must match sky_frag.glsl exactly so the shadow
+            // footprint tracks the visible streak.
+            vec3 metric = vec3(q.x / rj, q.y / (rj * 0.92), q.z / (rj * 1.18)) * vec3(1.0, 1.0, i >= 7 ? 0.55 : 1.0);
             local = cloudSmoothMax(local, 1.0 - smoothstep(0.62, 1.12, length(metric)), 0.10);
         }
 
@@ -166,19 +168,18 @@ float cloudShadow(vec3 world, vec3 sd) {
     return clamp(exp(-local * 2.4), 0.12, 1.0);
 }
 
-// Three octaves of small analytic wavelets: extra normal detail that would
+// Two octaves of small analytic wavelets: extra normal detail that would
 // be wasted (and aliased) as vertex displacement, but sells micro-chop up
-// close. Frequencies chosen so screen-space wavelength stays > ~4px at typical
-// orbit distances — content finer than that reads as noise on real GPUs.
+// close. The third octave was removed for good: its ~2.4 m wavelength lands
+// as half-bright teal squiggles on the dark sea in motion — the "small light
+// blue waves" artifact. Two slow octaves keep the chop without the scum.
 void detailNormals(vec2 p, float t, float dist, inout vec2 grad) {
     float fade = exp(-dist * 0.004);   // micro-chop is a NEAR-camera feature
     if (fade < 0.02) return;
     float w1 = sin(dot(p, vec2(0.86, 0.51)) * 1.15 + t * 5.10);
     float w2 = sin(dot(p, vec2(-0.44, 0.90)) * 2.30 + t * 6.80);
-    float w3 = sin(dot(p, vec2(0.22, -0.97)) * 4.40 + t * 8.60);
-    grad += vec2(0.86, 0.51) * 1.15 * w1 * 0.045;
-    grad += vec2(-0.44, 0.90) * 2.30 * w2 * 0.022;
-    grad += vec2(0.22, -0.97) * 4.40 * w3 * 0.010;
+    grad += vec2(0.86, 0.51) * 1.15 * w1 * 0.040;
+    grad += vec2(-0.44, 0.90) * 2.30 * w2 * 0.020;
 }
 
 void main() {

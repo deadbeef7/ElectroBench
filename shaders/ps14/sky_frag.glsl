@@ -25,7 +25,7 @@ uniform vec3  uMidColor;
 uniform vec3  uHorizonColor;
 uniform vec3  uSunColor;
 
-#define MAX_CLOUDS 7
+#define MAX_CLOUDS 9
 uniform int   uCloudCount;
 uniform float uCloudAzim[MAX_CLOUDS];   // centre azimuth, radians
 uniform float uCloudElev[MAX_CLOUDS];   // centre elevation, radians
@@ -35,6 +35,10 @@ uniform float uCloudStretch[MAX_CLOUDS];// azimuthal elongation (>1 = wider than
 out vec4 fragColor;
 
 const float PI = 3.14159265359;
+
+// Wisp flattening: clouds 7+ (the thin streaks above the sun) are vertically
+// squashed so they read as cirrus veils instead of miniature cumulus puffs.
+float wispSquash(int i) { return i >= 7 ? 0.55 : 1.0; }
 
 float hash21(vec2 p) {
     vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -120,7 +124,8 @@ vec4 cloudSample(vec3 dir) {
             float rj = R * radii[j] * (1.0 + wobble) * (0.91 + 0.16 * lobeNoise);
             // Wider than deep in the angular local frame: cloud shoulders stay
             // broad while the depth term gives the lobes a rounded volume.
-            vec3 metric = vec3(q.x / rj, q.y / (rj * 0.92), q.z / (rj * 1.18));
+            // Wisps squash the depth axis so they stay paper-thin.
+            vec3 metric = vec3(q.x / rj, q.y / (rj * 0.92), q.z / (rj * 1.18)) * vec3(1.0, 1.0, wispSquash(i));
             float puff = 1.0 - smoothstep(0.62, 1.12, length(metric));
             local = smoothMax(local, puff, 0.10);
         }

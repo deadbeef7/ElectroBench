@@ -22,7 +22,7 @@ Close-up — mags resting on the ground, shadows clearly visible under each gun:
 
 ![Close-up: UZIs with mags on the ground and per-gun shadows](docs/screenshots/uzi_close.png)
 
-The TideBench ocean scene — long cloud banks with sunward silver linings, a narrow orange glitter path down the middle of the sea, dark blue-purple water either side, raised swell banks:
+The TideBench ocean scene — long cloud banks with sunward silver linings, two thin cirrus wisps riding high above the sun, a narrow orange glitter path down the middle of the sea, dark blue-purple water either side, raised swell banks:
 
 ![ElectroBench TideBench scene](docs/screenshots/ps14_dusk_t36.png)
 
@@ -84,14 +84,17 @@ hardware alike, so low single-digit FPS on a low-end machine means the workload 
 
 What it renders :
 - A procedural **sky dome** rendered **directly at full screen resolution**: dusk gradient with a
-  bright horizon band, a compact orange sun, and seven **volumetric cloud banks**. Each bank combines
-  eight anisotropic 3D lobes with low-frequency boundary erosion, then integrates seven density probes
-  toward the sun through three energy-conserving scattering octaves. This produces layered cauliflower
-  silhouettes, thin silver linings, warm transmission through shoulders, cool dense bases, powdery
-  cores, and aerial perspective without sampling a cloud texture. Hand-placed banks preserve exact
-  clear-sky gaps instead of producing noise-texture mottle
+  bright horizon band, a compact orange sun, seven **volumetric cloud banks** and two **thin cirrus
+  wisps** parked above the sun (small radius, heavy stretch, flattened on the depth axis so they read
+  as paper-thin streaks riding over the dusk glow — their shadows on the sea squash to match). Each
+  bank combines eight anisotropic 3D lobes with low-frequency boundary erosion, then integrates seven
+  density probes toward the sun through three energy-conserving scattering octaves. This produces
+  layered cauliflower silhouettes, thin silver linings, warm transmission through shoulders, cool
+  dense bases, powdery cores, and aerial perspective without sampling a cloud texture. Hand-placed
+  banks preserve exact clear-sky gaps instead of producing noise-texture mottle
 - A **4 km ocean patch** on a dense GPU-displaced grid: long rolling swells with crest-skewed banks,
-  per-pixel analytic wave normals plus near-camera detail wavelets
+  per-pixel analytic wave normals plus near-camera detail wavelets (two slow octaves — the fine third
+  octave was tuned out, its half-bright teal squiggle band read as scum on the dark sea in motion)
 - High-resolution **environment cubemap** reflections with roughness-matched LOD (the sun smears
   into a glow, never texel squares), fresnel blending, sun-tinted **glitter** path gated to the
   sun's azimuth (bright path down the middle, dark blue-purple water either side),
