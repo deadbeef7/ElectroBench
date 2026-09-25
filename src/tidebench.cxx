@@ -58,22 +58,26 @@ static const float kSeaSize = 4096.0f;   // world size of the ocean patch: reach
 static const int kEnvMapSize = 768;      // cubemap face resolution — higher fidelity reflections
 static const int kNoiseSize = 256;       // fBm noise texture size
 static const int kRippleSize = 256;      // ripple gradient texture size
-#define MAX_CLOUDS 7                     // must match sky_frag.glsl and sea_frag.glsl
+#define MAX_CLOUDS 9                     // must match sky_frag.glsl and sea_frag.glsl
 // Seven varied cumulus banks surround the orbit while leaving a clear solar
 // corridor. Larger stretched masses establish depth; smaller towers keep the
 // sun-facing composition from becoming a ceiling of featureless puffs.
-static const float kCloudAzim[MAX_CLOUDS] = {0.18f, 0.88f, 1.75f, 2.65f, 3.75f, 4.65f, 5.75f};
-static const float kCloudElev[MAX_CLOUDS] = {0.190f, 0.300f, 0.250f, 0.380f, 0.220f, 0.330f, 0.160f};
-static const float kCloudRad[MAX_CLOUDS]  = {0.048f, 0.037f, 0.030f, 0.043f, 0.027f, 0.036f, 0.050f};
-static const float kCloudStretch[MAX_CLOUDS] = {3.3f, 2.4f, 2.1f, 2.8f, 2.2f, 2.3f, 3.6f};
+// Clouds 7-8 are two THIN high wisps parked above the sun (elevation 0.42+
+// vs the sun's 0.29): small radius + heavy stretch reads as cirrus streaks
+// riding over the dusk glow without ever blocking the sun disc.
+static const float kCloudAzim[MAX_CLOUDS] = {0.18f, 0.88f, 1.75f, 2.65f, 3.75f, 4.65f, 5.75f, 0.30f, 0.80f};
+static const float kCloudElev[MAX_CLOUDS] = {0.190f, 0.300f, 0.250f, 0.380f, 0.220f, 0.330f, 0.160f, 0.420f, 0.465f};
+static const float kCloudRad[MAX_CLOUDS]  = {0.048f, 0.037f, 0.030f, 0.043f, 0.027f, 0.036f, 0.050f, 0.020f, 0.024f};
+static const float kCloudStretch[MAX_CLOUDS] = {3.3f, 2.4f, 2.1f, 2.8f, 2.2f, 2.3f, 3.6f, 4.6f, 4.2f};
 static const int kFoamSize = 256;        // foam texture size
 
 // Slow wind drift: cloud azimuths crawl a little every second so the banks
 // slide across the sky. Both the sky pass and the sea's cloud shadows upload
 // the same drifted array, so shadows always sit exactly under their clouds.
 // Signs chosen so no bank drifts into the sun's azimuth (~0.54 rad): the
-// glitter path and sun disc must survive the whole run.
-static const float kCloudDrift[MAX_CLOUDS] = {-0.0025f, 0.0032f, -0.0018f, 0.0022f, -0.0027f, 0.0015f, 0.0020f};
+// glitter path and sun disc must survive the whole run. The two wisps above
+// the sun drift AWAY from it (0.30 -> 0.20, 0.80 -> 0.87 over the run).
+static const float kCloudDrift[MAX_CLOUDS] = {-0.0025f, 0.0032f, -0.0018f, 0.0022f, -0.0027f, 0.0015f, 0.0020f, -0.0015f, 0.0012f};
 static float gCloudAzimDrift[MAX_CLOUDS];
 static void UpdateCloudAzim(float t) {
   for (int i = 0; i < MAX_CLOUDS; i++)
