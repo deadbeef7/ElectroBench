@@ -242,7 +242,10 @@ void main() {
     fresnel = clamp(fresnel * 1.25 + 0.045, 0.0, 0.92);
 
     // ---- water body: near-black purple deep, warmed by the sky band ----
-    vec3 body = uWaterColor * 0.55 + uHorizonColor * 0.03;
+    // 0.55 -> 0.42: the fresnel mix blends body+reflection to ~1.0 total
+    // energy; starting from 0.55 inflated the whole sea ABOVE the sky's own
+    // brightness. The lost body light returns as true subsurface glow below.
+    vec3 body = uWaterColor * 0.42 + uHorizonColor * 0.03;
 
     // directional sun lighting on the wave slopes: faces tilted toward the
     // low sun glow warm, backslopes fall to near-black — this is what makes
@@ -261,6 +264,14 @@ void main() {
     body *= mix(0.40, 1.0, warmGate * shadow + (1.0 - warmGate) * 0.25 * shadow); // dark off-path + shadowed body
     body *= mix(0.52, 1.0, 1.0 - offSun);
     body += vec3(1.05, 0.42, 0.20) * pow(sunDiffuse, 3.0) * warmGate * shadow * 0.42; // warm slopes in the path
+
+    // ---- subsurface scattering: light entering a thin crest transmits
+    // through and scatters back out toward the eye. Strongest when looking
+    // TOWARD the sun through the wave (forward scattering), fading with view
+    // angle. This is the energy the old 0.55 body factor was faking.
+    float forward = max(dot(dir, -L), 0.0);
+    body += vec3(0.10, 0.42, 0.30) * forward * sunDiffuse * warmGate
+          * shadow * max(hC + 0.6, 0.0) * 0.55;
 
     // ---- slope-gated crest foam ----
     // Foam only where the shading says waves actually BREAK: a height band
@@ -309,9 +320,18 @@ void main() {
     float NdH = max(dot(N, H), 0.0);
     float pathGate = pow(sunAlign, 10.0) * 0.96 + 0.04;
     float sparkleGate = (0.55 + 0.90 * chaos);
+    // microfacet roughness from the ripple chaos: choppier water = broader
+    // glint tail (no extra texture fetch; the ripple tex is already read)
+    float rough = clamp(0.45 + 0.45 * chaos, 0.0, 0.95);
+    // GGX for the broad sheen: real water microfacets have a long tail of
+    // grazing glints off wave sides — the old Blinn-14 sheen dropped to zero
+    // far too fast and left the path edges dead.
+    float aGGX = max(0.14, (1.0 - rough) * 0.42);
+    float a2 = aGGX * aGGX;
+    float dGGX = a2 / (PI * pow(NdH * NdH * (a2 - 1.0) + 1.0, 2.0));
     float glint = pow(NdH, 520.0) * 6.0;              // pinpoint sparkles
     float glintMid = pow(NdH, 90.0) * 0.55;           // mid falloff keeps it grainy
-    float glintWide = pow(NdH, 14.0) * 0.22;          // soft sheen around the path
+    float glintWide = dGGX * 0.055;                   // physically-tailed sheen
     color += vec3(1.0, 0.56, 0.24) * (glint + glintMid + glintWide * pathGate)
              * (0.25 + max(L.y, 0.0) * 1.2) * pathGate * shadow * sparkleGate;
 

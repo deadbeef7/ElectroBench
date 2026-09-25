@@ -87,17 +87,27 @@ void main() {
     ao = max(ao, 0.1);
 
     vec3 reflectionDir = reflect(-viewDir, normal);
-    vec2 reflectionTexCoord = vec2(reflectionDir.x * 0.5 + 0.5, reflectionDir.y * 0.5 + 0.5);
-    vec3 environmentColor = pow(texture2D(uBaseColor, reflectionTexCoord).rgb, vec3(2.2));
+    // Polished steel mirrors the ROOM, not its own albedo texels: sampling
+    // the base-colour map at screen-space reflection coords smeared bright
+    // texels across the metal bodies (part of the washed-white look). A dim
+    // analytic environment — cool dusk sky above, warm dark floor below —
+    // plus the existing sun glint reads as real steel instead.
+    vec3 environmentColor = mix(vec3(0.04, 0.035, 0.03), vec3(0.10, 0.13, 0.20),
+                                clamp(reflectionDir.y * 0.5 + 0.5, 0.0, 1.0));
+    // No sun lobe here: the direct Blinn specular already draws crisp,
+    // shadow-gated glints — adding a reflection-ray lobe double-counts the
+    // sun and washed big flat steel patches towards white.
 
     vec3 diffuse = baseColor * (1.0 - metallic);
     vec3 specular = specColor * spec * (metallic + 0.2 + fresnel * 0.5);
-    vec3 ambient = baseColor * 0.18 * skyAmbient;
+    // 0.10 (was 0.18): outdoor shadowed metal sits near-black. The fat cool
+    // ambient was lifting the dark polymer + blued-steel bodies into pale
+    // washed grey — the reason the guns read white in bright sun.
+    vec3 ambient = baseColor * 0.10 * skyAmbient;
 
     vec3 diffuseLight = diffuse * NdotL * shadow * sunColor;
-    diffuseLight *= 1.15;
 
-    specular *= 1.5;
+    specular *= 1.9;   // crisp glints sell the metal against the dark bodies
     vec3 reflection = mix(diffuse, environmentColor, metallic);
     reflection *= NdotL * shadow;
     vec3 lighting = (reflection + specular + ambient + diffuseLight) * ao;

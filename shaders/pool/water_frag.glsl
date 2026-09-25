@@ -62,11 +62,6 @@ void main() {
     vec3 V = normalize(uEyePos - vWorld);
     float dist01 = clamp(length(uEyePos - vWorld) / 120.0, 0.0, 1.0); // for body depth
 
-    // --- hidden light specular: the only light you ever see ---------------
-    vec3 H = normalize(V + normalize(uLightDir));
-    float spec = pow(clamp(dot(vec3(0.0, 1.0, 0.0), H), 0.0, 1.0), 220.0);
-    float sheen = pow(clamp(dot(vec3(0.0, 1.0, 0.0), H), 0.0, 1.0), 14.0);
-
     // --- splash rings: expand + fade, disturb the reflection ---------------
     float bump = 0.0;
     float foam = 0.0;
@@ -82,6 +77,21 @@ void main() {
     }
     bump = clamp(bump, 0.0, 1.0);
     foam = clamp(foam, 0.0, 1.0);
+
+    // --- hidden light specular: the only light you ever see ---------------
+    // GGX microfacet answer instead of two hard Blinn lobes: ONE energy-true
+    // highlight with a physical long tail of grazing glints off ripple slopes.
+    // A fixed view normal (0,1,0) is right here: the water plane is flat, the
+    // ripples only perturb the reflection ray.
+    vec3 H = normalize(V + normalize(uLightDir));
+    float NdH = max(dot(vec3(0.0, 1.0, 0.0), H), 0.0);
+    float aGGX = mix(0.055, 0.16, bump);        // ripples roughen the surface
+    float a2 = aGGX * aGGX;
+    float dGGX = a2 / (3.14159265 * pow(NdH * NdH * (a2 - 1.0) + 1.0, 2.0));
+    float fres = pow(1.0 - clamp(dot(vec3(0.0, 1.0, 0.0), V), 0.0, 1.0), 5.0);
+    float Fk = 0.02 + 0.98 * fres;
+    float spec = dGGX * Fk * 0.25;              // tight core + tail in one term
+    float sheen = pow(NdH, 14.0) * 0.35;        // broad faint glow floor
 
     // --- colour ------------------------------------------------------------
     vec3 refl = reflectedCheckerColor(-V, vWorld, bump);
@@ -99,6 +109,18 @@ void main() {
     col += uLightTint * (spec * 2.4 + sheen * 0.35);  // the hidden light
     col += vec3(0.9) * foam * 0.22;                   // foam brightening
     col += uTileA * 0.06;                             // ambient skylight
+
+    // --- caustics: the hidden light focuses through the curved crown walls
+    // and jet columns into bright webbed shafts on the water. Two crossing
+    // animated trig webs, gated to the rings' bump so caustics LIVE only
+    // where the fleet is disturbing the surface, and modulated by ring
+    // strength through bump. No texture fetches: analytic, like everything
+    // else in this scene.
+    vec2 cp = vWorld.xz * 3.1;
+    float web1 = 0.5 + 0.5 * sin(cp.x + sin(cp.y * 1.7 + uTime * 1.9) * 1.4);
+    float web2 = 0.5 + 0.5 * sin(cp.y * 1.3 - uTime * 1.4 + sin(cp.x * 1.9 - uTime * 0.8) * 1.4);
+    float caustic = pow(web1 * web2, 3.0);
+    col += uLightTint * caustic * (0.10 + 0.55 * bump);
 
     // haze toward the horizon blends water into the sky glow — tinted
     // turquoise so the far water stays blue instead of greying out
