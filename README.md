@@ -8,7 +8,7 @@ It ships **one** executable that contains **all three** scenes — no second bin
 |---|---|---|
 | **ElectroBench** (the OG) | OpenGL 2.1 / GLSL 1.2, fixed-function pipeline | **110 UZIs** on a shadow-mapped concrete floor, lit by a warm sun |
 | **TideBench** (scene 2) | OpenGL 3.3 core, pixel-shader workloads | An ocean under volumetric clouds (3DMark2001 SE "Nature" recreation) |
-| **PoolBench** (scene 3) | OpenGL 3.3 core, analytic shaders | A checkerboard-sky pool room with a hidden light and a falling, splashing teapot |
+| **PoolBench** (scene 3) | OpenGL 3.3 core, analytic shaders | A checkerboard-sky pool room with a hidden light and a fleet of nine falling, splashing teapots |
 
 
 
@@ -26,7 +26,7 @@ The TideBench ocean scene — long cloud banks with sunward silver linings, a na
 
 ![ElectroBench TideBench scene](docs/screenshots/ps14_dusk_t36.png)
 
-The PoolBench pool room — an infinite checkerboard sky mirrored on open water, lit only by a hidden light, with a teapot that falls from the sky, splashes down, and bobs to rest (splash rings and droplets included):
+The PoolBench pool room — an infinite checkerboard sky mirrored on open water, lit only by a hidden light, with a fleet of nine teapots raining down from the sky in scattered positions, splashing on impact and bobbing to rest:
 
 ![ElectroBench PoolBench scene](docs/screenshots/pool_teapot.png)
 
@@ -125,9 +125,11 @@ What it renders :
   the light is only ever visible through the shading it produces
 - **Open water** that analytically mirrors the same checker function the sky uses, so the reflection
   lines up with the sky across the horizon, plus fresnel dimming, distance haze and foam brightening
-- A **teapot** (`assets/teapot.obj`, one material, placeholder texture you can swap) dropped from
-  the sky with real-ish physics: gravity and tumble in the air, splash with rebound on impact,
-  buoyancy + drag underwater, then a damped bob to rest while it slowly rights itself. `R` re-drops it
+- A **fleet of nine teapots** (the real Utah teapot, `assets/teapot.obj`, one material, placeholder
+  texture you can swap) raining down from the sky at scattered positions, sizes and drop heights on
+  a staggered timeline, each with real-ish physics: gravity and tumble in the air, splash with
+  rebound on impact, buoyancy + drag underwater, then a damped bob to rest while it slowly rights
+  itself. `R` re-drops the whole fleet
 - **Splash FX**: a GPU-animated **Worthington crown** — a jagged water sheet that erupts around the
   impact, spikes tearing into strands — plus ballistic **droplet streaks** stretched along their
   velocity (water in motion, not bubbles), expanding **ripple rings** that disturb the reflection,
@@ -143,7 +145,7 @@ make
 ```
 
 Controls : `F` toggles the automatic camera, long-click + move orbits, mouse wheel zooms, `R` re-drops
-the teapot, `ESC` quits.
+the whole fleet, `ESC` quits.
 
 Headless visual-test flags (used to verify the render output in CI-like environments):
 
