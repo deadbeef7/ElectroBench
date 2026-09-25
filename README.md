@@ -128,8 +128,11 @@ What it renders :
 - A **teapot** (`assets/teapot.obj`, one material, placeholder texture you can swap) dropped from
   the sky with real-ish physics: gravity and tumble in the air, splash with rebound on impact,
   buoyancy + drag underwater, then a damped bob to rest while it slowly rights itself. `R` re-drops it
-- **Splash FX**: up to six concurrent expanding ripple rings disturb the water reflection, and
-  camera-billboarded droplets spray out with per-droplet gravity, fall back, and drip in as micro-rings
+- **Splash FX**: a GPU-animated **Worthington crown** — a jagged water sheet that erupts around the
+  impact, spikes tearing into strands — plus ballistic **droplet streaks** stretched along their
+  velocity (water in motion, not bubbles), expanding **ripple rings** that disturb the reflection,
+  and the delayed central **Rayleigh jet** that erupts after the crown collapses and falls back with
+  its own ring. All CPU cost is a handful of uniforms; the geometry animates in the vertex shader
 
 Run the pool scene on its own with :
 
