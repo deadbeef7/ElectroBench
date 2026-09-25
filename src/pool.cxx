@@ -382,6 +382,10 @@ static Mesh gWaterMesh, gDomeMesh;
 static TeapotMesh gTeapotMesh;
 static GLuint gDropletVao = 0, gDropletVbo = 0;
 static int gDropletVertexFloats = 0; // floats currently streamed
+static GLuint gCrownVao = 0, gCrownVbo = 0;
+static int gCrownVertexCount = 0;
+static GLuint gJetVao = 0, gJetVbo = 0;
+static int gJetVertexFloats = 0;
 
 static void BuildWaterMesh() {
   const int res = kWaterResolution;
@@ -494,6 +498,34 @@ struct Ring { float x, z, radius, strength; };
 static Ring gRings[MAX_RINGS];
 static int gRingCount = 0;
 
+// The Worthington crown: a jagged water sheet that erupts around the impact
+// point, expands while decelerating, spikes tear into droplets, then it
+// collapses back. GPU-animated geometry (see shaders/pool/splash_*.glsl) —
+// the CPU only streams radius/height/spike params.
+struct CrownSplash {
+  bool active = false;
+  Vec3 center{0.0f, 0.0f, 0.0f};
+  float age = 0.0f;
+  float radius = 0.0f;
+  float height = 0.0f;
+  float spike = 0.0f;   // spike amplitude 0..1
+  float life = 1.0f;    // fades the sheet out
+};
+static CrownSplash gCrown;
+
+// The central jet: the column of water that shoots up after the crown
+// collapses (the Rayleigh jet). Rendered as a stretched droplet-style quad;
+// the CPU simulates its rise + fall ballistic arc.
+struct JetColumn {
+  bool active = false;
+  Vec3 center{0.0f, 0.0f, 0.0f};
+  float velY = 0.0f;
+  float height = 0.0f;
+  float radius = 0.0f;
+  float life = 0.0f;
+};
+static JetColumn gJet;
+
 struct Droplet {
   Vec3 pos;
   Vec3 vel;
@@ -526,19 +558,47 @@ static void SpawnRing(float x, float z, float strength) {
 static void SpawnSplash(float x, float z, float impactSpeed) {
   const float s = std::fmin(impactSpeed / 10.0f, 1.6f);
   SpawnRing(x, z, std::fmin(1.0f, 0.55f + 0.45f * s));
-  int n = 18 + (int)(14.0f * s);
+
+  // ---- the crown: erupts around the impact rim, spikes tear outward ----
+  gCrown.active = true;
+  gCrown.center = {x, kWaterLevel, z};
+  gCrown.age = 0.0f;
+  gCrown.radius = 0.30f;
+  gCrown.height = 0.22f + 0.55f * s;
+  gCrown.spike = std::fmin(1.0f, 0.35f + 0.4f * s);
+  gCrown.life = 1.0f;
+
+  // ---- droplets: torn from the crown spikes, thrown ballistically. They
+  // start AT the crown rim with mostly-outward velocities (a real crown
+  // throws sheets/spears sideways-up, not a puff of spheres upward).
+  int n = 26 + (int)(16.0f * s);
   for (int i = 0; i < n; i++) {
-    float a = (float)(i * 2.399963); // golden-angle spread
-    float r = 0.12f + 0.10f * (i % 5) * 0.25f;
-    float up = 2.6f + 4.2f * s * (0.45f + 0.55f * ((i * 37) % 11) / 11.0f);
-    float out = 0.7f + 1.5f * s * (0.4f + 0.6f * ((i * 17) % 7) / 7.0f);
+    // fixed pseudo-random spread (deterministic across runs like the rest
+    // of the bench)
+    float a = (float)((i * 137) % 360) * 3.14159265f / 180.0f;
+    float r01 = ((i * 89) % 100) / 100.0f;
     Droplet d;
-    d.pos = {x + std::cos(a) * 0.25f, kWaterLevel + 0.05f, z + std::sin(a) * 0.25f};
+    float rimR = gCrown.radius + 0.08f + 0.10f * r01;
+    d.pos = {x + std::cos(a) * rimR,
+             kWaterLevel + 0.15f + 0.5f * gCrown.height * r01,
+             z + std::sin(a) * rimR};
+    // mostly outward + moderate up: real crown ejecta travels far sideways
+    float out = 1.6f + 2.8f * s * (0.35f + 0.65f * r01);
+    float up = 1.6f + 2.6f * s * r01;
     d.vel = {std::cos(a) * out, up, std::sin(a) * out};
-    d.radius = 0.05f + 0.055f * ((i * 13) % 7) / 7.0f;
-    d.maxLife = d.life = 1.1f + 0.5f * ((i * 29) % 5) / 5.0f;
+    d.radius = 0.035f + 0.045f * ((i * 13) % 7) / 7.0f;
+    d.maxLife = d.life = 0.9f + 0.6f * ((i * 29) % 5) / 5.0f;
     gDroplets.push_back(d);
   }
+
+  // ---- the jet: delayed central column that erupts after the crown falls
+  // (a real tank splash: cavity collapses -> Rayleigh jet shoots up)
+  gJet.active = true;
+  gJet.center = {x, kWaterLevel, z};
+  gJet.velY = 0.0f;      // delayed: starts moving when the crown collapses
+  gJet.height = 0.0f;
+  gJet.radius = 0.10f + 0.06f * s;
+  gJet.life = 0.0f;
 }
 
 static void ResetTeapot(double now) {
@@ -548,6 +608,8 @@ static void ResetTeapot(double now) {
   (void)now;
   gRingCount = 0;
   gDroplets.clear();
+  gCrown = CrownSplash{};
+  gJet = JetColumn{};
 }
 
 // per-frame physics update
@@ -564,21 +626,55 @@ static void UpdatePhysics(double now, double dt) {
     if (gRings[i].strength > 0.02f) gRings[w++] = gRings[i];
   gRingCount = w;
 
-  // --- droplets ---
+  // --- droplets: ballistic strands, drag-lite (water drops barely slow) ---
   for (Droplet &d : gDroplets) {
     d.vel.y += kGravity * (float)dt;
     d.pos = Vec3Add(d.pos, Vec3Scale(d.vel, (float)dt));
     d.life -= (float)dt;
     if (d.pos.y < kWaterLevel && d.vel.y < 0.0f) {
-      // drip back in: tiny ring, kill the droplet
-      if (d.life > 0.15f && d.radius > 0.07f)
-        SpawnRing(d.pos.x, d.pos.z, 0.16f);
+      // landing droplet raises a micro-ring
+      if (d.radius > 0.03f)
+        SpawnRing(d.pos.x, d.pos.z, 0.14f + 0.3f * std::fmin(-d.vel.y / 6.0f, 1.0f));
       d.life = 0.0f;
     }
   }
   gDroplets.erase(std::remove_if(gDroplets.begin(), gDroplets.end(),
                                  [](const Droplet &d) { return d.life <= 0.0f; }),
                   gDroplets.end());
+
+  // --- crown: expands fast, decelerates, then collapses ---
+  if (gCrown.active) {
+    gCrown.age += (float)dt;
+    // radius grows decelerating: r ~ sqrt(t) (energy spread over the ring)
+    float t = gCrown.age;
+    gCrown.radius = 0.30f + 1.9f * std::sqrt(t) * 0.55f;
+    gCrown.height *= 1.0f - std::fmin(1.6f * (float)dt, 0.9f); // falls back
+    gCrown.spike *= 1.0f - std::fmin(0.8f * (float)dt, 0.9f);
+    gCrown.life = 1.0f - t / 0.95f;
+    if (gCrown.life <= 0.0f || gCrown.height < 0.03f) {
+      gCrown.active = false;
+      // jet launches as the crown collapses; the cavity is slightly off the
+      // impact centre (the teapot floats to one side of it), so the column
+      // rises beside the floating pot instead of hiding behind it
+      gJet.velY = 4.6f;
+      gJet.center.x += 0.9f;
+      gJet.center.z += 0.4f;
+    }
+  }
+
+  // --- jet: ballistic rise + fall, thins as it climbs ---
+  if (gJet.active && gJet.velY != 0.0f) {
+    gJet.velY += kGravity * (float)dt;
+    gJet.height += gJet.velY * (float)dt;
+    gJet.life += (float)dt;
+    if (gJet.height < 0.0f) {
+      gJet.height = 0.0f;
+      gJet.velY = 0.0f;
+      gJet.life = 0.0f;
+      // jet impact: a modest final ring
+      SpawnRing(gJet.center.x, gJet.center.z, 0.45f);
+    }
+  }
 
   // --- teapot ---
   TeapotPhysics &p = gPot;
@@ -630,7 +726,7 @@ static SDL_Window *gWindow = nullptr;
 static SDL_GLContext gContext = nullptr;
 static int gWindowWidth = WIDTH, gWindowHeight = HEIGHT;
 
-static Program gSkyProg, gWaterProg, gTeapotProg, gDropletProg, gHudProg;
+static Program gSkyProg, gWaterProg, gTeapotProg, gDropletProg, gSplashProg, gHudProg;
 static GLuint gTeapotTex = 0, gFontTex = 0;
 static GLuint gEmptyVao = 0;
 
@@ -846,6 +942,9 @@ static void DrawTeapot(const Mat4 &view, const Vec3 &eye) {
 
   glUseProgram(gTeapotProg.handle);
   glBindVertexArray(gTeapotMesh.vao);
+  // Culling disabled for the teapot: user-supplied OBJs often mix winding
+  // orders, and a single flipped face punches a visible hole in the model.
+  glDisable(GL_CULL_FACE);
   glUniformMatrix4fv(gTeapotProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
   glUniformMatrix4fv(gTeapotProg.loc("uModel"), 1, GL_FALSE, model.data());
   glUniform3f(gTeapotProg.loc("uEyePos"), eye.x, eye.y, eye.z);
@@ -857,16 +956,101 @@ static void DrawTeapot(const Mat4 &view, const Vec3 &eye) {
   glUniform1i(gTeapotProg.loc("uBaseColor"), 0);
   glDrawElements(GL_TRIANGLES, gTeapotMesh.indexCount, GL_UNSIGNED_INT, nullptr);
   glBindVertexArray(0);
+  glEnable(GL_CULL_FACE);
+}
+
+static void DrawCrown(const Mat4 &view, double now) {
+  if (!gCrown.active) return;
+  Mat4 vp;
+  Mat4Multiply(vp, gProj, view);
+  glUseProgram(gSplashProg.handle);
+  glBindVertexArray(gCrownVao);
+  glUniformMatrix4fv(gSplashProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
+  glUniform3f(gSplashProg.loc("uCenter"), gCrown.center.x, gCrown.center.y, gCrown.center.z);
+  glUniform3f(gSplashProg.loc("uCamPos"), gCamPos.x, gCamPos.y, gCamPos.z);
+  glUniform1f(gSplashProg.loc("uRadius"), gCrown.radius);
+  glUniform1f(gSplashProg.loc("uHeight"), gCrown.height);
+  glUniform1f(gSplashProg.loc("uSpike"), gCrown.spike);
+  glUniform1f(gSplashProg.loc("uTime"), (float)now);
+  glUniform3f(gSplashProg.loc("uEyePos"), gCamPos.x, gCamPos.y, gCamPos.z);
+  glUniform3f(gSplashProg.loc("uLightDir"), kLightDir[0], kLightDir[1], kLightDir[2]);
+  glUniform3f(gSplashProg.loc("uLightTint"), kLightTint[0], kLightTint[1], kLightTint[2]);
+  // life fades the sheet: bake into vParam via uHeight? No — pass life as
+  // uSpike-independent uniform via the w channel of vParam in the shader.
+  // Simplest: scale the alpha by reusing uSpike? Keep it clean: multiply
+  // uHeight toward 0 collapses the crown, which naturally fades it.
+  glDepthMask(GL_FALSE);
+  glDisable(GL_CULL_FACE); // the sheet is seen from both sides
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+  glDrawElements(GL_TRIANGLES, gCrownVertexCount, GL_UNSIGNED_INT, nullptr);
+  glBindVertexArray(0);
+  glDisable(GL_BLEND);
+  glDepthMask(GL_TRUE);
+  glEnable(GL_CULL_FACE);
+}
+
+static void DrawJet(const Mat4 &view, const Vec3 &eye) {
+  if (!gJet.active || gJet.height <= 0.01f) return;
+  // The Rayleigh jet: a thin vertical column rising from the collapse point.
+  // Drawn as two crossed columns of overlapping droplet billboards (8
+  // anchor points, each a soft round sprite of the column's half-width),
+  // which visually merge into a 3D column from every angle. Zero stretch
+  // (velocity 0) so the sprite shader just stamps round water blobs.
+  Vec3 toCam = Vec3Normalize(Vec3Sub(eye, gJet.center));
+  float a = std::atan2(toCam.x, toCam.z);
+  const float fade = std::fmin(1.0f, 1.3f - gJet.life * 0.3f);
+  static std::vector<float> jbuf;
+  jbuf.clear();
+  const float halfW = gJet.radius;
+  for (int pass = 0; pass < 2; pass++) {
+    float aa = a + pass * 1.5707963f;
+    // stack overlapping billboards up the column so the sprites merge into
+    // a solid water column (2 crossed layers, 11 anchors each = 132 tris)
+    const int kSteps = 10;
+    for (int i = 0; i <= kSteps; i++) {
+      float sy = (float)i / kSteps;
+      float taper = 1.0f - 0.35f * sy; // column thins as it rises
+      float px = gJet.center.x;
+      float py = gJet.center.y + sy * gJet.height;
+      float pz = gJet.center.z;
+      const float corners[4][2] = {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}};
+      const int quadIdx[6] = {0, 1, 2, 0, 2, 3};
+      for (int ci = 0; ci < 6; ci++) {
+        const float *c = corners[quadIdx[ci]];
+        jbuf.push_back(px); jbuf.push_back(py); jbuf.push_back(pz);
+        jbuf.push_back(0.0f); jbuf.push_back(0.0f); jbuf.push_back(0.0f); // no stretch
+        jbuf.push_back(c[0]); jbuf.push_back(c[1]);
+        jbuf.push_back(halfW * taper);
+        jbuf.push_back(fade);
+      }
+    }
+  }
+
+  Mat4 vp;
+  Mat4Multiply(vp, gProj, view);
+  glUseProgram(gDropletProg.handle);
+  glBindVertexArray(gJetVao);
+  glBindBuffer(GL_ARRAY_BUFFER, gJetVbo);
+  glBufferData(GL_ARRAY_BUFFER, jbuf.size() * sizeof(float), jbuf.data(), GL_STREAM_DRAW);
+  glUniformMatrix4fv(gDropletProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
+  glUniform3f(gDropletProg.loc("uLightTint"), kLightTint[0], kLightTint[1], kLightTint[2]);
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+  glDepthMask(GL_FALSE);
+  glDisable(GL_CULL_FACE);
+  glDrawArrays(GL_TRIANGLES, 0, (int)(jbuf.size() / 10));
+  glBindVertexArray(0);
+  glDepthMask(GL_TRUE);
+  glDisable(GL_BLEND);
+  glEnable(GL_CULL_FACE);
 }
 
 static void DrawDroplets(const Mat4 &view, const Vec3 &eye) {
+  (void)eye;
   if (gDroplets.empty()) return;
-  // build camera-facing basis
-  Vec3 fwd = Vec3Normalize(Vec3Sub({0.0f, gPot.pos.y, 0.0f}, eye));
-  Vec3 right = Vec3Normalize(Vec3Cross(fwd, {0.0f, 1.0f, 0.0f}));
-  Vec3 up = Vec3Cross(right, fwd);
 
-  // stream per-droplet 7 floats: pos3, corner uv2, radius+bright2
+  // stream per-droplet 10 floats: pos3, vel3, corner uv2, radius+bright2
   static std::vector<float> buf;
   buf.clear();
   for (const Droplet &d : gDroplets) {
@@ -875,6 +1059,7 @@ static void DrawDroplets(const Mat4 &view, const Vec3 &eye) {
     const int quadIdx[6] = {0, 1, 2, 0, 2, 3};
     for (int ci : quadIdx) {
       buf.push_back(d.pos.x); buf.push_back(d.pos.y); buf.push_back(d.pos.z);
+      buf.push_back(d.vel.x); buf.push_back(d.vel.y); buf.push_back(d.vel.z);
       buf.push_back(corners[ci][0]); buf.push_back(corners[ci][1]);
       buf.push_back(d.radius); buf.push_back(bright);
     }
@@ -888,14 +1073,12 @@ static void DrawDroplets(const Mat4 &view, const Vec3 &eye) {
   glBindBuffer(GL_ARRAY_BUFFER, gDropletVbo);
   glBufferData(GL_ARRAY_BUFFER, buf.size() * sizeof(float), buf.data(), GL_STREAM_DRAW);
   glUniformMatrix4fv(gDropletProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
-  glUniform3f(gDropletProg.loc("uCamRight"), right.x, right.y, right.z);
-  glUniform3f(gDropletProg.loc("uCamUp"), up.x, up.y, up.z);
   glUniform3f(gDropletProg.loc("uLightTint"), kLightTint[0], kLightTint[1], kLightTint[2]);
   glEnable(GL_BLEND);
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
   glDepthMask(GL_FALSE);
   glDisable(GL_CULL_FACE);
-  glDrawArrays(GL_TRIANGLES, 0, gDropletVertexFloats / 7);
+  glDrawArrays(GL_TRIANGLES, 0, gDropletVertexFloats / 10);
   glBindVertexArray(0);
   glDepthMask(GL_TRUE);
   glDisable(GL_BLEND);
@@ -947,6 +1130,8 @@ static void RenderScene() {
   DrawSky(view, eye, now);
   DrawWater(view, eye, now);
   DrawTeapot(view, eye);
+  DrawCrown(view, now);
+  DrawJet(view, eye);
   DrawDroplets(view, eye);
   RenderHUD();
 
@@ -1115,11 +1300,67 @@ static void Setup() {
   glBindVertexArray(gDropletVao);
   glBindBuffer(GL_ARRAY_BUFFER, gDropletVbo);
   glEnableVertexAttribArray(0); // centre pos
-  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 7 * sizeof(float), (void *)0);
-  glEnableVertexAttribArray(1); // uv corner
-  glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 7 * sizeof(float), (void *)(3 * sizeof(float)));
-  glEnableVertexAttribArray(2); // radius+bright
-  glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 7 * sizeof(float), (void *)(5 * sizeof(float)));
+  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void *)0);
+  glEnableVertexAttribArray(1); // velocity (for stretch)
+  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void *)(3 * sizeof(float)));
+  glEnableVertexAttribArray(2); // uv corner
+  glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void *)(6 * sizeof(float)));
+  glEnableVertexAttribArray(3); // radius+bright
+  glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void *)(8 * sizeof(float)));
+  glBindVertexArray(0);
+
+  // ---- crown splash mesh: a unit ring sheet (angle x height-param grid) ----
+  {
+    const int kSeg = 96, kRows = 5;
+    std::vector<float> ring;
+    std::vector<unsigned> ridx;
+    for (int r = 0; r <= kRows; r++) {
+      float hp = (float)r / kRows;
+      for (int s = 0; s <= kSeg; s++) {
+        ring.push_back((float)s / kSeg); // angle 0..1
+        ring.push_back(hp);              // height param
+        ring.push_back(1.0f);            // radius scale (unused slot)
+        ring.push_back(0.0f);
+      }
+    }
+    for (int r = 0; r < kRows; r++)
+      for (int s = 0; s < kSeg; s++) {
+        unsigned i0 = (unsigned)(r * (kSeg + 1) + s);
+        unsigned i1 = i0 + (unsigned)(kSeg + 1);
+        ridx.push_back(i0); ridx.push_back(i0 + 1); ridx.push_back(i1);
+        ridx.push_back(i0 + 1); ridx.push_back(i1 + 1); ridx.push_back(i1);
+      }
+    gCrownVertexCount = (int)ridx.size();
+    glGenVertexArrays(1, &gCrownVao);
+    glGenBuffers(1, &gCrownVbo);
+    glBindVertexArray(gCrownVao);
+    glBindBuffer(GL_ARRAY_BUFFER, gCrownVbo);
+    glBufferData(GL_ARRAY_BUFFER, ring.size() * sizeof(float), ring.data(), GL_STATIC_DRAW);
+    GLuint cebo;
+    glGenBuffers(1, &cebo);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, cebo);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, ridx.size() * sizeof(unsigned), ridx.data(), GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0); // angle + heightParam
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void *)0);
+    glEnableVertexAttribArray(1); // scale (unused)
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void *)(2 * sizeof(float)));
+    glBindVertexArray(0);
+    (void)cebo;
+  }
+
+  // ---- jet VAO (streamed, same 10-float layout as the droplets) ----
+  glGenVertexArrays(1, &gJetVao);
+  glGenBuffers(1, &gJetVbo);
+  glBindVertexArray(gJetVao);
+  glBindBuffer(GL_ARRAY_BUFFER, gJetVbo);
+  glEnableVertexAttribArray(0); // centre pos
+  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void *)0);
+  glEnableVertexAttribArray(1); // velocity (0 for the jet: no stretch)
+  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void *)(3 * sizeof(float)));
+  glEnableVertexAttribArray(2); // uv corner
+  glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void *)(6 * sizeof(float)));
+  glEnableVertexAttribArray(3); // radius+bright
+  glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void *)(8 * sizeof(float)));
   glBindVertexArray(0);
 
   gSkyProg = LinkProgram(resolveAssetPath("shaders/pool/object_vert.glsl").c_str(),
@@ -1130,6 +1371,8 @@ static void Setup() {
                             resolveAssetPath("shaders/pool/teapot_frag.glsl").c_str());
   gDropletProg = LinkProgram(resolveAssetPath("shaders/pool/droplet_vert.glsl").c_str(),
                              resolveAssetPath("shaders/pool/droplet_frag.glsl").c_str());
+  gSplashProg = LinkProgram(resolveAssetPath("shaders/pool/splash_vert.glsl").c_str(),
+                            resolveAssetPath("shaders/pool/splash_frag.glsl").c_str());
   gHudProg = LinkProgram(resolveAssetPath("shaders/ps14/hud_vert.glsl").c_str(),
                          resolveAssetPath("shaders/pool/hud_frag.glsl").c_str());
 
