@@ -26,6 +26,8 @@ uniform vec4  uRings[MAX_RINGS]; // xy = centre (world), z = radius, w = strengt
 
 out vec4 fragColor;
 
+vec3 normalize3(vec3 v) { return v / max(length(v), 1e-5); }
+
 // ---- the SAME checker as sky_frag.glsl (copy kept intentional: one file
 // ---- cannot include the other without extension support on all drivers)
 float checker(vec2 p) {
@@ -43,17 +45,21 @@ vec3 reflectedCheckerColor(vec3 dirToViewer, vec3 pos, float rippleBump) {
     rd.y = abs(rd.y) * 0.85 + 0.02;      // keep rays skimming upward-ish
     float up = clamp(rd.y, 0.02, 1.0);
     // gnomic unroll with the SAME 1.05 gain as the sky dome, then the same
-    // 1.05-cell checker scale — tiles line up across the horizon line
+    // 0.16-cell checker scale — tiles line up across the horizon line
     vec2 plane = rd.xz / up * 1.05;
-    float c = checker(plane / 1.05);
+    float c = checker(plane / 0.16);
     vec3 albedo = mix(uTileB, uTileA, c);
-    // reflection dims with steep view angles and distance
-    float fres = pow(1.0 - clamp(dot(-dirToViewer, vec3(0.0, 1.0, 0.0)), 0.0, 1.0), 2.2);
-    return albedo * (0.55 + 0.45 * fres);
+    // Water reflects its surroundings strongly at ALL angles (water's Fresnel
+    // only kills the reflection at very steep views, and even there R~0.02
+    // against a BRIGHT sky still wins over the dark body). Keep most of the
+    // tile colour: brightness modulated mildly by view angle.
+    float fres = 0.35 + 0.65 * pow(1.0 - clamp(dot(-dirToViewer, vec3(0.0, 1.0, 0.0)), 0.0, 1.0), 1.5);
+    return albedo * fres;
 }
 
 void main() {
     vec3 V = normalize(uEyePos - vWorld);
+    float dist01 = clamp(length(uEyePos - vWorld) / 120.0, 0.0, 1.0); // for body depth
 
     // --- hidden light specular: the only light you ever see ---------------
     vec3 H = normalize(V + normalize(uLightDir));
@@ -78,20 +84,27 @@ void main() {
 
     // --- colour ------------------------------------------------------------
     vec3 refl = reflectedCheckerColor(-V, vWorld, bump);
-    vec3 body = mix(vec3(0.020, 0.038, 0.048), vec3(0.046, 0.085, 0.100),
-                    clamp(vWorld.y * 0.5 + 0.5, 0.0, 1.0));
+    // BLUE water body: a saturated pool-water blue, deeper with distance.
+    // Tinted slightly toward uTileA so the water and sky feel like one room.
+    vec3 body = mix(vec3(0.030, 0.180, 0.320), vec3(0.010, 0.090, 0.200),
+                    clamp(dist01, 0.0, 1.0));
 
-    vec3 col = mix(body, refl, 0.82);                 // mirror-first water
+    vec3 col = mix(body, refl, 0.72);                 // blue water, sky on top
     col += uLightTint * (spec * 2.4 + sheen * 0.35);  // the hidden light
     col += vec3(0.9) * foam * 0.22;                   // foam brightening
-    col += uTileA * 0.035;                            // ambient skylight
+    col += uTileA * 0.06;                             // ambient skylight
 
-    // haze toward the horizon blends water into the sky glow
+    // haze toward the horizon blends water into the sky glow — tinted
+    // turquoise so the far water stays blue instead of greying out
     float dist = length(uEyePos - vWorld);
     float haze = 1.0 - exp(-dist * 0.004);
-    col = mix(col, uLightTint * 0.55, haze * 0.65);
+    vec3 hazeCol = normalize3(mix(uLightTint, uTileA, 0.8)) * 0.75;
+    col = mix(col, hazeCol, haze * 0.6);
 
-    col = col / (col + vec3(0.35));
-    col = pow(col, vec3(1.0 / 2.2));
+    // The reflected sky colour is ALREADY tonemapped+gamma'd by sky_frag; a
+    // second knee here desaturated everything to grey. Just clamp + a mild
+    // gamma trim so bright reflections keep their tile colours.
+    col = clamp(col, 0.0, 1.0);
+    col = pow(col, vec3(1.0 / 1.15));
     fragColor = vec4(col, 1.0);
 }
