@@ -161,6 +161,18 @@ vec4 cloudSample(vec3 dir) {
                 heightSum / weight, baseSum / weight, clamp(edge, 0.0, 1.0));
 }
 
+// Dusk sky colour at a direction, shared by the gradient and the cloud
+// lighting: clouds are lit by the same sky they hang in, so the blue fill on
+// their shaded sides is the ACTUAL zenith/mid colour from that direction
+// instead of a constant.
+vec3 skyGradient(vec3 dir, vec3 sd) {
+    float hh = clamp(dir.y, 0.0, 1.0);
+    vec3 s = mix(uHorizonColor, uMidColor, smoothstep(0.0, 0.14, hh));
+    s = mix(s, uZenithColor, smoothstep(0.10, 0.38, hh));
+    float sa = max(dot(dir, sd), 0.0);
+    return s * mix(0.22, 1.0, pow(sa, 4.0));
+}
+
 void main() {
     vec3 dir = normalize(vDir);
     float h = clamp(dir.y, 0.0, 1.0);
@@ -169,11 +181,9 @@ void main() {
     // Sunset gradient: deep blue-black zenith through mauve, into the warm
     // horizon band. Multiplied by a sun-direction falloff so the anti-sun sky
     // stays dark like the reference shot.
-    vec3 sky = mix(uHorizonColor, uMidColor, smoothstep(0.0, 0.14, h));
-    sky = mix(sky, uZenithColor, smoothstep(0.10, 0.38, h));
+    vec3 sky = skyGradient(dir, sd);
 
     float sunAmount = max(dot(dir, sd), 0.0);
-    sky *= mix(0.22, 1.0, pow(sunAmount, 4.0));   // steep: dark sky away from the sun
 
     // thin bright glow line hugging the horizon itself — real dusks have a
     // last sliver of lit atmosphere between the darkening sea and sky
@@ -237,19 +247,29 @@ void main() {
         float transmit2 = 0.30 * exp(-tau * 2.15);
         float multiple = 0.15 * exp(-tau * 0.32);
 
-        // Normalised HG forward lobe plus a small isotropic backscatter floor.
-        // The combination avoids the hard black anti-sun side while keeping
-        // the forward silver lining strongly directional.
-        float g = 0.74;
+        // FULL Henyey-Greenstein forward lobe (two lobes: tight silver
+        // lining + broad glow) plus a small isotropic floor — the approximated
+        // single-lobe form over-brightened the whole cloud mass.
         float cosT = clamp(dot(dir, sd), -1.0, 1.0);
-        float hg = (1.0 - g * g)
-                 / (4.0 * PI * pow(max(1.0 + g * g - 2.0 * g * cosT, 1e-4), 1.5));
-        float phase = hg * 4.0 * PI + 0.08 * (1.0 - cosT) * 0.5;
+        float hg1 = (1.0 - 0.82 * 0.82)
+                  / (4.0 * PI * pow(max(1.0 + 0.82 * 0.82 - 2.0 * 0.82 * cosT, 1e-4), 1.5));
+        float hg2 = (1.0 - 0.45 * 0.45)
+                  / (4.0 * PI * pow(max(1.0 + 0.45 * 0.45 - 2.0 * 0.45 * cosT, 1e-4), 1.5));
+        float phase = hg1 * 4.0 * PI * 0.72 + hg2 * 4.0 * PI * 0.28
+                    + 0.08 * (1.0 - cosT) * 0.5;
         float direct = (0.10 + 1.55 * phase)
                      * (transmit0 + transmit1 + transmit2);
 
-        vec3 sunCol = vec3(1.24, 0.67, 0.34);
-        vec3 skyAmb = vec3(0.23, 0.30, 0.46);
+        // Sun colour THROUGH the cloud: Beer-Lambert per channel — dense
+        // cores see deep red (blue/green fully scattered out), thin edges see
+        // the full orange. A constant sunCol made every lit cloud the same
+        // orange regardless of how much cloud it shone through.
+        vec3 sunCol = vec3(1.30, 0.72, 0.38)
+                    * vec3(exp(-tau * 0.42), exp(-tau * 0.62), exp(-tau * 0.94));
+        // Clouds hang in the sky: the blue fill IS the dusk gradient at the
+        // cloud's own direction (zenith-blue high up, mauve low), not a flat
+        // constant. Slightly boosted so the fill survives the glow behind.
+        vec3 skyAmb = skyGradient(dir, sd) * 1.25 + vec3(0.03, 0.04, 0.07);
         float upLight = mix(0.20, 1.0, 0.62 * surface.y + 0.38 * heightWeight);
         float baseLight = 1.0 - 0.34 * surface.z;
 
