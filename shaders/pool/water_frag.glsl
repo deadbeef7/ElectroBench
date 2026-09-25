@@ -5,11 +5,13 @@
 //     alignment across the horizon — the pool-room illusion),
 //   * the hidden-light specular highlight (the only visible evidence of the
 //     light) with Blinn-Phong sheen and sun-strength falloff,
-//   * bobbing ripple rings from the teapot splash: up to N concurrent rings,
-//     positions/amplitudes streamed as uniforms from the scene module,
+//   * bobbing ripple rings from the teapot fleet: up to MAX_RINGS concurrent
+//     rings, streamed as uniforms from the scene module (each splash owns a
+//     private window of slots so nine pots splashing at once never overwrite
+//     each other's ripples),
 //   * soft subsurface-ish body colour and distance haze into the sky tint.
 
-#define MAX_RINGS 6
+#define MAX_RINGS 30
 
 in vec3 vWorld;
 in vec3 vNormal;
@@ -21,7 +23,6 @@ uniform vec3 uLightTint;
 uniform vec3 uTileA;
 uniform vec3 uTileB;
 uniform float uTime;
-uniform int   uRingCount;
 uniform vec4  uRings[MAX_RINGS]; // xy = centre (world), z = radius, w = strength 0..1
 
 out vec4 fragColor;
@@ -70,8 +71,8 @@ void main() {
     float bump = 0.0;
     float foam = 0.0;
     for (int i = 0; i < MAX_RINGS; i++) {
-        if (i >= uRingCount) break;
         vec4 r = uRings[i];
+        if (r.w <= 0.001) continue;   // dead slot (rings are per-pot windows now)
         float d = length(vWorld.xz - r.xy);
         float band = d - r.z;
         float width = 0.30 + r.z * 0.05;

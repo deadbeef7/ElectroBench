@@ -16,16 +16,22 @@
 //   * Open water (shaders/pool/water_frag.glsl): analytic mirror reflection
 //     of the same checker function, hidden-light specular, and up to six
 //     expanding splash rings driven from the CPU physics each frame.
-//   * A teapot (assets/teapot.obj, one material, placeholder texture the
-//     user can swap): normalised, dropped from ~8 m, splash on impact, then
-//     buoyancy + drag + bob until it settles, rocking to rest. Tumbles in
-//     flight, rights itself in the water.
-//   * Splash droplets: billboard sprites with per-droplet gravity, spawned
-//     on impact with randomized velocities, plus secondary drips while the
-//     rings decay.
+//   * THE FLEET: nine teapots (assets/teapot.obj — the real Utah teapot, one
+//     material, placeholder texture the user can swap) fall from the sky at
+//     scattered positions, sizes and drop heights, staggered so the pool is
+//     constantly alive. Each pot splashes on impact, then buoyancy + drag +
+//     bob settles it, rocking to rest. Tumbles in flight, rights itself in
+//     the water.
+//   * Real planar reflections: the whole fleet is re-rendered mirrored about
+//     the water plane, stencil-masked to the visible water pixels and alpha
+//     blended over the water shading — genuine reflections that ripple with
+//     the surface.
+//   * Splash droplets: velocity-stretched water strands with per-droplet
+//     gravity, torn from each pot's crown, picking up the checker sky's
+//     colours as they fly.
 //
 // Controls: drag orbits the camera, wheel zooms, F toggles the auto camera,
-// R re-drops the teapot, ESC quits.
+// R re-drops the whole fleet, ESC quits.
 //
 // Headless flags shared with the other scenes: --screenshot, --shot-times,
 // --width; scene-specific: --pool-only (run just this scene).
@@ -37,6 +43,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -64,7 +71,8 @@ unsigned lodepng_decode_file(unsigned char **out, unsigned *w, unsigned *h,
 #define HEIGHT 768
 #define BENCH_MILLISECONDS 45000 // 45 s, same as the other scenes
 
-#define MAX_RINGS 6              // must match water_frag.glsl
+#define MAX_RINGS 30             // must match water_frag.glsl; split into
+                                 // per-pot windows below
 
 static const int kWaterResolution = 220;  // grid verts per side (display grid;
                                           // the lighting is analytic per pixel)
@@ -274,33 +282,38 @@ static TeapotMesh LoadObjMesh(const char *path, float targetRadius) {
   if (ext[2] > maxDim) maxDim = ext[2];
   float s = targetRadius / (maxDim * 0.5f);
 
-  auto emit = [&](std::vector<float> &data, std::vector<unsigned> &idx,
-                  int vi, int ti, int ni) {
-    idx.push_back((unsigned)(data.size() / 8));
-    data.push_back((vp[(vi - 1) * 3 + 0] - ctrX) * s);
-    data.push_back((vp[(vi - 1) * 3 + 1] - baseY) * s);
-    data.push_back((vp[(vi - 1) * 3 + 2] - ctrZ) * s);
-    if (ni > 0 && (size_t)(ni - 1) * 3 + 2 < vn.size()) {
-      data.push_back(vn[(ni - 1) * 3 + 0]);
-      data.push_back(vn[(ni - 1) * 3 + 1]);
-      data.push_back(vn[(ni - 1) * 3 + 2]);
-    } else {
-      data.push_back(0); data.push_back(1); data.push_back(0);
-    }
-    if (ti > 0 && (size_t)(ti - 1) * 2 + 1 < vt.size()) {
-      data.push_back(vt[(ti - 1) * 2 + 0]);
-      data.push_back(vt[(ti - 1) * 2 + 1]);
-    } else {
-      data.push_back(0); data.push_back(0);
+  // Interleaved pos3/normal3/uv2 with a weld map so corners that share a
+  // position share a smoothed normal AND a consistent UV — required by the
+  // real Utah teapot (bare "f v v v" faces, no vt/vn at all).
+  struct WeldKey {
+    int vi;
+    int uvGen;   // 0 = file UV, 1 = generated (needs vertex position)
+    float u, v;  // generated UV (or file UV baked in)
+    bool operator==(const WeldKey &o) const {
+      return vi == o.vi && uvGen == o.uvGen && u == o.u && v == o.v;
     }
   };
+  struct WeldKeyHash {
+    size_t operator()(const WeldKey &k) const {
+      size_t h = std::hash<int>()(k.vi * 31 + k.uvGen);
+      h ^= std::hash<float>()(k.u) + 0x9e3779b9u + (h << 6) + (h >> 2);
+      h ^= std::hash<float>()(k.v) + 0x9e3779b9u + (h << 6) + (h >> 2);
+      return h;
+    }
+  };
+  struct WeldVal { int slot; float nx, ny, nz; };
+  std::unordered_map<WeldKey, WeldVal, WeldKeyHash> weld;
 
   std::vector<float> data; // interleaved pos3/normal3/uv2
   std::vector<unsigned> idx;
+  data.reserve(64 * 1024);
+  idx.reserve(32 * 1024);
+
+  struct Corner { int vi, ti, ni; };
+  std::vector<std::array<Corner, 3>> faceTris;
   while (std::fgets(line, sizeof(line), f)) {
     if (line[0] != 'f' || line[1] != ' ') continue;
-    // parse every corner as v(/vt)(/vn), then fan-triangulate
-    int cvi[16], cti[16], cni[16];
+    Corner c[16];
     int nc = 0;
     const char *p = line + 2;
     while (*p && nc < 16) {
@@ -308,20 +321,128 @@ static TeapotMesh LoadObjMesh(const char *path, float targetRadius) {
       int n = std::sscanf(p, "%d/%d/%d", &vi, &ti, &ni);
       if (n <= 0) break;
       if (n == 1) { ti = 0; ni = 0; }
-      cvi[nc] = vi; cti[nc] = ti; cni[nc] = ni;
-      nc++;
+      c[nc++] = {vi, ti, ni};
       while (*p && *p != ' ') p++;
       while (*p == ' ') p++;
     }
     if (nc < 3) continue;
-    if (nc == 3 && vn.empty()) {
-      // file without normals: accumulate face normals as we go is overkill
-      // for the placeholder; fall back to up normals (matches the sphere caps)
-    }
     for (int k = 1; k + 1 < nc; k++) {
-      emit(data, idx, cvi[0], cti[0], cni[0]);
-      emit(data, idx, cvi[k], cti[k], cni[k]);
-      emit(data, idx, cvi[k + 1], cti[k + 1], cni[k + 1]);
+      faceTris.push_back({c[0], c[k], c[k + 1]});
+    }
+  }
+  std::rewind(f);
+
+  // pass 1: accumulate face normals into every welded corner
+  auto accumulateNormals = [&]() {
+    for (const auto &tri : faceTris) {
+      const Corner &A = tri[0], &B = tri[1], &C = tri[2];
+      if (A.vi <= 0 || B.vi <= 0 || C.vi <= 0) continue;
+      if ((size_t)A.vi * 3 - 2 >= vp.size() || (size_t)B.vi * 3 - 2 >= vp.size() ||
+          (size_t)C.vi * 3 - 2 >= vp.size())
+        continue;
+      const float *pa = &vp[(A.vi - 1) * 3];
+      const float *pb = &vp[(B.vi - 1) * 3];
+      const float *pc = &vp[(C.vi - 1) * 3];
+      float ux = (pb[0] - pa[0]) * s, uy = (pb[1] - pa[1]) * s, uz = (pb[2] - pa[2]) * s;
+      float wx = (pc[0] - pa[0]) * s, wy = (pc[1] - pa[1]) * s, wz = (pc[2] - pa[2]) * s;
+      float fnx = uy * wz - uz * wy;
+      float fny = uz * wx - ux * wz;
+      float fnz = ux * wy - uy * wx;
+      for (const Corner &cn : tri) {
+        if (cn.vi <= 0 || (size_t)(cn.vi - 1) * 3 + 2 >= vp.size()) continue;
+        float px = (vp[(cn.vi - 1) * 3 + 0] - ctrX) * s;
+        float py = (vp[(cn.vi - 1) * 3 + 1] - baseY) * s;
+        float pz = (vp[(cn.vi - 1) * 3 + 2] - ctrZ) * s;
+        float u, v;
+        int uvGen;
+        if (cn.ti > 0 && (size_t)(cn.ti - 1) * 2 + 1 < vt.size()) {
+          u = vt[(cn.ti - 1) * 2 + 0]; v = vt[(cn.ti - 1) * 2 + 1];
+          uvGen = 0;
+        } else {
+          float ang = std::atan2(pz, px);
+          u = (ang / 6.2831853f) + 0.5f;
+          v = py / (maxDim * s) + 0.5f;
+          uvGen = 1;
+        }
+        WeldKey key{cn.vi, uvGen, u, v};
+        auto it = weld.find(key);
+        if (it == weld.end()) continue;
+        if (cn.ni > 0 && (size_t)(cn.ni - 1) * 3 + 2 < vn.size()) {
+          it->second.nx += vn[(cn.ni - 1) * 3 + 0];
+          it->second.ny += vn[(cn.ni - 1) * 3 + 1];
+          it->second.nz += vn[(cn.ni - 1) * 3 + 2];
+        } else {
+          it->second.nx += fnx; it->second.ny += fny; it->second.nz += fnz;
+        }
+      }
+    }
+  };
+
+  // build the weld entries first (positions + UVs) so pass 1 can find them
+  auto ensureEntries = [&]() {
+    for (const auto &tri : faceTris) {
+      for (const Corner &cn : tri) {
+        if (cn.vi <= 0 || (size_t)(cn.vi - 1) * 3 + 2 >= vp.size()) continue;
+        float px = (vp[(cn.vi - 1) * 3 + 0] - ctrX) * s;
+        float py = (vp[(cn.vi - 1) * 3 + 1] - baseY) * s;
+        float pz = (vp[(cn.vi - 1) * 3 + 2] - ctrZ) * s;
+        float u, v;
+        int uvGen;
+        if (cn.ti > 0 && (size_t)(cn.ti - 1) * 2 + 1 < vt.size()) {
+          u = vt[(cn.ti - 1) * 2 + 0]; v = vt[(cn.ti - 1) * 2 + 1];
+          uvGen = 0;
+        } else {
+          float ang = std::atan2(pz, px);
+          u = (ang / 6.2831853f) + 0.5f;
+          v = py / (maxDim * s) + 0.5f;
+          uvGen = 1;
+        }
+        WeldKey key{cn.vi, uvGen, u, v};
+        if (weld.find(key) == weld.end()) {
+          weld.emplace(key, WeldVal{(int)(data.size() / 8), 0.0f, 1.0f, 0.0f});
+          data.push_back(px); data.push_back(py); data.push_back(pz);
+          data.push_back(0.0f); data.push_back(1.0f); data.push_back(0.0f);
+          data.push_back(u); data.push_back(v);
+        }
+      }
+    }
+  };
+  ensureEntries();
+  accumulateNormals();
+
+  // write the smoothed normals back into the interleaved buffer
+  for (const auto &kv : weld) {
+    float nx = kv.second.nx, ny = kv.second.ny, nz = kv.second.nz;
+    float len = std::sqrt(nx * nx + ny * ny + nz * nz);
+    int slot = kv.second.slot;
+    if (len > 1e-9f) {
+      data[slot * 8 + 3] = nx / len;
+      data[slot * 8 + 4] = ny / len;
+      data[slot * 8 + 5] = nz / len;
+    }
+  }
+
+  // pass 2: emit indices in original winding order (culling is disabled for
+  // teapots, so mixed winding cannot punch holes)
+  for (const auto &tri : faceTris) {
+    for (const Corner &cn : tri) {
+      if (cn.vi <= 0 || (size_t)(cn.vi - 1) * 3 + 2 >= vp.size()) { idx.push_back(0); continue; }
+      float px = (vp[(cn.vi - 1) * 3 + 0] - ctrX) * s;
+      float py = (vp[(cn.vi - 1) * 3 + 1] - baseY) * s;
+      float pz = (vp[(cn.vi - 1) * 3 + 2] - ctrZ) * s;
+      float u, v;
+      int uvGen;
+      if (cn.ti > 0 && (size_t)(cn.ti - 1) * 2 + 1 < vt.size()) {
+        u = vt[(cn.ti - 1) * 2 + 0]; v = vt[(cn.ti - 1) * 2 + 1];
+        uvGen = 0;
+      } else {
+        float ang = std::atan2(pz, px);
+        u = (ang / 6.2831853f) + 0.5f;
+        v = py / (maxDim * s) + 0.5f;
+        uvGen = 1;
+      }
+      auto it = weld.find(WeldKey{cn.vi, uvGen, u, v});
+      idx.push_back(it != weld.end() ? (unsigned)it->second.slot : 0);
     }
   }
   std::fclose(f);
@@ -485,23 +606,45 @@ struct TeapotPhysics {
   Vec3 vel{0.0f, 0.0f, 0.0f};
   float yaw = 0.0f;
   float yawVel = 1.1f;      // slow tumble while airborne
-  float radius = 0.55f;     // bounding radius (world units)
-  float restDepth = 0.16f;  // submerged depth at equilibrium
+  float radius = 0.55f;     // bounding radius (world units, scale 1.0)
+  float restDepth = 0.16f;  // submerged depth at equilibrium (scales with size)
   bool inWater = false;
   bool splashed = false;
   bool settled = false;
+  bool active = false;      // fleet pots spawn on a stagger
+  double spawnAt = 0.0;
   double splashTime = -1.0;
 };
 
-// rings are POD: x, z, radius, strength
+// ---- the fleet ------------------------------------------------------------
+// Nine pots at scattered deterministic positions, sizes and drop heights,
+// spawned on a stagger so the pool rains teapots for the first ten seconds.
+// Ripple-ring slots are partitioned per pot (a private window each), so nine
+// concurrent splashes never overwrite each other's rings.
+static const int kFleetCount = 9;
+static const int kRingsPerPot = MAX_RINGS / kFleetCount;
+
+static const float kFleetPos[kFleetCount][2] = {
+    {0.0f, 0.0f},   {-4.8f, 2.6f},  {4.2f, -3.1f},  {-2.6f, -4.4f},
+    {5.4f, 3.3f},   {-6.1f, -1.8f}, {1.9f, 5.2f},   {6.8f, -0.7f},
+    {-1.2f, -6.6f}};
+static const float kFleetScale[kFleetCount] = {
+    1.00f, 0.85f, 1.20f, 0.72f, 0.92f, 1.10f, 0.78f, 0.88f, 1.05f};
+static const float kFleetDrop[kFleetCount] = {
+    8.0f, 10.0f, 9.0f, 11.5f, 8.6f, 10.6f, 9.4f, 12.0f, 11.0f};
+static const double kFleetDelay[kFleetCount] = {
+    0.0, 1.1, 2.2, 3.3, 4.4, 5.5, 6.6, 7.7, 8.8};
+
+// rings are POD: x, z, radius, strength — one private window per pot
 struct Ring { float x, z, radius, strength; };
 static Ring gRings[MAX_RINGS];
-static int gRingCount = 0;
+static int gRingUsed[kFleetCount] = {};
+static Ring *RingWindow(int pot) { return &gRings[pot * kRingsPerPot]; }
 
 // The Worthington crown: a jagged water sheet that erupts around the impact
 // point, expands while decelerating, spikes tear into droplets, then it
 // collapses back. GPU-animated geometry (see shaders/pool/splash_*.glsl) —
-// the CPU only streams radius/height/spike params.
+// the CPU only streams radius/height/spike params. One per pot.
 struct CrownSplash {
   bool active = false;
   Vec3 center{0.0f, 0.0f, 0.0f};
@@ -511,11 +654,11 @@ struct CrownSplash {
   float spike = 0.0f;   // spike amplitude 0..1
   float life = 1.0f;    // fades the sheet out
 };
-static CrownSplash gCrown;
+static CrownSplash gCrowns[kFleetCount];
 
 // The central jet: the column of water that shoots up after the crown
 // collapses (the Rayleigh jet). Rendered as a stretched droplet-style quad;
-// the CPU simulates its rise + fall ballistic arc.
+// the CPU simulates its rise + fall ballistic arc. One per pot.
 struct JetColumn {
   bool active = false;
   Vec3 center{0.0f, 0.0f, 0.0f};
@@ -524,7 +667,7 @@ struct JetColumn {
   float radius = 0.0f;
   float life = 0.0f;
 };
-static JetColumn gJet;
+static JetColumn gJets[kFleetCount];
 
 struct Droplet {
   Vec3 pos;
@@ -532,10 +675,11 @@ struct Droplet {
   float radius;
   float life;     // seconds remaining
   float maxLife;
+  int owner;      // fleet pot that spawned it (owns the micro-ring window)
 };
 static std::vector<Droplet> gDroplets;
 
-static TeapotPhysics gPot;
+static TeapotPhysics gPots[kFleetCount];
 
 static const float kGravity = -13.6f;   // slightly heavier than Earth for drama
 static const float kWaterLevel = 0.0f;
@@ -543,30 +687,34 @@ static const float kBounce = 0.18f;     // small rebound off the surface
 static const float kDragWater = 2.6f;   // /s velocity damping in water
 static const float kBuoyancy = 34.0f;   // upward accel when submerged
 
-static void SpawnRing(float x, float z, float strength) {
-  if (gRingCount < MAX_RINGS) {
-    gRings[gRingCount++] = {x, z, 0.15f, strength};
+static void SpawnRing(int pot, float x, float z, float strength) {
+  Ring *win = RingWindow(pot);
+  if (gRingUsed[pot] < kRingsPerPot) {
+    win[gRingUsed[pot]++] = {x, z, 0.15f, strength};
   } else {
-    // reuse the weakest
+    // reuse the weakest ring in this pot's private window
     int weakest = 0;
-    for (int i = 1; i < MAX_RINGS; i++)
-      if (gRings[i].strength < gRings[weakest].strength) weakest = i;
-    gRings[weakest] = {x, z, 0.15f, strength};
+    for (int i = 1; i < kRingsPerPot; i++)
+      if (win[i].strength < win[weakest].strength) weakest = i;
+    win[weakest] = {x, z, 0.15f, strength};
   }
 }
 
-static void SpawnSplash(float x, float z, float impactSpeed) {
+static void SpawnSplash(int pot, float x, float z, float impactSpeed, float scale) {
   const float s = std::fmin(impactSpeed / 10.0f, 1.6f);
-  SpawnRing(x, z, std::fmin(1.0f, 0.55f + 0.45f * s));
+  SpawnRing(pot, x, z, std::fmin(1.0f, 0.55f + 0.45f * s));
 
-  // ---- the crown: erupts around the impact rim, spikes tear outward ----
-  gCrown.active = true;
-  gCrown.center = {x, kWaterLevel, z};
-  gCrown.age = 0.0f;
-  gCrown.radius = 0.30f;
-  gCrown.height = 0.22f + 0.55f * s;
-  gCrown.spike = std::fmin(1.0f, 0.35f + 0.4f * s);
-  gCrown.life = 1.0f;
+  // ---- the crown: erupts around the impact rim, spikes tear outward.
+  // Sized by the pot (a big pot throws a bigger crown) but small pots fall
+  // faster (less drag), which also feeds the crown height.
+  CrownSplash &crown = gCrowns[pot];
+  crown.active = true;
+  crown.center = {x, kWaterLevel, z};
+  crown.age = 0.0f;
+  crown.radius = 0.30f * scale;
+  crown.height = (0.22f + 0.55f * s) * scale;
+  crown.spike = std::fmin(1.0f, 0.35f + 0.4f * s);
+  crown.life = 1.0f;
 
   // ---- droplets: torn from the crown spikes, thrown ballistically. They
   // start AT the crown rim with mostly-outward velocities (a real crown
@@ -575,56 +723,64 @@ static void SpawnSplash(float x, float z, float impactSpeed) {
   for (int i = 0; i < n; i++) {
     // fixed pseudo-random spread (deterministic across runs like the rest
     // of the bench)
-    float a = (float)((i * 137) % 360) * 3.14159265f / 180.0f;
-    float r01 = ((i * 89) % 100) / 100.0f;
+    float a = (float)((i * 137 + pot * 61) % 360) * 3.14159265f / 180.0f;
+    float r01 = ((i * 89 + pot * 37) % 100) / 100.0f;
     Droplet d;
-    float rimR = gCrown.radius + 0.08f + 0.10f * r01;
+    d.owner = pot;
+    float rimR = crown.radius + 0.08f + 0.10f * r01;
     d.pos = {x + std::cos(a) * rimR,
-             kWaterLevel + 0.15f + 0.5f * gCrown.height * r01,
+             kWaterLevel + 0.15f + 0.5f * crown.height * r01,
              z + std::sin(a) * rimR};
     // mostly outward + moderate up: real crown ejecta travels far sideways
-    float out = 1.6f + 2.8f * s * (0.35f + 0.65f * r01);
+    float out = (1.6f + 2.8f * s * (0.35f + 0.65f * r01)) * scale;
     float up = 1.6f + 2.6f * s * r01;
     d.vel = {std::cos(a) * out, up, std::sin(a) * out};
-    d.radius = 0.035f + 0.045f * ((i * 13) % 7) / 7.0f;
+    d.radius = (0.035f + 0.045f * ((i * 13) % 7) / 7.0f) * scale;
     d.maxLife = d.life = 0.9f + 0.6f * ((i * 29) % 5) / 5.0f;
     gDroplets.push_back(d);
   }
 
   // ---- the jet: delayed central column that erupts after the crown falls
   // (a real tank splash: cavity collapses -> Rayleigh jet shoots up)
-  gJet.active = true;
-  gJet.center = {x, kWaterLevel, z};
-  gJet.velY = 0.0f;      // delayed: starts moving when the crown collapses
-  gJet.height = 0.0f;
-  gJet.radius = 0.10f + 0.06f * s;
-  gJet.life = 0.0f;
+  JetColumn &jet = gJets[pot];
+  jet.active = true;
+  jet.center = {x, kWaterLevel, z};
+  jet.velY = 0.0f;      // delayed: starts moving when the crown collapses
+  jet.height = 0.0f;
+  jet.radius = (0.10f + 0.06f * s) * scale;
+  jet.life = 0.0f;
 }
 
-static void ResetTeapot(double now) {
-  gPot = TeapotPhysics{};
-  gPot.pos = {0.0f, 8.0f, 0.0f};
-  gPot.vel = {0.0f, -1.2f, 0.0f};
-  (void)now;
-  gRingCount = 0;
+static void ResetFleet() {
+  for (int i = 0; i < kFleetCount; i++) {
+    gPots[i] = TeapotPhysics{};
+    gPots[i].active = false;
+    gPots[i].spawnAt = kFleetDelay[i];
+    gCrowns[i] = CrownSplash{};
+    gJets[i] = JetColumn{};
+    gRingUsed[i] = 0;
+    Ring *win = RingWindow(i);
+    for (int j = 0; j < kRingsPerPot; j++) win[j] = Ring{};
+  }
   gDroplets.clear();
-  gCrown = CrownSplash{};
-  gJet = JetColumn{};
 }
+
+static double gStartTime = 0.0;  // set in RunPoolScene; UpdatePhysics reads it.
 
 // per-frame physics update
 static void UpdatePhysics(double now, double dt) {
-  // --- rings expand and fade ---
-  for (int i = 0; i < gRingCount; i++) {
-    Ring &r = gRings[i];
-    r.radius += (1.1f + 2.2f * r.strength) * (float)dt;
-    r.strength -= 0.42f * (float)dt;
+  // --- rings expand and fade (per-pot windows) ---
+  for (int i = 0; i < kFleetCount; i++) {
+    Ring *win = RingWindow(i);
+    for (int j = 0; j < gRingUsed[i]; j++) {
+      win[j].radius += (1.1f + 2.2f * win[j].strength) * (float)dt;
+      win[j].strength -= 0.42f * (float)dt;
+    }
+    int w = 0;
+    for (int j = 0; j < gRingUsed[i]; j++)
+      if (win[j].strength > 0.02f) win[w++] = win[j];
+    gRingUsed[i] = w;
   }
-  // compact finished rings
-  int w = 0;
-  for (int i = 0; i < gRingCount; i++)
-    if (gRings[i].strength > 0.02f) gRings[w++] = gRings[i];
-  gRingCount = w;
 
   // --- droplets: ballistic strands, drag-lite (water drops barely slow) ---
   for (Droplet &d : gDroplets) {
@@ -632,9 +788,10 @@ static void UpdatePhysics(double now, double dt) {
     d.pos = Vec3Add(d.pos, Vec3Scale(d.vel, (float)dt));
     d.life -= (float)dt;
     if (d.pos.y < kWaterLevel && d.vel.y < 0.0f) {
-      // landing droplet raises a micro-ring
+      // landing droplet raises a micro-ring in its owner's window
       if (d.radius > 0.03f)
-        SpawnRing(d.pos.x, d.pos.z, 0.14f + 0.3f * std::fmin(-d.vel.y / 6.0f, 1.0f));
+        SpawnRing(d.owner, d.pos.x, d.pos.z,
+                  0.14f + 0.3f * std::fmin(-d.vel.y / 6.0f, 1.0f));
       d.life = 0.0f;
     }
   }
@@ -642,83 +799,101 @@ static void UpdatePhysics(double now, double dt) {
                                  [](const Droplet &d) { return d.life <= 0.0f; }),
                   gDroplets.end());
 
-  // --- crown: expands fast, decelerates, then collapses ---
-  if (gCrown.active) {
-    gCrown.age += (float)dt;
-    // radius grows decelerating: r ~ sqrt(t) (energy spread over the ring)
-    float t = gCrown.age;
-    gCrown.radius = 0.30f + 1.9f * std::sqrt(t) * 0.55f;
-    gCrown.height *= 1.0f - std::fmin(1.6f * (float)dt, 0.9f); // falls back
-    gCrown.spike *= 1.0f - std::fmin(0.8f * (float)dt, 0.9f);
-    gCrown.life = 1.0f - t / 0.95f;
-    if (gCrown.life <= 0.0f || gCrown.height < 0.03f) {
-      gCrown.active = false;
-      // jet launches as the crown collapses; the cavity is slightly off the
-      // impact centre (the teapot floats to one side of it), so the column
-      // rises beside the floating pot instead of hiding behind it
-      gJet.velY = 4.6f;
-      gJet.center.x += 0.9f;
-      gJet.center.z += 0.4f;
+  for (int i = 0; i < kFleetCount; i++) {
+    CrownSplash &crown = gCrowns[i];
+    JetColumn &jet = gJets[i];
+
+    // --- crown: expands fast, decelerates, then collapses ---
+    if (crown.active) {
+      crown.age += (float)dt;
+      // radius grows decelerating: r ~ sqrt(t) (energy spread over the ring)
+      float t = crown.age;
+      crown.radius = 0.30f + 1.9f * std::sqrt(t) * 0.55f;
+      crown.height *= 1.0f - std::fmin(1.6f * (float)dt, 0.9f); // falls back
+      crown.spike *= 1.0f - std::fmin(0.8f * (float)dt, 0.9f);
+      crown.life = 1.0f - t / 0.95f;
+      if (crown.life <= 0.0f || crown.height < 0.03f) {
+        crown.active = false;
+        // jet launches as the crown collapses; the cavity is slightly off the
+        // impact centre (the pot floats to one side of it), so the column
+        // rises beside the floating pot instead of hiding behind it
+        jet.velY = 4.6f;
+        jet.center.x += 0.9f;
+        jet.center.z += 0.4f;
+      }
     }
+
+    // --- jet: ballistic rise + fall, thins as it climbs ---
+    if (jet.active && jet.velY != 0.0f) {
+      jet.velY += kGravity * (float)dt;
+      jet.height += jet.velY * (float)dt;
+      jet.life += (float)dt;
+      if (jet.height < 0.0f) {
+        jet.height = 0.0f;
+        jet.velY = 0.0f;
+        jet.life = 0.0f;
+        // jet impact: a modest final ring
+        SpawnRing(i, jet.center.x, jet.center.z, 0.45f);
+      }
+    }
+
+    // --- pot ---
+    TeapotPhysics &p = gPots[i];
+    if (!p.active) {
+      if (now - gStartTime >= p.spawnAt) {
+        p.active = true;
+        float sc = kFleetScale[i];
+        p.pos = {kFleetPos[i][0], kFleetDrop[i], kFleetPos[i][1]};
+        p.vel = {0.0f, -1.2f, 0.0f};
+        p.yawVel = 1.1f * (0.6f + 0.8f * ((i * 7) % 5) / 5.0f);
+        p.radius = 0.55f * sc;
+        p.restDepth = 0.16f * sc;
+      }
+      continue;
+    }
+
+    bool water = p.pos.y < kWaterLevel + p.restDepth;
+
+    // gravity always
+    p.vel.y += kGravity * (float)dt;
+
+    if (water) {
+      if (!p.inWater) {
+        // ---- impact ----
+        float speed = -p.vel.y;
+        p.inWater = true;
+        p.splashed = true;
+        p.splashTime = now;
+        SpawnSplash(i, p.pos.x, p.pos.z, speed, kFleetScale[i]);
+        // small rebound then buoyancy takes over
+        p.vel.y = speed * kBounce;
+        p.yawVel *= 0.25f;
+      }
+      // buoyancy: stronger the deeper it sits, up to equilibrium
+      float depth = kWaterLevel - p.pos.y;
+      float buoy = kBuoyancy * (depth / p.restDepth) * (float)dt;
+      if (buoy > 0.0f) p.vel.y += buoy;
+      // water drag (quadratic-ish, clamped)
+      float drag = 1.0f - std::fmin(kDragWater * (float)dt, 0.9f);
+      p.vel.x *= drag; p.vel.y *= drag; p.vel.z *= drag;
+      // righting: spin back to yaw 0 and settle
+      p.yawVel *= 1.0f - std::fmin(3.0f * (float)dt, 0.9f);
+      p.yaw += p.yawVel * (float)dt;
+      // bob: damped spring around restDepth once the bounce has decayed
+      if (now - p.splashTime > 0.55f) {
+        float target = kWaterLevel - p.restDepth * 0.5f + 0.05f * std::sin((now - p.splashTime) * 2.1f);
+        p.pos.y += (target - p.pos.y) * std::fmin(2.2f * (float)dt, 1.0f);
+        if (std::fabs(target - p.pos.y) < 0.01f && std::fabs(p.vel.y) < 0.05f)
+          p.settled = true;
+      }
+    } else {
+      p.inWater = false;
+      p.yaw += p.yawVel * (float)dt; // tumble
+    }
+
+    p.pos = Vec3Add(p.pos, Vec3Scale(p.vel, (float)dt));
+    if (p.pos.y < kWaterLevel - 1.2f) p.pos.y = kWaterLevel - 1.2f; // hard floor of the sim
   }
-
-  // --- jet: ballistic rise + fall, thins as it climbs ---
-  if (gJet.active && gJet.velY != 0.0f) {
-    gJet.velY += kGravity * (float)dt;
-    gJet.height += gJet.velY * (float)dt;
-    gJet.life += (float)dt;
-    if (gJet.height < 0.0f) {
-      gJet.height = 0.0f;
-      gJet.velY = 0.0f;
-      gJet.life = 0.0f;
-      // jet impact: a modest final ring
-      SpawnRing(gJet.center.x, gJet.center.z, 0.45f);
-    }
-  }
-
-  // --- teapot ---
-  TeapotPhysics &p = gPot;
-  bool water = p.pos.y < kWaterLevel + p.restDepth;
-
-  // gravity always
-  p.vel.y += kGravity * (float)dt;
-
-  if (water) {
-    if (!p.inWater) {
-      // ---- impact ----
-      float speed = -p.vel.y;
-      p.inWater = true;
-      p.splashed = true;
-      p.splashTime = now;
-      SpawnSplash(p.pos.x, p.pos.z, speed);
-      // small rebound then buoyancy takes over
-      p.vel.y = speed * kBounce;
-      p.yawVel *= 0.25f;
-    }
-    // buoyancy: stronger the deeper it sits, up to equilibrium
-    float depth = kWaterLevel - p.pos.y;
-    float buoy = kBuoyancy * (depth / p.restDepth) * (float)dt;
-    if (buoy > 0.0f) p.vel.y += buoy;
-    // water drag (quadratic-ish, clamped)
-    float drag = 1.0f - std::fmin(kDragWater * (float)dt, 0.9f);
-    p.vel.x *= drag; p.vel.y *= drag; p.vel.z *= drag;
-    // righting: spin back to yaw 0 and settle
-    p.yawVel *= 1.0f - std::fmin(3.0f * (float)dt, 0.9f);
-    p.yaw += p.yawVel * (float)dt;
-    // bob: damped spring around restDepth once the bounce has decayed
-    if (now - p.splashTime > 0.55f) {
-      float target = kWaterLevel - p.restDepth * 0.5f + 0.05f * std::sin((now - p.splashTime) * 2.1f);
-      p.pos.y += (target - p.pos.y) * std::fmin(2.2f * (float)dt, 1.0f);
-      if (std::fabs(target - p.pos.y) < 0.01f && std::fabs(p.vel.y) < 0.05f)
-        p.settled = true;
-    }
-  } else {
-    p.inWater = false;
-    p.yaw += p.yawVel * (float)dt; // tumble
-  }
-
-  p.pos = Vec3Add(p.pos, Vec3Scale(p.vel, (float)dt));
-  if (p.pos.y < kWaterLevel - 1.2f) p.pos.y = kWaterLevel - 1.2f; // hard floor of the sim
 }
 
 // ------------------------------------------------------------------- scene gl
@@ -736,8 +911,6 @@ static bool gAutoCam = true;
 static bool gIsHoldingMouse = false;
 static int gXOld = 0, gYOld = 0;
 static float gCamDist = 7.2f;
-
-static double gStartTime = 0.0;
 
 // results screen + fused-run plumbing (same pattern as tidebench.cxx)
 static bool gResultsShown = false;
@@ -915,35 +1088,41 @@ static void DrawWater(const Mat4 &view, const Vec3 &eye, double timeSec) {
   glUniform3f(gWaterProg.loc("uTileA"), kTileA[0], kTileA[1], kTileA[2]);
   glUniform3f(gWaterProg.loc("uTileB"), kTileB[0], kTileB[1], kTileB[2]);
   glUniform1f(gWaterProg.loc("uTime"), (float)timeSec);
-  glUniform1i(gWaterProg.loc("uRingCount"), gRingCount);
-  float rings[MAX_RINGS * 4];
-  for (int i = 0; i < MAX_RINGS; i++) {
-    if (i < gRingCount) {
-      rings[i * 4 + 0] = gRings[i].x;
-      rings[i * 4 + 1] = gRings[i].z;
-      rings[i * 4 + 2] = gRings[i].radius;
-      rings[i * 4 + 3] = gRings[i].strength;
-    } else {
-      rings[i * 4 + 0] = 0.0f; rings[i * 4 + 1] = 0.0f;
-      rings[i * 4 + 2] = 0.0f; rings[i * 4 + 3] = 0.0f;
-    }
-  }
-  glUniform4fv(gWaterProg.loc("uRings"), MAX_RINGS, rings);
+  // gRings is exactly MAX_RINGS x (x, z, radius, strength) — upload it flat.
+  // Unused slots carry strength 0 and the shader skips them.
+  glUniform4fv(gWaterProg.loc("uRings"), MAX_RINGS, &gRings[0].x);
   glDrawElements(GL_TRIANGLES, gWaterMesh.indexCount, GL_UNSIGNED_INT, nullptr);
   glBindVertexArray(0);
 }
 
-static void DrawTeapot(const Mat4 &view, const Vec3 &eye) {
+static void DrawTeapot(const Mat4 &view, const Vec3 &eye, const TeapotPhysics &pot,
+                       float scale, bool reflectionPass, const float *wobble) {
+  if (!pot.active) return;
   Mat4 vp;
   Mat4Multiply(vp, gProj, view);
+  Vec3 pos = pot.pos;
+  if (reflectionPass) {
+    pos.y = 2.0f * kWaterLevel - pos.y; // mirror the anchor about the plane
+    pos.x += wobble[0];                 // ripple shear: the image wobbles as
+    pos.z += wobble[1];                 // the pot's own rings pass under it
+  }
   Mat4 model;
-  Mat4Model(model, gPot.pos, gPot.yaw, 1.0f);
-  float wetness = gPot.splashed ? 1.0f : 0.0f;
+  Mat4Model(model, pos, pot.yaw, scale);
+  if (reflectionPass) {
+    // Mirror the geometry itself: M' = M * diag(1,-1,1), i.e. negate the
+    // second column (column-major). This flips winding — culling stays off.
+    model[4] = -model[4];
+    model[5] = -model[5];
+    model[6] = -model[6];
+    model[7] = -model[7];
+  }
+  float wetness = pot.splashed ? 1.0f : 0.0f;
 
   glUseProgram(gTeapotProg.handle);
   glBindVertexArray(gTeapotMesh.vao);
   // Culling disabled for the teapot: user-supplied OBJs often mix winding
   // orders, and a single flipped face punches a visible hole in the model.
+  // The reflection pass needs this too (mirroring flips winding).
   glDisable(GL_CULL_FACE);
   glUniformMatrix4fv(gTeapotProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
   glUniformMatrix4fv(gTeapotProg.loc("uModel"), 1, GL_FALSE, model.data());
@@ -951,81 +1130,163 @@ static void DrawTeapot(const Mat4 &view, const Vec3 &eye) {
   glUniform3f(gTeapotProg.loc("uLightDir"), kLightDir[0], kLightDir[1], kLightDir[2]);
   glUniform3f(gTeapotProg.loc("uLightTint"), kLightTint[0], kLightTint[1], kLightTint[2]);
   glUniform1f(gTeapotProg.loc("uWetness"), wetness);
+  glUniform1f(gTeapotProg.loc("uWaterLine"), kWaterLevel);
+  glUniform3f(gTeapotProg.loc("uWaterBody"), 0.030f, 0.180f, 0.320f);
+  glUniform1f(gTeapotProg.loc("uReflect"), reflectionPass ? 1.0f : 0.0f);
   glActiveTexture(GL_TEXTURE0);
   glBindTexture(GL_TEXTURE_2D, gTeapotTex);
   glUniform1i(gTeapotProg.loc("uBaseColor"), 0);
   glDrawElements(GL_TRIANGLES, gTeapotMesh.indexCount, GL_UNSIGNED_INT, nullptr);
   glBindVertexArray(0);
+  if (!reflectionPass) glEnable(GL_CULL_FACE); // the reflection caller restores
+}
+
+static void DrawFleet(const Mat4 &view, const Vec3 &eye, bool reflectionPass) {
+  const float zero[2] = {0.0f, 0.0f};
+  for (int i = 0; i < kFleetCount; i++)
+    DrawTeapot(view, eye, gPots[i], kFleetScale[i], reflectionPass,
+               reflectionPass ? nullptr : zero);
+}
+
+// ---- real planar reflections ---------------------------------------------
+// The fleet is re-rendered mirrored about the water plane and alpha-blended
+// over the water shading. A stencil pass marks exactly the water pixels the
+// camera sees; the mirrored pots are drawn only there (the camera never dives
+// below the surface, so the mask is a safety net rather than a requirement).
+// Each pot's own ripple rings shear its image, so reflections wobble while
+// the surface is disturbed.
+static void DrawFleetReflection(const Mat4 &view, const Vec3 &eye) {
+  bool any = false;
+  for (int i = 0; i < kFleetCount; i++) any = any || gPots[i].active;
+  if (!any) return;
+
+  // 1) stencil = water-visible pixels (colour + depth writes stay off)
+  glEnable(GL_STENCIL_TEST);
+  glStencilFunc(GL_ALWAYS, 1, 0xff);
+  glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+  glStencilMask(0xff);
+  glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+  glDepthMask(GL_FALSE);
+  glUseProgram(gWaterProg.handle);
+  glBindVertexArray(gWaterMesh.vao);
+  Mat4 vp, ident;
+  Mat4Multiply(vp, gProj, view);
+  Mat4Identity(ident);
+  glUniformMatrix4fv(gWaterProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
+  glUniformMatrix4fv(gWaterProg.loc("uModel"), 1, GL_FALSE, ident.data());
+  glDrawElements(GL_TRIANGLES, gWaterMesh.indexCount, GL_UNSIGNED_INT, nullptr);
+  glBindVertexArray(0);
+  glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+
+  // 2) mirrored fleet, blended over the water
+  glStencilFunc(GL_EQUAL, 1, 0xff);
+  glStencilMask(0x00);
+  glDisable(GL_DEPTH_TEST); // mirrored geometry lives below the water depth
+  glDepthMask(GL_FALSE);
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+  for (int i = 0; i < kFleetCount; i++) {
+    if (!gPots[i].active) continue;
+    float wob[2] = {0.0f, 0.0f};
+    Ring *win = RingWindow(i);
+    for (int j = 0; j < gRingUsed[i]; j++) {
+      float dx = gPots[i].pos.x - win[j].x;
+      float dz = gPots[i].pos.z - win[j].z;
+      float d = std::sqrt(dx * dx + dz * dz) + 1e-4f;
+      float band = d - win[j].radius;
+      float infl = win[j].strength * std::exp(-band * band / 0.25f);
+      wob[0] += dx / d * infl * 0.05f;
+      wob[1] += dz / d * infl * 0.05f;
+    }
+    DrawTeapot(view, eye, gPots[i], kFleetScale[i], true, wob);
+  }
+  glDisable(GL_BLEND);
+  glDisable(GL_STENCIL_TEST);
+  glDepthMask(GL_TRUE);
+  glEnable(GL_DEPTH_TEST);
   glEnable(GL_CULL_FACE);
 }
 
-static void DrawCrown(const Mat4 &view, double now) {
-  if (!gCrown.active) return;
+static void DrawCrowns(const Mat4 &view, double now) {
+  bool any = false;
+  for (int i = 0; i < kFleetCount; i++) any = any || gCrowns[i].active;
+  if (!any) return;
   Mat4 vp;
   Mat4Multiply(vp, gProj, view);
   glUseProgram(gSplashProg.handle);
   glBindVertexArray(gCrownVao);
   glUniformMatrix4fv(gSplashProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
-  glUniform3f(gSplashProg.loc("uCenter"), gCrown.center.x, gCrown.center.y, gCrown.center.z);
   glUniform3f(gSplashProg.loc("uCamPos"), gCamPos.x, gCamPos.y, gCamPos.z);
-  glUniform1f(gSplashProg.loc("uRadius"), gCrown.radius);
-  glUniform1f(gSplashProg.loc("uHeight"), gCrown.height);
-  glUniform1f(gSplashProg.loc("uSpike"), gCrown.spike);
-  glUniform1f(gSplashProg.loc("uTime"), (float)now);
   glUniform3f(gSplashProg.loc("uEyePos"), gCamPos.x, gCamPos.y, gCamPos.z);
   glUniform3f(gSplashProg.loc("uLightDir"), kLightDir[0], kLightDir[1], kLightDir[2]);
   glUniform3f(gSplashProg.loc("uLightTint"), kLightTint[0], kLightTint[1], kLightTint[2]);
-  // life fades the sheet: bake into vParam via uHeight? No — pass life as
-  // uSpike-independent uniform via the w channel of vParam in the shader.
-  // Simplest: scale the alpha by reusing uSpike? Keep it clean: multiply
-  // uHeight toward 0 collapses the crown, which naturally fades it.
+  glUniform1f(gSplashProg.loc("uTime"), (float)now);
   glDepthMask(GL_FALSE);
   glDisable(GL_CULL_FACE); // the sheet is seen from both sides
   glEnable(GL_BLEND);
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-  glDrawElements(GL_TRIANGLES, gCrownVertexCount, GL_UNSIGNED_INT, nullptr);
+  for (int i = 0; i < kFleetCount; i++) {
+    const CrownSplash &c = gCrowns[i];
+    if (!c.active) continue;
+    glUniform3f(gSplashProg.loc("uCenter"), c.center.x, c.center.y, c.center.z);
+    glUniform1f(gSplashProg.loc("uRadius"), c.radius);
+    glUniform1f(gSplashProg.loc("uHeight"), c.height);
+    glUniform1f(gSplashProg.loc("uSpike"), c.spike);
+    // Per-pot spike animation phase so nine crowns don't pulse in lockstep.
+    glUniform1f(gSplashProg.loc("uPhase"), (float)i * 1.7f);
+    glDrawElements(GL_TRIANGLES, gCrownVertexCount, GL_UNSIGNED_INT, nullptr);
+  }
   glBindVertexArray(0);
   glDisable(GL_BLEND);
   glDepthMask(GL_TRUE);
   glEnable(GL_CULL_FACE);
 }
 
-static void DrawJet(const Mat4 &view, const Vec3 &eye) {
-  if (!gJet.active || gJet.height <= 0.01f) return;
+static void DrawJets(const Mat4 &view, const Vec3 &eye) {
+  (void)eye;
+  bool any = false;
+  for (int i = 0; i < kFleetCount; i++)
+    if (gJets[i].active && gJets[i].height > 0.01f) any = true;
+  if (!any) return;
   // The Rayleigh jet: a thin vertical column rising from the collapse point.
-  // Drawn as two crossed columns of overlapping droplet billboards (8
-  // anchor points, each a soft round sprite of the column's half-width),
-  // which visually merge into a 3D column from every angle. Zero stretch
-  // (velocity 0) so the sprite shader just stamps round water blobs.
-  Vec3 toCam = Vec3Normalize(Vec3Sub(eye, gJet.center));
-  float a = std::atan2(toCam.x, toCam.z);
-  const float fade = std::fmin(1.0f, 1.3f - gJet.life * 0.3f);
+  // Drawn as two crossed columns of overlapping droplet billboards, which
+  // visually merge into a 3D column from every angle. Zero stretch (velocity
+  // 0) so the sprite shader just stamps round water blobs.
   static std::vector<float> jbuf;
   jbuf.clear();
-  const float halfW = gJet.radius;
-  for (int pass = 0; pass < 2; pass++) {
-    float aa = a + pass * 1.5707963f;
-    // stack overlapping billboards up the column so the sprites merge into
-    // a solid water column (2 crossed layers, 11 anchors each = 132 tris)
-    const int kSteps = 10;
-    for (int i = 0; i <= kSteps; i++) {
-      float sy = (float)i / kSteps;
-      float taper = 1.0f - 0.35f * sy; // column thins as it rises
-      float px = gJet.center.x;
-      float py = gJet.center.y + sy * gJet.height;
-      float pz = gJet.center.z;
-      const float corners[4][2] = {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}};
-      const int quadIdx[6] = {0, 1, 2, 0, 2, 3};
-      for (int ci = 0; ci < 6; ci++) {
-        const float *c = corners[quadIdx[ci]];
-        jbuf.push_back(px); jbuf.push_back(py); jbuf.push_back(pz);
-        jbuf.push_back(0.0f); jbuf.push_back(0.0f); jbuf.push_back(0.0f); // no stretch
-        jbuf.push_back(c[0]); jbuf.push_back(c[1]);
-        jbuf.push_back(halfW * taper);
-        jbuf.push_back(fade);
+  for (int p = 0; p < kFleetCount; p++) {
+    const JetColumn &jet = gJets[p];
+    if (!jet.active || jet.height <= 0.01f) continue;
+    Vec3 toCam = Vec3Normalize(Vec3Sub(eye, jet.center));
+    float a = std::atan2(toCam.x, toCam.z);
+    const float fade = std::fmin(1.0f, 1.3f - jet.life * 0.3f);
+    const float halfW = jet.radius;
+    for (int pass = 0; pass < 2; pass++) {
+      float aa = a + pass * 1.5707963f;
+      (void)aa;
+      // stack overlapping billboards up the column so the sprites merge into
+      // a solid water column (2 crossed layers, 11 anchors each = 132 tris)
+      const int kSteps = 10;
+      for (int i = 0; i <= kSteps; i++) {
+        float sy = (float)i / kSteps;
+        float taper = 1.0f - 0.35f * sy; // column thins as it rises
+        float px = jet.center.x;
+        float py = jet.center.y + sy * jet.height;
+        float pz = jet.center.z;
+        const float corners[4][2] = {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}};
+        const int quadIdx[6] = {0, 1, 2, 0, 2, 3};
+        for (int ci = 0; ci < 6; ci++) {
+          const float *c = corners[quadIdx[ci]];
+          jbuf.push_back(px); jbuf.push_back(py); jbuf.push_back(pz);
+          jbuf.push_back(0.0f); jbuf.push_back(0.0f); jbuf.push_back(0.0f); // no stretch
+          jbuf.push_back(c[0]); jbuf.push_back(c[1]);
+          jbuf.push_back(halfW * taper);
+          jbuf.push_back(fade);
+        }
       }
     }
   }
+  if (jbuf.empty()) return;
 
   Mat4 vp;
   Mat4Multiply(vp, gProj, view);
@@ -1035,6 +1296,8 @@ static void DrawJet(const Mat4 &view, const Vec3 &eye) {
   glBufferData(GL_ARRAY_BUFFER, jbuf.size() * sizeof(float), jbuf.data(), GL_STREAM_DRAW);
   glUniformMatrix4fv(gDropletProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
   glUniform3f(gDropletProg.loc("uLightTint"), kLightTint[0], kLightTint[1], kLightTint[2]);
+  glUniform3f(gDropletProg.loc("uSkyA"), kTileA[0], kTileA[1], kTileA[2]);
+  glUniform3f(gDropletProg.loc("uSkyB"), kTileB[0], kTileB[1], kTileB[2]);
   glEnable(GL_BLEND);
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
   glDepthMask(GL_FALSE);
@@ -1074,6 +1337,8 @@ static void DrawDroplets(const Mat4 &view, const Vec3 &eye) {
   glBufferData(GL_ARRAY_BUFFER, buf.size() * sizeof(float), buf.data(), GL_STREAM_DRAW);
   glUniformMatrix4fv(gDropletProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
   glUniform3f(gDropletProg.loc("uLightTint"), kLightTint[0], kLightTint[1], kLightTint[2]);
+  glUniform3f(gDropletProg.loc("uSkyA"), kTileA[0], kTileA[1], kTileA[2]);
+  glUniform3f(gDropletProg.loc("uSkyB"), kTileB[0], kTileB[1], kTileB[2]);
   glEnable(GL_BLEND);
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
   glDepthMask(GL_FALSE);
@@ -1117,7 +1382,17 @@ static void RenderScene() {
 
   Mat4 view;
   {
-    Vec3 look = {gPot.pos.x, std::fmax(gPot.pos.y, 0.0f) + 0.4f, gPot.pos.z};
+    // track the fleet centroid so the camera keeps the whole splash field in
+    // frame (before any pot spawns, gaze at the impact zone of pot 0)
+    Vec3 acc{0.0f, 0.0f, 0.0f};
+    int n = 0;
+    for (int i = 0; i < kFleetCount; i++) {
+      if (!gPots[i].active) continue;
+      acc = Vec3Add(acc, gPots[i].pos);
+      n++;
+    }
+    Vec3 look = n > 0 ? Vec3Scale(acc, 1.0f / n) : Vec3{kFleetPos[0][0], 1.0f, kFleetPos[0][1]};
+    look.y = std::fmax(look.y, 0.0f) + 0.4f;
     Mat4LookAt(view, eye, look, {0, 1, 0});
   }
   float aspect = (float)gWindowWidth / (float)gWindowHeight;
@@ -1125,13 +1400,14 @@ static void RenderScene() {
 
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
   glViewport(0, 0, gWindowWidth, gWindowHeight);
-  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 
   DrawSky(view, eye, now);
-  DrawWater(view, eye, now);
-  DrawTeapot(view, eye);
-  DrawCrown(view, now);
-  DrawJet(view, eye);
+  DrawFleet(view, eye, false);      // pots above the surface
+  DrawWater(view, eye, now);        // opaque water covers the submerged parts
+  DrawFleetReflection(view, eye);   // mirrored fleet blended into the water
+  DrawCrowns(view, now);
+  DrawJets(view, eye);
   DrawDroplets(view, eye);
   RenderHUD();
 
@@ -1182,7 +1458,7 @@ static void ProcessKeys(const SDL_Event &event) {
   } else if (event.key.keysym.sym == SDLK_f) {
     gAutoCam = !gAutoCam;
   } else if (event.key.keysym.sym == SDLK_r) {
-    ResetTeapot(NowSeconds()); // re-drop the teapot
+    ResetFleet(); // re-drop the whole fleet
   } else if (event.key.keysym.sym == SDLK_LEFT) {
     gCamYaw -= 0.05f;
   } else if (event.key.keysym.sym == SDLK_RIGHT) {
@@ -1433,7 +1709,7 @@ int RunPoolScene(bool *gaveUpOut) {
   std::printf("Renderer: %s | %s\n", glGetString(GL_RENDERER), glGetString(GL_VERSION));
 
   Setup();
-  ResetTeapot(0.0);
+  ResetFleet();
 
   gStartTime = NowSeconds();
   gFpsTimer = gStartTime;
