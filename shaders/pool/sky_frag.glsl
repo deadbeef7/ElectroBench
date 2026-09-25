@@ -25,13 +25,12 @@ out vec4 fragColor;
 const float PI = 3.14159265358979;
 
 float checker(vec2 p) {
-    // cell = one tile: this is the < 0.5 of a 2-cell period (x/2), so tiles
-    // are 1.0 unit wide — matching the reflected checker in water_frag.glsl
-    vec2 w = fract(p) - 0.5;
-    vec2 a = abs(fract(p * 0.5) - 0.5) / max(fwidth(p * 0.5), vec2(1e-4));
-    vec2 fade = clamp(a * 1.6 - 0.5, 0.0, 1.0);
-    float cw = min(fade.x, fade.y);
-    return mix(step(dot(w, w), 0.25), 0.5, cw);
+    // Hard-edged checker, no fwidth: the dome's coarse mesh makes screen-space
+    // derivatives of the gnomonic projection enormous, which washed every
+    // tile to mid-grey. Aliasing at extreme distance is hidden by the
+    // horizon glaze instead.
+    vec2 w = abs(fract(p) - 0.5);
+    return step(max(w.x, w.y), 0.25);
 }
 
 void main() {
@@ -51,13 +50,17 @@ void main() {
         // below-horizon fallback keeps the seam invisible at grazing angles
         plane = dir.xz * (6.2831853 / max(0.06 - up, 0.06));
     }
-    float cell = 1.05;                            // world-ish checker scale
+    float cell = 0.16;                            // checker scale: 6+ tiles
+                                                  // across the visible sky
     float c = checker(plane / cell + vec2(uTime * 0.006, 0.0));
 
-    // two porcelain tones, slightly cool — a lit indoor pool room. Linear
-    // space: tileB reads as a deep navy under the tonemap.
-    vec3 tileA = vec3(0.860, 0.878, 0.905);
-    vec3 tileB = vec3(0.008, 0.010, 0.016);
+    // two VIVID tones — a coloured pool-room checker. These are deliberately
+    // oversaturated linear values: the tonemap knee + gamma at the end wash
+    // colours toward pastel, so this overshoot keeps the tiles reading as
+    // punchy turquoise / hot coral on screen. Must match kTileA/kTileB in
+    // src/pool.cxx (the water uniforms).
+    vec3 tileA = vec3(0.020, 0.580, 0.780);   // turquoise / cyan
+    vec3 tileB = vec3(1.600, 0.110, 0.025);   // hot coral / orange
     vec3 albedo = mix(tileB, tileA, c);
 
     // HIDDEN light: a broad directional wash, brighter toward the light.
@@ -69,7 +72,7 @@ void main() {
     float horiz = 1.0 - smoothstep(0.0, 0.42, abs(up));
 
     vec3 col = albedo * uLightTint * (0.85 + 0.55 * wash);
-    col += uLightTint * 0.10 * horiz;
+    col += uLightTint * 0.05 * horiz;
 
     // tonemap + gamma, same pipeline as the other scenes
     col = col / (col + vec3(0.35));               // gentle filmic knee

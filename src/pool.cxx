@@ -73,9 +73,10 @@ static const float kWaterSize = 300.0f;   // water patch half-size reaches the
 static const int kDomeSeg = 48, kDomeRings = 28;
 static const float kDomeRadius = 800.0f;  // inside the far plane
 
-// palette
-static const float kTileA[3] = {0.860f, 0.878f, 0.905f}; // porcelain white
-static const float kTileB[3] = {0.130f, 0.140f, 0.165f}; // deep navy tile
+// palette — the COLOURED pool-room checker. Must match sky_frag.glsl's
+// tileA/tileB (the water shader receives these as uniforms).
+static const float kTileA[3] = {0.020f, 0.580f, 0.780f}; // turquoise / cyan tile
+static const float kTileB[3] = {1.600f, 0.110f, 0.025f}; // hot coral / orange tile
 static const float kLightTint[3] = {0.86f, 0.95f, 1.05f};// cool pool-room glow
 
 // hidden light: direction TOWARD the light, high and behind the default
