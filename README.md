@@ -53,7 +53,10 @@ make STATIC=1            # -> build/ElectroBench-static(.exe)
 
 This requires the **static archives** of every dependency (e.g. MSYS2's `mingw-w64-x86_64-SDL2` ships
 `libSDL2.a` already; on Linux you need the `.a` variants of SDL2/GLEW/GLU installed). On Windows the
-static OG build links `-static-libgcc -static-libstdc++ -lopengl32 -lglu32 -lglew32 -lSDL2main -lSDL2 -mwindows` — no DLLs needed next to the exe.
+static build also defines `GLEW_STATIC` and uses the static GLEW archive, so its link line is
+`-static-libgcc -static-libstdc++ -lopengl32 -lglu32 -lSDL2main -lSDL2 -mwindows` (plus the
+`pkg-config --static` dependency flags) — no DLLs are needed next to the exe. The static build keeps
+its objects under `build/static/`, separate from the normal DLL-linked objects.
 
 # The OG GL 2.1 benchmark (110 UZIs)
 
@@ -170,8 +173,11 @@ g++ -std=c++17 -O2 -march=x86-64 -mtune=generic \
 ```
 
 Both scenes are linked into that one binary: `src/tidebench.cxx` is a scene module (it has no
-`main()` of its own) that `src/main.cxx` hands the same SDL session to. To link statically, add
-`-static -static-libgcc -static-libstdc++` and use `pkg-config --static` (same as `make STATIC=1`).
+`main()` of its own) that `src/main.cxx` hands the same SDL session to. For the static build, prefer
+`make STATIC=1`: it passes `-DGLEW_STATIC`, uses `pkg-config --static`, and keeps the static object
+files separate from the normal build. If invoking `g++` directly, use the same define and static
+GLEW archive consistently; do not compile with the DLL-import GLEW header and then link
+`libglew32.a`.
 
 Notes for the direct g++ build :
 - `-march=x86-64 -mtune=generic` is the key: it emits baseline x86-64 code that runs on any 64-bit CPU, so the resulting exe won't illegal-instruction even where the prebuilt MSYS2 tools do.

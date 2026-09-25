@@ -24,8 +24,16 @@ STATIC_SUFFIX :=
 STATIC_LDFLAGS :=
 
 BUILD := build
+ifeq ($(STATIC),1)
+    # GLEW's static and DLL headers use different symbol decorations. Keep
+    # static objects separate so a prior dynamic build cannot leave import
+    # references in the static executable.
+    OBJDIR := $(BUILD)/static
+else
+    OBJDIR := $(BUILD)
+endif
 
-OBJS := $(BUILD)/main.o $(BUILD)/tidebench.o
+OBJS := $(OBJDIR)/main.o $(OBJDIR)/tidebench.o
 
 BIN = $(BUILD)/ElectroBench$(STATIC_SUFFIX)
 
@@ -67,20 +75,22 @@ ifeq ($(PLATFORM),windows)
     ifeq ($(STATIC),1)
         STATIC_SUFFIX := -static
         STATIC_LDFLAGS := -static -static-libgcc -static-libstdc++
+        # Without this define MinGW's GLEW header emits __imp___glew* DLL
+        # imports, which cannot be resolved by libglew32.a.
+        GLEW_CFLAGS := -DGLEW_STATIC
         PKG_CFLAGS := $(shell pkg-config --static --cflags sdl2 glew)
-        PKG_LIBS   := $(shell pkg-config --static --cflags --libs sdl2 glew)
+        PKG_LIBS   := $(shell pkg-config --static --libs sdl2 glew)
         LDLIBS := $(PKG_LIBS) \
-                  -lglew32 \
                   -lglu32 \
                   -lopengl32 \
                   -lSDL2main \
                   -lSDL2 \
                   -mwindows
     else
+        GLEW_CFLAGS :=
         PKG_CFLAGS := $(shell pkg-config --cflags sdl2 glew)
-        PKG_LIBS   := $(shell pkg-config --libs sdl2)
+        PKG_LIBS   := $(shell pkg-config --libs sdl2 glew)
         LDLIBS := $(PKG_LIBS) \
-                  -lglew32 \
                   -lglu32 \
                   -lopengl32
     endif
@@ -143,20 +153,20 @@ clean-obsolete:
 # Build directory
 # ------------------------------------------------------------
 
-$(BUILD):
-	mkdir -p $(BUILD)
+$(OBJDIR):
+	mkdir -p $@
 
 # ------------------------------------------------------------
 # ElectroBench (the single binary: OG gun scene + ocean scene)
 # ------------------------------------------------------------
 
-$(BUILD)/main.o: src/main.cxx src/font_atlas.hxx | $(BUILD)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@
+$(OBJDIR)/main.o: src/main.cxx src/font_atlas.hxx | $(OBJDIR)
+	$(CXX) $(CPPFLAGS) $(PKG_CFLAGS) $(GLEW_CFLAGS) $(CXXFLAGS) -c $< -o $@
 
-$(BUILD)/tidebench.o: src/tidebench.cxx src/font_atlas.hxx | $(BUILD)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@
+$(OBJDIR)/tidebench.o: src/tidebench.cxx src/font_atlas.hxx | $(OBJDIR)
+	$(CXX) $(CPPFLAGS) $(PKG_CFLAGS) $(GLEW_CFLAGS) $(CXXFLAGS) -c $< -o $@
 
-$(BIN): $(OBJS) | $(BUILD)
+$(BIN): $(OBJS) | $(OBJDIR)
 	@echo "========================================"
 	@echo " Building ElectroBench (both scenes in one binary)"
 	@echo " Platform: $(PLATFORM)"
