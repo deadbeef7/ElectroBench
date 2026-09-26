@@ -27,6 +27,11 @@ uniform vec3  uSunColor;
 
 #define MAX_CLOUDS 9
 uniform int   uCloudCount;
+uniform float uCloudPhase[MAX_CLOUDS];  // slow cloud-local aging frame (updated on
+                                        // the CPU from the DRIFTED azimuth), so the
+                                        // morph noise advects WITH the cloud instead of
+                                        // fighting it — the old absolute-time morph made
+                                        // lobes pop and jitter as the bank crawled
 uniform float uCloudAzim[MAX_CLOUDS];   // centre azimuth, radians
 uniform float uCloudElev[MAX_CLOUDS];   // centre elevation, radians
 uniform float uCloudRadius[MAX_CLOUDS]; // angular half-height, radians
@@ -113,8 +118,12 @@ vec4 cloudSample(vec3 dir) {
         for (int j = 0; j < PUFFS; j++) {
             vec3 q = p - offsets[j] * R;
             float ang = atan(q.y, q.x);
-            float morph = 0.045 * sin(uTime * 0.10 + uCloudAzim[i] * 9.0 + float(j) * 1.7)
-                        + 0.035 * cos(uTime * 0.065 + uCloudAzim[i] * 5.0 + float(j) * 2.9);
+            // Cloud-local aging phase: the lobe outlines evolve in a frame that
+            // moves with the bank (uCloudPhase derives from the drifted azimuth),
+            // so shape noise never counter-scrolls against the cloud itself.
+            float ph = uCloudPhase[i];
+            float morph = 0.045 * sin(ph + float(j) * 1.7)
+                        + 0.035 * cos(ph * 0.65 + float(j) * 2.9);
             float wobble = 0.11 * sin(ang * 3.0 + uCloudAzim[i] * 7.0 + float(j) * 2.1)
                          + 0.065 * sin(ang * 5.0 - uCloudAzim[i] * 11.0 + float(j) * 4.7)
                          + morph;
@@ -138,11 +147,15 @@ vec4 cloudSample(vec3 dir) {
 
         // Noise modifies the boundary density rather than replacing it. Core
         // lobes stay solid; only the 0..1 shoulder gets cauliflower erosion.
+        // The knee opens at 0.06 (was 0.035): below that the smoothstep slope
+        // shattered semi-dense regions into isolated bright blobs — the
+        // "glitched" cauliflower patchwork. A shallower slope keeps the
+        // silhouette organic without the mid-density fragmentation.
         float n = erosionNoise(envelopeP * 3.2 + vec2(uCloudAzim[i] * 5.1, i * 7.3));
         float fine = erosionNoise(envelopeP * 7.8 + vec2(uCloudAzim[i] * 11.0, i * 13.0));
         float shoulder = 1.0 - smoothstep(0.10, 0.82, local);
         float breakup = 0.70 + 0.30 * n + 0.12 * fine - 0.20 * shoulder;
-        local = smoothstep(0.035, 0.78, local * breakup) * envelope;
+        local = smoothstep(0.06, 0.74, local * breakup) * envelope;
 
         // Cumulus condensation line: soften the very bottom, preserve a mostly
         // level base, and let the upper lobes rise into rounded towers.
@@ -293,7 +306,12 @@ void main() {
         col *= (1.0 - 0.28 * powder) * baseLight;
 
         float apFade = (1.0 - smoothstep(0.018, 0.24, h)) * 0.44;
-        col = mix(col, vec3(0.31, 0.17, 0.13), apFade);
+        // Aerial perspective tints toward the DUSK BAND at the cloud's own
+        // elevation, not a constant: far clouds fade warm near the horizon and
+        // mauve higher up, like real atmospheric scattering.
+        vec3 apTarget = mix(vec3(0.31, 0.17, 0.13), vec3(0.24, 0.22, 0.30),
+                            smoothstep(0.0, 0.45, h));
+        col = mix(col, apTarget, apFade);
         col = mix(col, vec3(0.29, 0.31, 0.37), 0.14);
 
         float alpha = 1.0 - exp(-cl * 2.15);

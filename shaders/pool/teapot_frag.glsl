@@ -34,12 +34,26 @@ void main() {
 
     float diff = clamp(dot(N, L), 0.0, 1.0);
     vec3 H = normalize(V + L);
-    float shininess = mix(96.0, 220.0, uWetness);
-    float spec = pow(clamp(dot(N, H), 0.0, 1.0), shininess) * mix(0.45, 0.9, uWetness);
+    // Glazed ceramic answers with a GGX microfacet highlight instead of a
+    // single Blinn exponent: a tight bright core over a physical long tail
+    // of grazing glints that wraps the silhouette — the tell of a glossy
+    // object in a bright room.
+    float aGGX = mix(0.10, 0.055, uWetness);
+    float a2 = aGGX * aGGX;
+    float NdH = max(dot(N, H), 0.0);
+    float dGGX = a2 / (3.14159265 * pow(NdH * NdH * (a2 - 1.0) + 1.0, 2.0));
+    float spec = dGGX * mix(0.22, 0.55, uWetness);
 
-    // ambient: red bounce from the glowing checker ceiling + darker floor
-    vec3 ambient = mix(vec3(0.030, 0.010, 0.011), vec3(0.090, 0.078, 0.075),
-                       clamp(N.y * 0.5 + 0.5, 0.0, 1.0));
+    // ambient: red bounce from the glowing checker ceiling + darker floor.
+    // Sky reflection glaze: ceiling-tile bounce follows the normal (upward
+    // faces catch white tiles, downward faces sit in red bounce), and the
+    // horizontal band carries the wide tile mix — the pot visibly sits in
+    // the SAME room as the water's mirror.
+    vec3 skyA = vec3(0.92, 0.92, 0.90);
+    vec3 skyB = vec3(0.55, 0.012, 0.014);
+    vec3 ambient = mix(skyB * 0.075, skyA * 0.105, clamp(N.y * 0.5 + 0.5, 0.0, 1.0));
+    float horizBand = 1.0 - abs(N.y);
+    ambient += mix(skyA, skyB, 0.5) * horizBand * 0.045;
 
     vec3 col = base * (ambient + uLightTint * diff * 1.15)
              + uLightTint * spec;
