@@ -23,9 +23,14 @@ void main() {
     vec3 V = normalize(uEyePos - vWorld);
     vec3 N = normalize(vNormal);
 
-    // transmitted environment: the checker tiles behind the sheet, sweeping
-    // around the crown so neighbouring fingers pick up different tiles
-    float sweep = 0.5 + 0.5 * sin(vAngle * 6.2831853 * 3.0 +
+    // transmitted environment: the checker tiles behind the sheet. The sweep
+    // follows the ACTUAL reflected ray's azimuth (not a fixed ring pattern),
+    // so the tile reflections slide correctly as the camera orbits and as
+    // the wobbly sheet tilts — neighbouring fingers pick up different tiles
+    // because their normals genuinely differ.
+    vec3 rd = reflect(-V, N);
+    float sweepPhase = atan(rd.z, rd.x);
+    float sweep = 0.5 + 0.5 * sin(sweepPhase * 3.0 +
                                   vWorld.x * 0.7 + vWorld.z * 0.9);
     vec3 env = mix(uSkyB, uSkyA, sweep);
 
@@ -41,8 +46,10 @@ void main() {
     // the sheet is dense at the base and breaks apart toward the rim
     float sheet = 1.0 - 0.55 * vParam;
 
-    // transmitted env + reflection sheen; the rim catches the light hard
-    vec3 col = env * (0.42 + 0.38 * (1.0 - edge))
+    // transmitted env + reflection sheen; the thin rim transmits MORE
+    // environment (a thinner film hides less behind it) and the rim catches
+    // the hidden light in sharp glints
+    vec3 col = env * (0.42 + 0.25 * vParam + 0.38 * (1.0 - edge))
              + uLightTint * (0.08 + diff * 0.28 + spec * 1.7 + edge * 0.45);
 
     float alpha = (0.30 + edge * 0.55) * sheet * fingers;

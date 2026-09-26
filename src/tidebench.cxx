@@ -67,7 +67,7 @@ static const int kRippleSize = 256;      // ripple gradient texture size
 // riding over the dusk glow without ever blocking the sun disc.
 static const float kCloudAzim[MAX_CLOUDS] = {0.18f, 0.88f, 1.75f, 2.65f, 3.75f, 4.65f, 5.75f, 0.30f, 0.80f};
 static const float kCloudElev[MAX_CLOUDS] = {0.190f, 0.300f, 0.250f, 0.380f, 0.220f, 0.330f, 0.160f, 0.420f, 0.465f};
-static const float kCloudRad[MAX_CLOUDS]  = {0.048f, 0.037f, 0.030f, 0.043f, 0.027f, 0.036f, 0.050f, 0.020f, 0.024f};
+static const float kCloudRad[MAX_CLOUDS]  = {0.048f, 0.037f, 0.030f, 0.043f, 0.027f, 0.036f, 0.050f, 0.026f, 0.030f};
 static const float kCloudStretch[MAX_CLOUDS] = {3.3f, 2.4f, 2.1f, 2.8f, 2.2f, 2.3f, 3.6f, 4.6f, 4.2f};
 static const int kFoamSize = 256;        // foam texture size
 
@@ -79,9 +79,16 @@ static const int kFoamSize = 256;        // foam texture size
 // the sun drift AWAY from it (0.30 -> 0.20, 0.80 -> 0.87 over the run).
 static const float kCloudDrift[MAX_CLOUDS] = {-0.0025f, 0.0032f, -0.0018f, 0.0022f, -0.0027f, 0.0015f, 0.0020f, -0.0015f, 0.0012f};
 static float gCloudAzimDrift[MAX_CLOUDS];
+// Cloud-local aging phase for the lobe-morph noise: derived from the DRIFTED
+// azimuth (x9 keeps the old absolute-time rate at t=0) so the shape noise
+// advects WITH each bank. The old uTime-driven morph counter-scrolled against
+// the drifting clouds and made lobes pop/jitter — the "glitched" look.
+static float gCloudPhase[MAX_CLOUDS];
 static void UpdateCloudAzim(float t) {
-  for (int i = 0; i < MAX_CLOUDS; i++)
+  for (int i = 0; i < MAX_CLOUDS; i++) {
     gCloudAzimDrift[i] = kCloudAzim[i] + kCloudDrift[i] * t;
+    gCloudPhase[i] = gCloudAzimDrift[i] * 9.0f;
+  }
 }
 
 // ------------------------------------------------------------ tiny math utils
@@ -589,6 +596,7 @@ static void BindSkyUniforms(const Mat4 &vp) {
   // azimuths within the frame.
   glUniform1i(gSkyProg.loc("uCloudCount"), MAX_CLOUDS);
   glUniform1fv(gSkyProg.loc("uCloudAzim"), MAX_CLOUDS, gCloudAzimDrift);
+  glUniform1fv(gSkyProg.loc("uCloudPhase"), MAX_CLOUDS, gCloudPhase);
   glUniform1fv(gSkyProg.loc("uCloudElev"), MAX_CLOUDS, kCloudElev);
   glUniform1fv(gSkyProg.loc("uCloudRadius"), MAX_CLOUDS, kCloudRad);
   glUniform1fv(gSkyProg.loc("uCloudStretch"), MAX_CLOUDS, kCloudStretch);
@@ -785,6 +793,7 @@ static void DrawSea(const Mat4 &view, double timeSec, const Vec3 &eye) {
   // cloud shadows on the water land exactly under the clouds that cast them.
   glUniform1i(gSeaProg.loc("uCloudCount"), MAX_CLOUDS);
   glUniform1fv(gSeaProg.loc("uCloudAzim"), MAX_CLOUDS, gCloudAzimDrift);
+  glUniform1fv(gSeaProg.loc("uCloudPhase"), MAX_CLOUDS, gCloudPhase);
   glUniform1fv(gSeaProg.loc("uCloudElev"), MAX_CLOUDS, kCloudElev);
   glUniform1fv(gSeaProg.loc("uCloudRadius"), MAX_CLOUDS, kCloudRad);
   glUniform1fv(gSeaProg.loc("uCloudStretch"), MAX_CLOUDS, kCloudStretch);

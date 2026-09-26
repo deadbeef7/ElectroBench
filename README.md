@@ -89,16 +89,15 @@ What it renders :
   as paper-thin streaks riding over the dusk glow — their shadows on the sea squash to match). Each
   bank combines eight anisotropic 3D lobes with low-frequency boundary erosion, then integrates seven
   density probes toward the sun through three energy-conserving scattering octaves. This produces
-  layered cauliflower silhouettes, thin silver linings, warm transmission through shoulders, cool
-  dense bases, powdery cores, and aerial perspective without sampling a cloud texture. Hand-placed
+  layered cauliflower silhouettes, thin silver linings, warm transmission through shoulders,cool dense bases, powdery cores, and elevation-tinted aerial perspective without sampling a cloud texture. Cloud morphing is driven by a per-bank aging phase so banks evolve in place — no counter-scrolling, no edge jitter. Hand-placed
   banks preserve exact clear-sky gaps instead of producing noise-texture mottle
 - A **4 km ocean patch** on a dense GPU-displaced grid: long rolling swells with crest-skewed banks,
   per-pixel analytic wave normals plus near-camera detail wavelets (two slow octaves — the fine third
-  octave was tuned out, its half-bright teal squiggle band read as scum on the dark sea in motion)
+  octave was tuned out, its half-bright teal squiggle band read as scum on the dark sea in motion), and the near-field detail fades with distance so far water never aliases into white speckle
 - High-resolution **environment cubemap** reflections with roughness-matched LOD (the sun smears
   into a glow, never texel squares), fresnel blending, sun-tinted **glitter** path gated to the
   sun's azimuth (bright path down the middle, dark blue-purple water either side),
-  slope-gated crest foam, sun-path-gated subsurface glow in thin crests, and distance haze that converges into the
+  an energy-bounded GGX sparkle core so the path glints richly without firefly artifacts, slope-gated crest foam, sun-path-gated subsurface glow in thin crests, and distance haze that converges into the
   actual per-azimuth sky colour so the far sea melts into the horizon
 - **Cloud shadows on the water**: each sea fragment is projected along its sun ray into the same 620 m
   cloud deck and matched 3D-lobe density field the sky renders — where a cloud blocks the sun the
@@ -127,7 +126,7 @@ What it renders :
   soft directional wash toward a **hidden light source** — there is no sun disc, no lamp model:
   the light is only ever visible through the shading it produces
 - **Open water** that analytically mirrors the same checker function the sky uses, so the reflection
-  lines up with the sky across the horizon, plus fresnel dimming, distance haze and foam brightening
+  lines up with the sky across the horizon, plus fresnel dimming, distance haze, an energy-true GGX light glint, a body tint from the room's own tile light, and foam that churns with animated turbulence and lingers as fading trails behind each splash
 - **Two waves of teapots** — 18 in total (the real Utah teapot, `assets/teapot.obj`, one material,
   placeholder texture you can swap). Wave one rains down over the first ten seconds; wave two opens
   up on the pool's outer ring from ~11 s. Each pot has scattered positions, sizes and drop heights
@@ -137,9 +136,8 @@ What it renders :
 - **Splash FX**: a GPU-animated **Worthington crown** — a water sheet that erupts around the impact,
   reflects and transmits the checker tiles through it, and tears into alpha-striped **fingers** as
   it disintegrates — plus ballistic **droplet streaks** stretched along their velocity (wave-two
-  impacts throw double ejecta with torn sheet fragments), expanding **ripple rings** that disturb
-  the reflection, and the delayed central **Rayleigh jet** — its punch scaled by the impact — that
-  fires on the cavity's inertial collapse and falls back with its own ring. All CPU cost is a
+  impacts throw double ejecta with torn sheet fragments),expanding **ripple rings** with residual foam-trail halos that disturb the reflection, and the delayed central **Rayleigh jet** — its punch scaled by the impact — that
+  fires on the cavity's inertial collapse and falls back with its own ring — the crown's light sweep follows the actual reflected-ray azimuth. The pots wear a GGX ceramic glaze with sky-tile ambient bounce and a wet waterline. All CPU cost is a
   handful of uniforms; the geometry animates in the vertex shader
 
 Run the pool scene on its own with :

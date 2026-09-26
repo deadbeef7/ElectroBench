@@ -34,6 +34,7 @@ uniform vec3  uWaterColor;
 
 #define MAX_CLOUDS 9             // must match sky_frag.glsl and tidebench.cxx
 uniform int   uCloudCount;
+uniform float uCloudPhase[MAX_CLOUDS]; // cloud-local aging frame, matches sky_frag.glsl
 uniform float uCloudAzim[MAX_CLOUDS];   // centre azimuth, radians
 uniform float uCloudElev[MAX_CLOUDS];   // centre elevation, radians
 uniform float uCloudRadius[MAX_CLOUDS]; // angular half-height, radians
@@ -48,15 +49,30 @@ const float PI = 3.14159265359;
 // so crest banks light up where the geometry actually rises. The displacement
 // shader additionally sharpens crests and adds two long swells; that asymmetry
 // is deliberate (sharp banks, smooth lighting).
-float waveHeight(vec2 p, float t) {
+//
+// Split NEAR/FAR: the three short waves (k = 0.54..1.45 rad/m) alias into
+// one-pixel normal spikes once their screen wavelength collapses — on lit
+// slopes the glitter then fires isolated WHITE PIXELS across the sun path
+// (the salt-and-pepper artifact). The far build keeps only k <= 0.38 waves;
+// the short build fades out with distance exactly like micro-chop should.
+float waveHeightFar(vec2 p, float t) {
     float h = 0.0;
     h += sin(dot(p, vec2(0.98,  0.20)) * 0.170 + t * 1.30) * 1.55;
     h += sin(dot(p, vec2(-0.64,  0.77)) * 0.240 + t * 1.60) * 1.00;
     h += sin(dot(p, vec2( 0.36, -0.93)) * 0.380 + t * 2.10) * 0.55;
+    return h;
+}
+
+float waveHeightNear(vec2 p, float t) {
+    float h = 0.0;
     h += sin(dot(p, vec2(-0.91, -0.42)) * 0.540 + t * 2.70) * 0.34;
     h += sin(dot(p, vec2( 0.59,  0.81)) * 0.860 + t * 3.40) * 0.20;
     h += sin(dot(p, vec2(-0.20,  0.98)) * 1.450 + t * 4.40) * 0.11;
     return h;
+}
+
+float waveHeight(vec2 p, float t) {
+    return waveHeightFar(p, t) + waveHeightNear(p, t);
 }
 
 // CLOUD SHADOWS: intersect each water fragment's sun ray with the same 620 m
@@ -127,8 +143,11 @@ float projectedCloudDensity(vec3 dir) {
         for (int j = 0; j < PUFFS; j++) {
             vec3 q = p - offsets[j] * R;
             float ang = atan(q.y, q.x);
-            float morph = 0.045 * sin(uTime * 0.10 + uCloudAzim[i] * 9.0 + float(j) * 1.7)
-                        + 0.035 * cos(uTime * 0.065 + uCloudAzim[i] * 5.0 + float(j) * 2.9);
+            // Same cloud-local aging phase as the sky: the shadow silhouette
+            // evolves with the bank instead of counter-scrolling against it.
+            float ph = uCloudPhase[i];
+            float morph = 0.045 * sin(ph + float(j) * 1.7)
+                        + 0.035 * cos(ph * 0.65 + float(j) * 2.9);
             float rj = R * radii[j] * (1.0
                 + 0.11 * sin(ang * 3.0 + uCloudAzim[i] * 7.0 + float(j) * 2.1)
                 + 0.065 * sin(ang * 5.0 - uCloudAzim[i] * 11.0 + float(j) * 4.7)
@@ -151,7 +170,7 @@ float projectedCloudDensity(vec3 dir) {
         float n = cloudErosion(envelopeP * 3.2 + vec2(uCloudAzim[i] * 5.1, i * 7.3));
         float fine = cloudErosion(envelopeP * 7.8 + vec2(uCloudAzim[i] * 11.0, i * 13.0));
         float shoulder = 1.0 - smoothstep(0.10, 0.82, local);
-        local = smoothstep(0.035, 0.78,
+        local = smoothstep(0.06, 0.74,
                local * (0.70 + 0.30 * n + 0.12 * fine - 0.20 * shoulder))
                * envelope;
         float baseCut = smoothstep(-0.78, -0.48, envelopeP.y + (n - 0.5) * 0.18);
@@ -189,9 +208,15 @@ void main() {
     // ---- analytic wave normal (finite differences of the wave field) ----
     float dist = length(vWorld.xz - uEyePos.xz);
     float e = 0.35;
-    float hC = waveHeight(vWorld.xz, uTime);
-    float hX = waveHeight(vWorld.xz + vec2(e, 0.0), uTime);
-    float hZ = waveHeight(vWorld.xz + vec2(0.0, e), uTime);
+    // Distance-faded finite differences: the long waves always shade, the
+    // short waves fade out over ~500 m BEFORE they alias. Evaluating the far
+    // and near builds separately keeps 6 taps (3+3 per axis pair shared).
+    float nearFade = exp(-dist * 0.0022);
+    float hC = waveHeightFar(vWorld.xz, uTime) + waveHeightNear(vWorld.xz, uTime) * nearFade;
+    float hX = waveHeightFar(vWorld.xz + vec2(e, 0.0), uTime)
+             + waveHeightNear(vWorld.xz + vec2(e, 0.0), uTime) * nearFade;
+    float hZ = waveHeightFar(vWorld.xz + vec2(0.0, e), uTime)
+             + waveHeightNear(vWorld.xz + vec2(0.0, e), uTime) * nearFade;
     vec2 grad = vec2(-(hX - hC) / e, -(hZ - hC) / e);
     detailNormals(vWorld.xz, uTime, dist, grad);
     vec3 N = normalize(vec3(grad.x, 1.0, grad.y));
@@ -230,7 +255,13 @@ void main() {
     // reflection blurs with range — which also smears the sun into a soft
     // vertical glow (real water behaviour) instead of texel squares.
     float reflDist = dist;
-    vec3 reflColor = textureLod(uSkyEnvTex, R, clamp(1.5 + reflDist * 0.0012, 1.0, 5.0)).rgb;
+    // The env sun disc is HDR-hot; sampled at low LOD near the camera its
+    // sharp edge lands as ISOLATED WHITE PIXELS in the middle of the lit
+    // path (the firefly artifact). Lifting the LOD when R points near the
+    // sun smears the disc into the soft vertical glow real water shows —
+    // the glitter term owns the crisp sparkles, not the cubemap.
+    float sunLift = 2.6 * pow(max(dot(R, L), 0.0), 6.0);
+    vec3 reflColor = textureLod(uSkyEnvTex, R, clamp(1.5 + reflDist * 0.0012 + sunLift, 1.0, 5.0)).rgb;
     float offSun = 1.0 - smoothstep(0.08, 0.45, sunAlign);
     reflColor *= mix(1.0, 0.46, offSun);
 
@@ -285,7 +316,12 @@ void main() {
     float foam = texture(uFoamTex, vUV * 23.0 + vec2(uTime * 0.010, 0.0)).r;
     foam *= texture(uFoamTex, vUV * 41.0 - vec2(0.0, uTime * 0.013)).g;
     foam *= crest * slopeFacing * (0.35 + 0.65 * chaos);
-    body += vec3(0.55, 0.48, 0.58) * foam * 0.55; // dim warm-gray foam
+    // Foam is white water lit by the SAME sky and sun as everything else:
+    // warm cream inside the sun path (shadow-gated), cool grey-violet away
+    // from it. The old constant warm-grey read dirty against the dusk.
+    vec3 foamCol = mix(vec3(0.38, 0.37, 0.44), vec3(1.05, 0.74, 0.52),
+                       clamp(warmGate * shadow, 0.0, 1.0));
+    body += foamCol * foam * 0.60;
 
     // subsurface glow against the light: THIN CRESTS transmit a dim jade-green
     // where sunlight actually passes through the water. Gated to the sun's
@@ -317,24 +353,37 @@ void main() {
     // so the glow stays a NARROW path down the middle with dark water either
     // side. Killed entirely inside cloud shadows, tinted orange, and the
     // sparkle variance rides the ripple chaos.
+    //
+    // Firefly fix: the old pow(NdH, 520) core amplified 1-ULP normal noise
+    // into isolated white pixels on lit water. The core is now a tight GGX
+    // lobe (alpha bounded by the ripple chaos, so its peak is FINITE and its
+    // width a smooth function of the same texture the eye already reads as
+    // chop) plus a tempered micro-sparkle at half the old exponent.
     vec3 H = normalize(L + V);
     float NdH = max(dot(N, H), 0.0);
     float pathGate = pow(sunAlign, 10.0) * 0.96 + 0.04;
     float sparkleGate = (0.55 + 0.90 * chaos);
-    // microfacet roughness from the ripple chaos: choppier water = broader
-    // glint tail (no extra texture fetch; the ripple tex is already read)
     float rough = clamp(0.45 + 0.45 * chaos, 0.0, 0.95);
-    // GGX for the broad sheen: real water microfacets have a long tail of
-    // grazing glints off wave sides — the old Blinn-14 sheen dropped to zero
-    // far too fast and left the path edges dead.
     float aGGX = max(0.14, (1.0 - rough) * 0.42);
     float a2 = aGGX * aGGX;
     float dGGX = a2 / (PI * pow(NdH * NdH * (a2 - 1.0) + 1.0, 2.0));
-    float glint = pow(NdH, 520.0) * 6.0;              // pinpoint sparkles
+    // tight sparkle core: small-alpha GGX with a gain chosen so the PEAK
+    // (NdH=1) stays <= ~6 — as bright as the old pow() spike could ever get,
+    // but spread over a few pixels and a smooth function of chaos, so no
+    // 1-ULP normal flip can mint an isolated white pixel.
+    float aCore = mix(0.10, 0.05, chaos);             // chaos sharpens glints
+    float aCore2 = aCore * aCore;
+    float glint = aCore2 / (PI * pow(NdH * NdH * (aCore2 - 1.0) + 1.0, 2.0));
     float glintMid = pow(NdH, 90.0) * 0.55;           // mid falloff keeps it grainy
     float glintWide = dGGX * 0.055;                   // physically-tailed sheen
-    color += vec3(1.0, 0.56, 0.24) * (glint + glintMid + glintWide * pathGate)
-             * (0.25 + max(L.y, 0.0) * 1.2) * pathGate * shadow * sparkleGate;
+    color += vec3(1.0, 0.56, 0.24)
+           * (glint * 0.047 + glintMid + glintWide * pathGate)
+           * (0.25 + max(L.y, 0.0) * 1.2) * pathGate * shadow * sparkleGate;
+
+    // HDR safety: flush negatives and bound the HDR range before the knee —
+    // no single term can ever blow up to a white pixel, on any driver.
+    color = max(color, vec3(0.0));
+    color = min(color, vec3(16.0));
 
     // HDR tone map + gamma
     color = color / (color + vec3(1.0));
