@@ -109,12 +109,12 @@ void main() {
     // steep angles (near camera) show the BLUE body through. Without this the
     // coral tiles' reflections out-shout the blue everywhere and the whole
     // pool reads orange.
-    float mirror = 0.20 + 0.70 * pow(1.0 - clamp(V.y, 0.0, 1.0), 2.0);
+    float mirror = 0.16 + 0.58 * pow(1.0 - clamp(V.y, 0.0, 1.0), 2.2);
     vec3 col = mix(body, refl, clamp(mirror, 0.0, 1.0));
     // Water absorbs red as light travels through it: even the REFLECTED
     // light that skirts the surface picks up a cool cast, which keeps the
     // pool reading blue at plane-level views instead of warm-pink.
-    col *= vec3(0.90, 0.99, 1.07);
+    col *= vec3(0.86, 0.99, 1.09);
     col += uLightTint * (spec * 2.4 + sheen * 0.35);  // the hidden light
     col += vec3(0.9) * foam * 0.22;                   // foam brightening
     col += vec3(0.05, 0.004, 0.005);                  // ambient skylight (red room)
@@ -132,11 +132,13 @@ void main() {
     col += uLightTint * caustic * (0.10 + 0.55 * bump);
 
     // haze toward the horizon blends water into the sky glow — tinted
-    // turquoise so the far water stays blue instead of greying out
+    // pool-WATER blue, not room-pink: the old haze target was dominated by
+    // the pure-red tile, which turned all far water hot pink ("no blue in
+    // the back"). Air picks up the WATER colour, not the walls.
     float dist = length(uEyePos - vWorld);
     float haze = 1.0 - exp(-dist * 0.004);
-    vec3 hazeCol = normalize3(mix(uLightTint, uTileB, 0.8)) * 0.75;
-    col = mix(col, hazeCol, haze * 0.6);
+    vec3 hazeCol = vec3(0.16, 0.42, 0.62);            // airy pool-water blue
+    col = mix(col, hazeCol, haze * 0.55);
 
     // The reflected sky colour is ALREADY tonemapped+gamma'd by sky_frag; a
     // second knee here desaturated everything to grey. Just clamp + a mild

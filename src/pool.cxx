@@ -637,8 +637,8 @@ static const float kFleetPos[kFleetCount][2] = {
     {3.1f, 8.4f},   {9.3f, 0.9f},   {-9.0f, -2.7f}, {0.4f, -9.4f},
     {5.7f, -8.6f}};
 static const float kFleetScale[kFleetCount] = {
-    1.00f, 0.85f, 1.20f, 0.72f, 0.92f, 1.10f, 0.78f, 0.88f, 1.05f,
-    0.95f, 0.80f, 1.14f, 0.68f, 1.02f, 0.90f, 0.84f, 1.08f, 0.76f};
+    1.45f, 1.23f, 1.74f, 1.04f, 1.33f, 1.60f, 1.13f, 1.28f, 1.52f,
+    1.38f, 1.16f, 1.65f, 0.99f, 1.48f, 1.31f, 1.22f, 1.57f, 1.10f};
 static const float kFleetDrop[kFleetCount] = {
     8.0f, 10.0f, 9.0f, 11.5f, 8.6f, 10.6f, 9.4f, 12.0f, 11.0f,
     13.0f, 14.5f, 12.4f, 15.0f, 13.6f, 14.0f, 12.8f, 15.5f, 13.2f};
