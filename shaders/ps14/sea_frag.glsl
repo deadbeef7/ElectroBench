@@ -378,8 +378,13 @@ void main() {
     float glint = aCore2 / (PI * pow(NdH * NdH * (aCore2 - 1.0) + 1.0, 2.0));
     float glintMid = pow(NdH, 90.0) * 0.55;           // mid falloff keeps it grainy
     float glintWide = dGGX * 0.055;                   // physically-tailed sheen
-    color += vec3(1.0, 0.56, 0.24)
-           * (glint * 0.047 + glintMid + glintWide * pathGate)
+    // HARD CAP on the additive sparkle: unclamped, glow + glint saturate all
+    // three channels into isolated WHITE dots down the sun path. Capped, the
+    // peaks stay sun-orange (r >> g > b after tonemap) and the eye reads them
+    // as glints, not pixel noise.
+    float spark = min(glint * 0.047 + glintMid + glintWide * pathGate, 1.5);
+    color += vec3(1.0, 0.52, 0.20)
+           * spark
            * (0.25 + max(L.y, 0.0) * 1.2) * pathGate * shadow * sparkleGate;
 
     // HDR safety: flush negatives and bound the HDR range before the knee —
@@ -387,8 +392,22 @@ void main() {
     color = max(color, vec3(0.0));
     color = min(color, vec3(16.0));
 
-    // HDR tone map + gamma
+    // HDR tone map + gamma — per-channel Reinhard knee (its slight blue
+    // bias is what gives the dusk sea its indigo character), then an
+    // ORANGE highlight roll-off: every bright pixel on this sea is a sun
+    // reflection, so anything rolling off blends toward the sun colour
+    // instead of clipping to white. White fireflies become geometrically
+    // impossible while glints keep blazing.
+    color = max(color, vec3(0.0));
+    color = min(color, vec3(16.0));
     color = color / (color + vec3(1.0));
-    color = pow(color, vec3(1.0 / 2.2));
+    float lum = dot(color, vec3(0.2126, 0.7152, 0.0722));
+    float hotCap = 0.60;
+    if (lum > hotCap) {
+        float f = (lum - hotCap) / (1.0 - hotCap);
+        f = f * f;
+        color = mix(color, vec3(1.0, 0.62, 0.30) * hotCap, f);
+    }
+    color = pow(max(color, vec3(0.0)), vec3(1.0 / 2.2));
     fragColor = vec4(color, 1.0);
 }
