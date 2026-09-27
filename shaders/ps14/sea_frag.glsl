@@ -373,17 +373,27 @@ void main() {
     // (NdH=1) stays <= ~6 — as bright as the old pow() spike could ever get,
     // but spread over a few pixels and a smooth function of chaos, so no
     // 1-ULP normal flip can mint an isolated white pixel.
+    // FOOTPRINT-AWARE GGX (the actual root fix): alpha 0.05-0.10 is a lobe
+    // NARROWER than one pixel — sampling it per-pixel is aliasing, which is
+    // where the isolated dots came from (the tonemap merely recoloured
+    // them). Widen alpha by the per-pixel NdH gradient so the lobe covers
+    // multiple pixels near the glint and the sparkle renders SMOOTH, while
+    // near-camera pixels (tiny gradient) keep a crisp core.
+    float ndhGrad = fwidth(NdH);
     float aCore = mix(0.10, 0.05, chaos);             // chaos sharpens glints
+    aCore = sqrt(aCore * aCore + ndhGrad * ndhGrad * 3.0);
     float aCore2 = aCore * aCore;
     float glint = aCore2 / (PI * pow(NdH * NdH * (aCore2 - 1.0) + 1.0, 2.0));
-    float glintMid = pow(NdH, 90.0) * 0.40;           // mid falloff keeps it grainy
+    // the tight mid lobe aliases the same way — fade it exactly where the
+    // footprint widening is doing the work
+    float glintMid = pow(NdH, 90.0) * 0.40 / (1.0 + ndhGrad * 25.0);
     float glintWide = dGGX * 0.045;                   // physically-tailed sheen
     // HARD CAP on the additive sparkle — and a LOW one: a high cap makes
     // plateaus of near-knee colour that read as whitish PAINT BLOBS in the
-    // sun path. Capped low and tinted deep orange, clumps stay granular
+    // sun path. Capped low and tinted warm orange, clumps stay granular
     // glints instead of fusing into white patches.
     float spark = min(glint * 0.047 + glintMid + glintWide * pathGate, 0.85);
-    color += vec3(1.0, 0.44, 0.12)
+    color += vec3(1.0, 0.55, 0.22)
            * spark
            * (0.25 + max(L.y, 0.0) * 1.2) * pathGate * shadow * sparkleGate;
 
@@ -395,10 +405,11 @@ void main() {
     // HDR tone map + gamma — per-channel Reinhard knee (its slight blue
     // bias is what gives the dusk sea its indigo character), then a
     // LUMINANCE-PRESERVING WARM SHOULDER: the knee desaturates hot pixels
-    // into a whitish band (lum ~0.45-0.75) that reads as white paint blobs
-    // in the sun path. Above the shoulder we re-tint toward deep sunset
-    // orange SCALED TO THE SAME LUMINANCE — the glow keeps its brightness
-    // but loses the white, so blobs become warm light instead.
+    // into a whitish band that reads as white paint blobs. Above the
+    // shoulder we re-tint toward soft sunset peach SCALED TO THE SAME
+    // LUMINANCE — brightness kept, whiteness gone, no yellow-paint cast
+    // (the deep-orange target of the previous pass is what turned the
+    // blobs yellow).
     color = max(color, vec3(0.0));
     color = min(color, vec3(16.0));
     color = color / (color + vec3(1.0));
@@ -407,7 +418,7 @@ void main() {
     if (lum > warmStart) {
         float f = clamp((lum - warmStart) / 0.20, 0.0, 1.0);
         f = f * f;
-        vec3 warm = vec3(1.0, 0.42, 0.10);
+        vec3 warm = vec3(1.0, 0.62, 0.36);
         warm *= lum / max(dot(warm, vec3(0.2126, 0.7152, 0.0722)), 1e-4);
         color = mix(color, warm, f);
     }
