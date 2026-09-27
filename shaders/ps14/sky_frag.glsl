@@ -327,7 +327,19 @@ void main() {
 
     // Env-cubemap pass keeps HDR values (the sea shader tone maps after adding
     // glitter). The on-screen dome pass tone maps + gammas right here so the
-    // visible sky matches what the water reflects.
-    vec3 outCol = mix(sky, pow(sky / (sky + vec3(1.0)), vec3(1.0 / 2.2)), uTonemap);
+    // visible sky matches what the water reflects — with the SAME orange
+    // highlight roll-off the sea uses: dusk sun/bloom rolling past 0.60
+    // luminance blends toward the sun colour instead of desaturating to
+    // white, so the glow band around the horizon stays warm to the last pixel.
+    vec3 tm = max(sky, vec3(0.0)) / (max(sky, vec3(0.0)) + vec3(1.0));
+    float lum = dot(tm, vec3(0.2126, 0.7152, 0.0722));
+    float hotCap = 0.60;
+    if (lum > hotCap) {
+        float f = (lum - hotCap) / (1.0 - hotCap);
+        f = f * f;
+        tm = mix(tm, vec3(1.0, 0.62, 0.30) * hotCap, f);
+    }
+    tm = pow(max(tm, vec3(0.0)), vec3(1.0 / 2.2));
+    vec3 outCol = mix(sky, tm, uTonemap);
     fragColor = vec4(outCol, 1.0);
 }
