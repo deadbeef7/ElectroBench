@@ -333,11 +333,13 @@ void main() {
     // white, so the glow band around the horizon stays warm to the last pixel.
     vec3 tm = max(sky, vec3(0.0)) / (max(sky, vec3(0.0)) + vec3(1.0));
     float lum = dot(tm, vec3(0.2126, 0.7152, 0.0722));
-    float hotCap = 0.60;
-    if (lum > hotCap) {
-        float f = (lum - hotCap) / (1.0 - hotCap);
+    float warmStart = 0.45;
+    if (lum > warmStart) {
+        float f = clamp((lum - warmStart) / 0.20, 0.0, 1.0);
         f = f * f;
-        tm = mix(tm, vec3(1.0, 0.62, 0.30) * hotCap, f);
+        vec3 warm = vec3(1.0, 0.42, 0.10);
+        warm *= lum / max(dot(warm, vec3(0.2126, 0.7152, 0.0722)), 1e-4);
+        tm = mix(tm, warm, f);
     }
     tm = pow(max(tm, vec3(0.0)), vec3(1.0 / 2.2));
     vec3 outCol = mix(sky, tm, uTonemap);
