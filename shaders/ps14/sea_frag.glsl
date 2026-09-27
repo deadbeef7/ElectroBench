@@ -259,8 +259,10 @@ void main() {
     // sharp edge lands as ISOLATED WHITE PIXELS in the middle of the lit
     // path (the firefly artifact). Lifting the LOD when R points near the
     // sun smears the disc into the soft vertical glow real water shows —
-    // the glitter term owns the crisp sparkles, not the cubemap.
-    float sunLift = 2.6 * pow(max(dot(R, L), 0.0), 6.0);
+    // the glitter term owns the crisp sparkles, not the cubemap. The lift
+    // is GENTLE and tightly gated: strong lifts at grazing angles blur whole
+    // sparkle rows into a banded white horizon film.
+    float sunLift = 0.9 * pow(max(dot(R, L), 0.0), 8.0);
     vec3 reflColor = textureLod(uSkyEnvTex, R, clamp(1.5 + reflDist * 0.0012 + sunLift, 1.0, 5.0)).rgb;
     float offSun = 1.0 - smoothstep(0.08, 0.45, sunAlign);
     reflColor *= mix(1.0, 0.46, offSun);

@@ -973,15 +973,16 @@ static int gHudVertexFloats = 0;
 
 // ------------------------------------------------------------- camera path
 static void UpdateAutoCamera(float t) {
-  // slow orbit focused on the splash field, easing in height so the drops,
-  // splashes and the bob are all framed. As wave two opens up the outer ring
-  // (from ~11s), the camera drifts back so the whole fleet stays in frame.
+  // Slow orbit focused on the splash field. The camera NEVER chases the
+  // falling fleet: when wave two opens up on the outer ring (~11s) it drifts
+  // gently back along a smooth ramp, but stays at plane level — the drops
+  // fall INTO frame, the camera does not rise or pitch up after them.
   float a = 0.32f + t * 0.055f;
-  float spread = t > 11.0f ? std::fmin((t - 11.0f) * 0.35f, 3.4f) : 0.0f;
+  float spread = t > 11.0f ? std::fmin((t - 11.0f) * 0.35f, 1.6f) : 0.0f;
   float radius = 7.6f + std::sin(t * 0.07f) * 1.1f + spread;
   gCamPos.x = std::cos(a) * radius;
   gCamPos.z = std::sin(a) * radius;
-  gCamPos.y = 2.9f + std::sin(t * 0.045f) * 0.7f + spread * 0.35f;
+  gCamPos.y = 2.9f + std::sin(t * 0.045f) * 0.7f + spread * 0.10f;
   gCamYaw = std::atan2(-gCamPos.x, -gCamPos.z); // look at the centre
   gCamPitch = -0.30f + 0.06f * std::sin(t * 0.03f);
 }
@@ -1422,17 +1423,20 @@ static void RenderScene() {
 
   Mat4 view;
   {
-    // track the fleet centroid so the camera keeps the whole splash field in
-    // frame (before any pot spawns, gaze at the impact zone of pot 0)
+    // Gaze: level with the splash field. Pot positions are counted in PLAN
+    // VIEW ONLY (x/z, height flattened) — otherwise airborne pots drag the
+    // whole view up to follow the drop and the surface falls out of frame.
     Vec3 acc{0.0f, 0.0f, 0.0f};
     int n = 0;
     for (int i = 0; i < kFleetCount; i++) {
       if (!gPots[i].active) continue;
-      acc = Vec3Add(acc, gPots[i].pos);
+      acc.x += gPots[i].pos.x;
+      acc.z += gPots[i].pos.z;
       n++;
     }
-    Vec3 look = n > 0 ? Vec3Scale(acc, 1.0f / n) : Vec3{kFleetPos[0][0], 1.0f, kFleetPos[0][1]};
-    look.y = std::fmax(look.y, 0.0f) + 0.4f;
+    Vec3 look = n > 0 ? Vec3{acc.x / n, 0.0f, acc.z / n}
+                      : Vec3{kFleetPos[0][0], 0.0f, kFleetPos[0][1]};
+    look.y = 0.55f; // just above the waterline: splashes in, sky in view
     Mat4LookAt(view, eye, look, {0, 1, 0});
   }
   float aspect = (float)gWindowWidth / (float)gWindowHeight;

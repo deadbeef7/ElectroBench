@@ -126,10 +126,12 @@ What it renders :
   soft directional wash toward a **hidden light source** — there is no sun disc, no lamp model:
   the light is only ever visible through the shading it produces
 - **Open water** that analytically mirrors the same checker function the sky uses, so the reflection
-  lines up with the sky across the horizon, plus fresnel dimming, distance haze, an energy-true GGX light glint, a body tint from the room's own tile light, and foam that churns with animated turbulence and lingers as fading trails behind each splash
+  lines up with the sky across the horizon, plus fresnel dimming, a red-absorbing blue body, distance haze, an energy-true GGX light glint, and foam trails that linger and fade behind each splash
 - **Two waves of teapots** — 18 in total (the real Utah teapot, `assets/teapot.obj`, one material,
   placeholder texture you can swap). Wave one rains down over the first ten seconds; wave two opens
-  up on the pool's outer ring from ~11 s. Each pot has scattered positions, sizes and drop heights
+  up on the pool's outer ring from ~11 s — and the camera stays at water-plane
+  level while they fall: the drops come down INTO frame, it never chases or
+  rises after the fleet. Each pot has scattered positions, sizes and drop heights
   on a staggered timeline, with real-ish physics: gravity and tumble in the air, splash with
   rebound on impact, buoyancy + drag underwater, then a damped bob to rest while it slowly rights
   itself. `R` re-drops the whole fleet

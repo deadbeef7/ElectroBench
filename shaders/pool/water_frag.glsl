@@ -74,11 +74,11 @@ void main() {
         float ring = exp(-band * band / (width * width));
         bump += ring * r.w * 0.55;
         foam  += ring * r.w;
-        // Residual foam trail: a wide, weak halo BEHIND the expanding ring.
-        // Real splash foam does not vanish with the crown — a decaying white
-        // wake lingers over the whole disturbed disc and dissolves slowly.
+        // Residual foam trail: a wide, WEAK halo behind the expanding ring
+        // (a decaying wake that dissolves with the ring's own strength —
+        // tame, so the pool still reads blue between impacts).
         float halo = exp(-band * band / (width * width * 14.0));
-        foam += halo * r.w * r.w * 0.45;
+        foam += halo * r.w * r.w * 0.22;
     }
     bump = clamp(bump, 0.0, 1.0);
     foam = clamp(foam, 0.0, 1.0);
@@ -100,30 +100,23 @@ void main() {
 
     // --- colour ------------------------------------------------------------
     vec3 refl = reflectedCheckerColor(-V, vWorld, bump);
-    // BLUE water body: a saturated pool-water blue, deeper with distance,
-    // tinted a little by the room's own light (the mean checker colour) so
-    // the water always belongs to the same room as the sky above it.
-    vec3 tileAvg = (uTileA + uTileB) * 0.5;
-    vec3 body = mix(vec3(0.030, 0.180, 0.320), vec3(0.010, 0.090, 0.200),
+    // BLUE water body: a saturated pool-water blue, deeper with distance.
+    // Tinted slightly toward uTileA so the water and sky feel like one room.
+    vec3 body = mix(vec3(0.045, 0.210, 0.360), vec3(0.012, 0.105, 0.225),
                     clamp(dist01, 0.0, 1.0));
-    body *= mix(vec3(1.0), tileAvg * 0.55, 0.22);
 
     // Fresnel-correct mix: grazing angles (far water) mirror the sky hard,
     // steep angles (near camera) show the BLUE body through. Without this the
     // coral tiles' reflections out-shout the blue everywhere and the whole
     // pool reads orange.
-    float mirror = 0.28 + 0.62 * pow(1.0 - clamp(V.y, 0.0, 1.0), 1.6);
+    float mirror = 0.20 + 0.70 * pow(1.0 - clamp(V.y, 0.0, 1.0), 2.0);
     vec3 col = mix(body, refl, clamp(mirror, 0.0, 1.0));
+    // Water absorbs red as light travels through it: even the REFLECTED
+    // light that skirts the surface picks up a cool cast, which keeps the
+    // pool reading blue at plane-level views instead of warm-pink.
+    col *= vec3(0.90, 0.99, 1.07);
     col += uLightTint * (spec * 2.4 + sheen * 0.35);  // the hidden light
-    // Foam is agitated WATER, not paint: break it up with the same animated
-    // turbulence field that drives the caustics (computed below), so the
-    // white patches churn and dissolve instead of sitting as flat brightened
-    // discs. The trail halo passes through at half strength (fine spume).
-    vec2 fcp = vWorld.xz * 4.3;
-    float fweb1 = 0.5 + 0.5 * sin(fcp.x + sin(fcp.y * 1.7 + uTime * 2.2) * 1.5);
-    float fweb2 = 0.5 + 0.5 * sin(fcp.y * 1.3 - uTime * 1.7 + sin(fcp.x * 1.9 - uTime * 0.9) * 1.5);
-    float foamChaos = 0.45 + 0.55 * pow(fweb1 * fweb2, 1.4);
-    col += vec3(0.92, 0.96, 1.0) * foam * mix(0.30, 1.0, foamChaos) * 0.30;
+    col += vec3(0.9) * foam * 0.22;                   // foam brightening
     col += vec3(0.05, 0.004, 0.005);                  // ambient skylight (red room)
 
     // --- caustics: the hidden light focuses through the curved crown walls
