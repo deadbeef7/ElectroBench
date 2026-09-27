@@ -337,7 +337,7 @@ void main() {
     if (lum > warmStart) {
         float f = clamp((lum - warmStart) / 0.20, 0.0, 1.0);
         f = f * f;
-        vec3 warm = vec3(1.0, 0.42, 0.10);
+        vec3 warm = vec3(1.0, 0.62, 0.36);
         warm *= lum / max(dot(warm, vec3(0.2126, 0.7152, 0.0722)), 1e-4);
         tm = mix(tm, warm, f);
     }
