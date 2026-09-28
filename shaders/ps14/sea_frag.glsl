@@ -339,7 +339,26 @@ void main() {
     // AND the slope facing the sun/light AND some ripple chaos — the noise
     // tile alone would foam uniformly everywhere, which reads fake.
     // Cloud shadows gate foam too: nothing breaks where light doesn't reach.
-    float crest = smoothstep(0.55, 1.25, hC) * mix(0.25, 1.0, shadow);
+    //
+    // ANTI-PLASTIC BREAKUP: real white water never forms a smooth sheet
+    // hugging the wave contour — that read like moulded plastic. Three
+    // breakups, largest to smallest:
+    //   1. the height THRESHOLD itself is warped by erosion noise, so the
+    //      foam contour is ragged instead of a clean iso-line,
+    //   2. an irregular patch mask clumps the band and punches holes in it,
+    //   3. a drifting grain octave crumbles the surface into bubble clumps
+    //      near the camera (band-limited by microFade like every per-pixel
+    //      noise term here).
+    float microFade = exp(-dist * 0.0035);
+    float patchNoise = cloudErosion(vUV * 90.0 + vec2(uTime * 0.0010, -uTime * 0.0006));
+    patchNoise = patchNoise * 0.70 + 0.30 *
+        cloudErosion(vUV * 330.0 + vec2(-uTime * 0.0012, uTime * 0.0008) + 41.7);
+    float crest = smoothstep(0.55, 1.25, hC + (patchNoise - 0.5) * 0.70)
+                * mix(0.25, 1.0, shadow);
+    float patch = smoothstep(0.42, 0.80, patchNoise);
+    // 0.45 floor (not 0): mid-distance foam still clumps visibly — patches
+    // are ~45 m features, far above pixel scale, so no alias risk there.
+    patch = mix(0.45, patch, microFade);
     float slopeFacing = max(dot(N, L), 0.0) * warmGate + 0.15;
     float chaos = texture(uRippleTex, vUV * 190.0 + vec2(uTime * 0.011, -uTime * 0.007)).g;
     // MICRO-GATE DISTANCE FADE (speckle root fix): chaos is sampled at 190
@@ -350,19 +369,32 @@ void main() {
     // the granular chop, the mid/far sea shades smoothly from the analytic
     // wave field. (This is the same band-limiting idea as the footprint GGX:
     // never sample sub-pixel stochastic detail per-pixel.)
-    float microFade = exp(-dist * 0.0035);
     chaos = mix(0.5, chaos, microFade);
     float foam = texture(uFoamTex, vUV * 23.0 + vec2(uTime * 0.010, 0.0)).r;
     foam *= texture(uFoamTex, vUV * 41.0 - vec2(0.0, uTime * 0.013)).g;
     // the 41-tile foam octave aliases the same way — dim its contrast at range
     foam *= mix(0.45, 1.0, microFade);
-    foam *= crest * slopeFacing * (0.35 + 0.65 * chaos);
+    // bubble grain: slow-crawling crumble inside the foam mass; at range it
+    // fades to the smooth streak texture so mid-sea never aliases
+    float grain = cloudErosion((vUV + vec2(uTime * 0.00030, -uTime * 0.00022)) * 1400.0);
+    foam *= mix(0.60, 0.62 + 0.75 * grain, microFade);
+    // LIP BIAS: entrained air is densest right at the breaking lip and washes
+    // out down the bank — a flat band is what read as moulded plastic.
+    float lip = mix(0.70, 1.0, smoothstep(0.85, 1.55, hC));
+    foam *= crest * patch * lip * slopeFacing * (0.35 + 0.65 * chaos);
     // Foam is white water lit by the SAME sky and sun as everything else:
     // warm cream inside the sun path (shadow-gated), cool grey-violet away
     // from it. The old constant warm-grey read dirty against the dusk.
+    //
+    // DENSITY SHADING: a single flat sheet colour is the other half of the
+    // plastic look. Shade NONLINEARLY with local foam thickness so clumped
+    // cores bloom bright while ragged thin wash dims toward the water —
+    // brightness now varies inside the band instead of forming a sticker.
+    float dense = clamp(foam * foam * 1.55, 0.0, 1.0);
     vec3 foamCol = mix(vec3(0.38, 0.37, 0.44), vec3(1.05, 0.74, 0.52),
                        clamp(warmGate * shadow, 0.0, 1.0));
-    body += foamCol * foam * 0.60;
+    foamCol = mix(foamCol * 0.52, foamCol * 1.08, dense);
+    body += foamCol * foam * 0.72;
 
     // subsurface glow against the light: THIN CRESTS transmit a dim jade-green
     // where sunlight actually passes through the water. Gated to the sun's
