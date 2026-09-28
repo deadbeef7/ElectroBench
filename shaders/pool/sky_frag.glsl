@@ -25,12 +25,16 @@ out vec4 fragColor;
 const float PI = 3.14159265358979;
 
 float checker(vec2 p) {
-    // Hard-edged checker, no fwidth: the dome's coarse mesh makes screen-space
-    // derivatives of the gnomonic projection enormous, which washed every
-    // tile to mid-grey. Aliasing at extreme distance is hidden by the
-    // horizon glaze instead.
-    vec2 w = abs(fract(p) - 0.5);
-    return step(max(w.x, w.y), 0.25);
+    // TRUE alternating checkerboard (analytically box-filtered, iq-style):
+    // EQUAL red and white squares — the old test (max(w.x,w.y) <= 0.25) only
+    // lit the CENTRE of each cell, which painted the whole sky red with a
+    // small white square floating in every tile. fwidth spikes at grazing
+    // angles are handled correctly: tiles converge to the 0.5 mean where the
+    // pixel footprint spans multiple cells, instead of aliasing to noise.
+    vec2 w = fwidth(p) + 1e-4;
+    vec2 i = 2.0 * (abs(fract((p - 0.5 * w) * 0.5) - 0.5)
+                  - abs(fract((p + 0.5 * w) * 0.5) - 0.5)) / w;
+    return 0.5 - 0.5 * i.x * i.y;
 }
 
 void main() {
@@ -41,18 +45,16 @@ void main() {
     vec3 dir = normalize(vNormal);
     float up = clamp(dir.y, -1.0, 1.0);
 
-    // planar projection: unroll the dome direction onto a flat grid above
-    vec2 plane;
-    float blend = smoothstep(0.06, 0.35, up);
-    if (blend > 0.001) {
-        plane = dir.xz / max(up, 0.06) * 1.05;   // gnomonic from above
-    } else {
-        // below-horizon fallback keeps the seam invisible at grazing angles
-        plane = dir.xz * (6.2831853 / max(0.06 - up, 0.06));
-    }
-    float cell = 0.16;                            // checker scale: 6+ tiles
-                                                  // across the visible sky
-    float c = checker(plane / cell + vec2(uTime * 0.006, 0.0));
+    // ANGULAR CHECKER GRID (final look): tiles at constant angular size —
+    // 0.25 rad (14 degrees) squares in azimuth x elevation. The old gnomonic
+    // unroll compressed cells into sub-pixel slivers near the horizon, which
+    // (once properly antialiased) melted the whole sky into the red/white
+    // MEAN — a pale pink wash. An angular grid keeps BOLD square red then
+    // square white tiles at every elevation, converging only at the zenith.
+    // The water mirror maps its rays through the SAME grid, so the tile
+    // columns line up across the horizon like a real room.
+    vec2 plane = vec2(atan(dir.x, dir.z), asin(clamp(up, -1.0, 1.0))) * 4.0;
+    float c = checker(plane + vec2(uTime * 0.006, 0.0));
 
     // two tones — the WHITE & RED pool-room checker. These are deliberately
     // hot linear values: the tonemap knee + gamma at the end wash colours
