@@ -355,10 +355,12 @@ void main() {
         cloudErosion(vUV * 330.0 + vec2(-uTime * 0.0012, uTime * 0.0008) + 41.7);
     float crest = smoothstep(0.55, 1.25, hC + (patchNoise - 0.5) * 0.70)
                 * mix(0.25, 1.0, shadow);
-    float patch = smoothstep(0.42, 0.80, patchNoise);
+    // NOTE: no identifier named "patch" — it is a reserved keyword in
+    // several GLSL front-ends (NVIDIA rejects it even under #version 330).
+    float foamPatch = smoothstep(0.42, 0.80, patchNoise);
     // 0.45 floor (not 0): mid-distance foam still clumps visibly — patches
     // are ~45 m features, far above pixel scale, so no alias risk there.
-    patch = mix(0.45, patch, microFade);
+    foamPatch = mix(0.45, foamPatch, microFade);
     float slopeFacing = max(dot(N, L), 0.0) * warmGate + 0.15;
     float chaos = texture(uRippleTex, vUV * 190.0 + vec2(uTime * 0.011, -uTime * 0.007)).g;
     // MICRO-GATE DISTANCE FADE (speckle root fix): chaos is sampled at 190
@@ -381,7 +383,7 @@ void main() {
     // LIP BIAS: entrained air is densest right at the breaking lip and washes
     // out down the bank — a flat band is what read as moulded plastic.
     float lip = mix(0.70, 1.0, smoothstep(0.85, 1.55, hC));
-    foam *= crest * patch * lip * slopeFacing * (0.35 + 0.65 * chaos);
+    foam *= crest * foamPatch * lip * slopeFacing * (0.35 + 0.65 * chaos);
     // Foam is white water lit by the SAME sky and sun as everything else:
     // warm cream inside the sun path (shadow-gated), cool grey-violet away
     // from it. The old constant warm-grey read dirty against the dusk.
@@ -436,37 +438,19 @@ void main() {
     float NdH = max(dot(N, H), 0.0);
     float pathGate = pow(sunAlign, 10.0) * 0.96 + 0.04;
     float sparkleGate = (0.55 + 0.90 * chaos);
-    float rough = clamp(0.45 + 0.45 * chaos, 0.0, 0.95);
-    float aGGX = max(0.14, (1.0 - rough) * 0.42);
+    // SUN GLINT COLUMN, de-sparkled: the old stack (tight GGX core + a
+    // pow-90 micro-sparkle lobe) minted isolated white dots. Real glints
+    // at this camera distance are far below pixel scale, so they MERGE
+    // into a continuous shimmering column. One broad footprint-safe GGX
+    // lobe whose gain breathes with the ripple chaos reproduces exactly
+    // that: a merged sun column with metre-scale patchiness and ZERO
+    // per-pixel fireflies — alpha never drops below 0.30, so the lobe is
+    // always many pixels wide on screen.
+    float rough = clamp(0.40 + 0.35 * chaos, 0.0, 0.95);
+    float aGGX = max(0.30, (1.0 - rough) * 0.62);
     float a2 = aGGX * aGGX;
     float dGGX = a2 / (PI * pow(NdH * NdH * (a2 - 1.0) + 1.0, 2.0));
-    // tight sparkle core: small-alpha GGX with a gain chosen so the PEAK
-    // (NdH=1) stays <= ~6 — as bright as the old pow() spike could ever get,
-    // but spread over a few pixels and a smooth function of chaos, so no
-    // 1-ULP normal flip can mint an isolated white pixel.
-    // FOOTPRINT-AWARE GGX (the actual root fix): alpha 0.05-0.10 is a lobe
-    // NARROWER than one pixel — sampling it per-pixel is aliasing, which is
-    // where the isolated dots came from (the tonemap merely recoloured
-    // them). Widen alpha by the per-pixel NdH gradient so the lobe covers
-    // multiple pixels near the glint and the sparkle renders SMOOTH, while
-    // near-camera pixels (tiny gradient) keep a crisp core.
-    float ndhGrad = fwidth(NdH);
-    float aCore = mix(0.10, 0.05, chaos);             // chaos sharpens glints
-    aCore = sqrt(aCore * aCore + ndhGrad * ndhGrad * 6.0);
-    float aCore2 = aCore * aCore;
-    float glint = aCore2 / (PI * pow(NdH * NdH * (aCore2 - 1.0) + 1.0, 2.0));
-    // the tight mid lobe aliases the same way — its pow(,90) falloff is even
-    // narrower than the GGX core, so it dies HARD under footprint pressure:
-    // 60x-gradient suppression (was 25) plus a lower gain leaves crisp
-    // micro-sparkle only where the gradient is near zero (close camera).
-    float glintMid = pow(NdH, 90.0) * 0.25 / (1.0 + ndhGrad * 60.0);
-    float glintWide = dGGX * 0.045;                   // physically-tailed sheen
-    // HARD CAP on the additive sparkle — and a LOW one: a high cap makes
-    // plateaus of near-knee colour that read as whitish PAINT BLOBS in the
-    // sun path. Capped low and tinted warm orange, clumps stay granular
-    // glints instead of fusing into white patches. Final pass: 0.85 -> 0.45
-    // per the user — glints shimmer gently instead of blazing white.
-    float spark = min(glint * 0.047 + glintMid + glintWide * pathGate, 0.45);
+    float spark = min(dGGX * (0.085 + 0.13 * chaos), 0.60);
     color += vec3(1.0, 0.55, 0.22)
            * spark
            * (0.25 + max(L.y, 0.0) * 1.2) * pathGate * shadow * sparkleGate;
