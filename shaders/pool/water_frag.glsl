@@ -97,7 +97,7 @@ void main() {
     float dGGX = a2 / (3.14159265 * pow(NdH * NdH * (a2 - 1.0) + 1.0, 2.0));
     float fres = pow(1.0 - clamp(dot(vec3(0.0, 1.0, 0.0), V), 0.0, 1.0), 5.0);
     float Fk = 0.02 + 0.98 * fres;
-    float spec = dGGX * Fk * 0.25;              // tight core + tail in one term
+    float spec = min(dGGX, 6.0) * Fk * 0.25;    // capped: an unbounded GGX peak minted white fireflies on ripple slopes
     float sheen = pow(NdH, 14.0) * 0.35;        // broad faint glow floor
 
     // --- colour ------------------------------------------------------------
