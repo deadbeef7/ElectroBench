@@ -438,19 +438,19 @@ void main() {
     float NdH = max(dot(N, H), 0.0);
     float pathGate = pow(sunAlign, 10.0) * 0.96 + 0.04;
     float sparkleGate = (0.55 + 0.90 * chaos);
-    // SUN GLINT COLUMN, de-sparkled: the old stack (tight GGX core + a
-    // pow-90 micro-sparkle lobe) minted isolated white dots. Real glints
-    // at this camera distance are far below pixel scale, so they MERGE
-    // into a continuous shimmering column. One broad footprint-safe GGX
-    // lobe whose gain breathes with the ripple chaos reproduces exactly
-    // that: a merged sun column with metre-scale patchiness and ZERO
-    // per-pixel fireflies — alpha never drops below 0.30, so the lobe is
-    // always many pixels wide on screen.
+    // SUN GLINT COLUMN, FINAL: one broad footprint-safe GGX lobe. The
+    // lobe alpha is widened by the per-pixel NdH gradient — where detail
+    // normals flicker (the noise the sun used to spotlight), the lobe
+    // smears wider than the noise and the column renders SMOOTH; near
+    // camera it keeps its shape. Gain contrast with ripple chaos is cut
+    // to a whisper (0.10 + 0.04c) so the sun no longer amplifies noise.
     float rough = clamp(0.40 + 0.35 * chaos, 0.0, 0.95);
     float aGGX = max(0.30, (1.0 - rough) * 0.62);
+    float ndhGrad = fwidth(NdH);
+    aGGX = sqrt(aGGX * aGGX + ndhGrad * ndhGrad * 24.0);
     float a2 = aGGX * aGGX;
     float dGGX = a2 / (PI * pow(NdH * NdH * (a2 - 1.0) + 1.0, 2.0));
-    float spark = min(dGGX * (0.085 + 0.13 * chaos), 0.60);
+    float spark = min(dGGX * (0.10 + 0.04 * chaos), 0.60);
     color += vec3(1.0, 0.55, 0.22)
            * spark
            * (0.25 + max(L.y, 0.0) * 1.2) * pathGate * shadow * sparkleGate;
