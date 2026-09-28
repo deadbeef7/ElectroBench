@@ -50,16 +50,18 @@ void main() {
     // ---- energy-corrected direct light: normalized diffuse (1/pi) times
     // the GGX NDF with a capped peak (a 0.055-alpha lobe can otherwise spike
     // past 50 at mirror angles and mint a white firefly on the pot rim).
-    float aGGX = mix(0.11, 0.055, uWetness);
+    // aGGX raised: glazed ceramic, not chrome — a slightly broader, dimmer
+    // highlight reads as real ceramic glaze under one hidden light
+    float aGGX = mix(0.14, 0.085, uWetness);
     float a2 = aGGX * aGGX;
     vec3 H = normalize(V + L);
     float NdH = max(dot(N, H), 0.0);
     float dGGX = a2 / (3.14159265 * pow(NdH * NdH * (a2 - 1.0) + 1.0, 2.0));
     float spec = min(dGGX, 4.5);
     float diff = clamp(dot(N, L), 0.0, 1.0);
-    // wet ceramic keeps more grazing sheen; anisotropic streaks modulate it
+    // wet ceramic keeps a modest grazing sheen; anisotropic streaks modulate
     float streak = 0.75 + 0.25 * sin(vWorld.y * 46.0 + vUV.x * 9.0);
-    float specK = mix(0.16, 0.38, uWetness) * streak;
+    float specK = mix(0.10, 0.20, uWetness) * streak;
 
     // room ambient: red bounce from the glowing checker ceiling + darker
     // floor bounce, following the normal like a real two-point room.
@@ -72,9 +74,10 @@ void main() {
     vec3 col = base * (ambient + uLightTint * diff * 0.95)
              + uLightTint * spec * specK;
 
-    // Fresnel rim: glazed ceramic gets a grazing-angle sheen off the sky
+    // Fresnel rim: dialed WAY down — the pots read as matte-glazed ceramic
+    // in a dim room now, not lacquered (user: too reflective)
     float fres = pow(1.0 - clamp(dot(N, V), 0.0, 1.0), 4.0);
-    col += uLightTint * fres * mix(0.16, 0.26, uWetness);
+    col += uLightTint * fres * mix(0.06, 0.11, uWetness);
 
     // ---- waterline: submerged shell reads as underwater ---------------
     // animated caustic web (crossing trig waves, matches water_frag.glsl):
@@ -92,7 +95,7 @@ void main() {
     col += vec3(0.9, 0.95, 1.0) * foamBand * uWetness * 0.30;
     // a wet meniscus shine just above the line
     float meniscus = exp(-pow((vWorld.y - uWaterLine) * 12.0, 2.0));
-    col += uLightTint * meniscus * uWetness * 0.18;
+    col += uLightTint * meniscus * uWetness * 0.10;
 
     col = col / (col + vec3(0.9));
     col = clamp(col, 0.0, 1.0);
