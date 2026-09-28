@@ -109,7 +109,7 @@ float cloudSmoothMax(float a, float b, float k) {
     return mix(b, a, h) + k * h * (1.0 - h);
 }
 
-float projectedCloudDensity(vec3 dir) {
+float projectedCloudDensity(vec3 dir, float detailFade) {
     float density = 0.0;
     dir = normalize(dir);
     for (int i = 0; i < MAX_CLOUDS; i++) {
@@ -155,6 +155,7 @@ float projectedCloudDensity(vec3 dir) {
             float lobeNoise = cloudErosion(vec2(
                 cos(ang) * 1.8 + uCloudAzim[i] * 3.7,
                 sin(ang) * 1.8 + float(j) * 2.1 + uCloudElev[i] * 9.0));
+            lobeNoise = mix(0.5, lobeNoise, detailFade); // far range: smooth silhouette
             rj *= 0.91 + 0.16 * lobeNoise;
             // The wisp squash must match sky_frag.glsl exactly so the shadow
             // footprint tracks the visible streak.
@@ -169,6 +170,14 @@ float projectedCloudDensity(vec3 dir) {
         float envelope = 1.0 - smoothstep(0.96, 1.56, envelopeRadius);
         float n = cloudErosion(envelopeP * 3.2 + vec2(uCloudAzim[i] * 5.1, i * 7.3));
         float fine = cloudErosion(envelopeP * 7.8 + vec2(uCloudAzim[i] * 11.0, i * 13.0));
+        // SPECKLE ROOT FIX: the erosion octaves carry sub-pixel detail once a
+        // distant fragment's water footprint projects to a tiny angular patch
+        // — the shadow boundary then flickers per pixel, and since shadow
+        // gates every sun term the lit wave faces break into salt-and-pepper
+        // dots. Collapse the boundary noise toward its mean with range; near
+        // water keeps the full ragged shadow edges.
+        n = mix(0.5, n, detailFade);
+        fine = mix(0.5, fine, detailFade);
         float shoulder = 1.0 - smoothstep(0.10, 0.82, local);
         local = smoothstep(0.06, 0.74,
                local * (0.70 + 0.30 * n + 0.12 * fine - 0.20 * shoulder))
@@ -183,7 +192,10 @@ float projectedCloudDensity(vec3 dir) {
 float cloudShadow(vec3 world, vec3 sd) {
     float travel = max((620.0 - world.y) / max(sd.y, 0.15), 0.0);
     vec3 hitDir = normalize(world - uEyePos + sd * travel);
-    float local = projectedCloudDensity(hitDir);
+    // detail fade rides the FRAGMENT's water distance (the footprint that
+    // aliases is on the water, not up at the deck)
+    float detailFade = exp(-length(world.xz - uEyePos.xz) * 0.0025);
+    float local = projectedCloudDensity(hitDir, detailFade);
     return clamp(exp(-local * 2.4), 0.12, 1.0);
 }
 
@@ -222,7 +234,12 @@ void main() {
     vec3 N = normalize(vec3(grad.x, 1.0, grad.y));
 
     // ---- phase 1: addressing - ripple normal map, scrolled over the surface
-    float rippleFade = exp(-dist * 0.0018);           // ripples die out far away
+    // Speckle root fix: the perturbation jitters the reflection RAY per-pixel;
+    // at range, adjacent pixels land on wildly different env texels and the
+    // reflection shimmers into salt-and-pepper dots. The ripple detail is a
+    // NEAR-camera feature — fade it 2x faster than before so the mid/far sea
+    // reflects smoothly from the analytic wave normals alone.
+    float rippleFade = exp(-dist * 0.0035);           // ripples die out far away
     vec2 uvA = vUV * 40.0 + vec2(uTime * 0.0040, uTime * 0.0031);
     vec2 uvB = vUV * 97.0 - vec2(uTime * 0.0026, uTime * 0.0042);
     vec2 ripA = texture(uRippleTex, uvA).rg;
@@ -263,7 +280,17 @@ void main() {
     // is GENTLE and tightly gated: strong lifts at grazing angles blur whole
     // sparkle rows into a banded white horizon film.
     float sunLift = 0.9 * pow(max(dot(R, L), 0.0), 8.0);
-    vec3 reflColor = textureLod(uSkyEnvTex, R, clamp(1.5 + reflDist * 0.0012 + sunLift, 1.0, 5.0)).rgb;
+    // FOOTPRINT-AWARE ENV LOD (speckle root fix): the env sun disc is HDR-hot
+    // and even blurred it has an EDGE in the cubemap. Ripple-jittered rays
+    // straddle that edge between neighbouring pixels, so one pixel samples
+    // the disc and its neighbour the sky — a screen-space cliff that reads as
+    // an isolated bright dot with dark surroundings. Widening the LOD by the
+    // per-pixel ray divergence (fwidth) filters the cubemap to the ray's own
+    // footprint: the disc edge becomes a multi-pixel gradient, never a dot.
+    vec3 rGrad = fwidth(R);
+    float rayFoot = max(rGrad.x, max(rGrad.y, rGrad.z));
+    float footLod = clamp(log2(1.0 + rayFoot * 512.0), 0.0, 3.0);
+    vec3 reflColor = textureLod(uSkyEnvTex, R, clamp(1.5 + reflDist * 0.0012 + sunLift + footLod, 1.0, 6.0)).rgb;
     float offSun = 1.0 - smoothstep(0.08, 0.45, sunAlign);
     reflColor *= mix(1.0, 0.46, offSun);
 
@@ -315,8 +342,20 @@ void main() {
     float crest = smoothstep(0.55, 1.25, hC) * mix(0.25, 1.0, shadow);
     float slopeFacing = max(dot(N, L), 0.0) * warmGate + 0.15;
     float chaos = texture(uRippleTex, vUV * 190.0 + vec2(uTime * 0.011, -uTime * 0.007)).g;
+    // MICRO-GATE DISTANCE FADE (speckle root fix): chaos is sampled at 190
+    // tiles/UV, so past a few hundred metres one pixel spans whole texels —
+    // every term it gates (sparkle gate, roughness, foam break-up) then
+    // flickers per-pixel and renders as salt-and-pepper dots on the mid sea.
+    // Collapse its VARIANCE toward the mean with distance: near water keeps
+    // the granular chop, the mid/far sea shades smoothly from the analytic
+    // wave field. (This is the same band-limiting idea as the footprint GGX:
+    // never sample sub-pixel stochastic detail per-pixel.)
+    float microFade = exp(-dist * 0.0035);
+    chaos = mix(0.5, chaos, microFade);
     float foam = texture(uFoamTex, vUV * 23.0 + vec2(uTime * 0.010, 0.0)).r;
     foam *= texture(uFoamTex, vUV * 41.0 - vec2(0.0, uTime * 0.013)).g;
+    // the 41-tile foam octave aliases the same way — dim its contrast at range
+    foam *= mix(0.45, 1.0, microFade);
     foam *= crest * slopeFacing * (0.35 + 0.65 * chaos);
     // Foam is white water lit by the SAME sky and sun as everything else:
     // warm cream inside the sun path (shadow-gated), cool grey-violet away
@@ -381,12 +420,14 @@ void main() {
     // near-camera pixels (tiny gradient) keep a crisp core.
     float ndhGrad = fwidth(NdH);
     float aCore = mix(0.10, 0.05, chaos);             // chaos sharpens glints
-    aCore = sqrt(aCore * aCore + ndhGrad * ndhGrad * 3.0);
+    aCore = sqrt(aCore * aCore + ndhGrad * ndhGrad * 6.0);
     float aCore2 = aCore * aCore;
     float glint = aCore2 / (PI * pow(NdH * NdH * (aCore2 - 1.0) + 1.0, 2.0));
-    // the tight mid lobe aliases the same way — fade it exactly where the
-    // footprint widening is doing the work
-    float glintMid = pow(NdH, 90.0) * 0.40 / (1.0 + ndhGrad * 25.0);
+    // the tight mid lobe aliases the same way — its pow(,90) falloff is even
+    // narrower than the GGX core, so it dies HARD under footprint pressure:
+    // 60x-gradient suppression (was 25) plus a lower gain leaves crisp
+    // micro-sparkle only where the gradient is near zero (close camera).
+    float glintMid = pow(NdH, 90.0) * 0.25 / (1.0 + ndhGrad * 60.0);
     float glintWide = dGGX * 0.045;                   // physically-tailed sheen
     // HARD CAP on the additive sparkle — and a LOW one: a high cap makes
     // plateaus of near-knee colour that read as whitish PAINT BLOBS in the
