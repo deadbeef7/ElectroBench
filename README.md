@@ -135,11 +135,13 @@ What it renders :
   on a staggered timeline, with real-ish physics: gravity and tumble in the air, a splash that
   fully absorbs the plunge (cavity drag below the surface + a float-line clamp — pots can never
   pop back out), buoyancy + drag underwater, then a damped bob to rest while it slowly rights
-  itself. `R` re-drops the whole fleet
-- **Splash FX**: a GPU-animated **Worthington crown** — a translucent water film (under a metre
-  tall, reflection-led so grazing views show the reflected room, never a white dome) that erupts
-  around the impact,
-  reflects and transmits the checker tiles through it, and tears into alpha-striped **fingers** as
+  itself. Falling pots carry air drag, a drift arc and a two-axis tumble; impact rights them on
+  both axes. `R` re-drops the whole fleet
+- **Splash FX**: a GPU-animated **Worthington crown** — a translucent POOL-WATER film (under a
+  metre tall, reflection-led blue: grazing views show the bright surface sheen, never a white
+  dome or checker tiles) with a foam collar at the water line, that erupts
+  around the impact and tears into **crawling fingers** (the tear pattern migrates up the sheet)
+  as
   it disintegrates — plus ballistic **droplet streaks** stretched along their velocity (wave-two
   impacts throw double ejecta with torn sheet fragments), expanding **ripple rings** with residual foam-trail halos that disturb the reflection, and a slender delayed central **Rayleigh jet** — its punch scaled by the impact — that
   fires on the cavity's inertial collapse and falls back with its own ring — the crown's light sweep follows the actual reflected-ray azimuth. The pots wear an energy-corrected GGX ceramic glaze with animated underwater caustics, refraction-offset submerged shading, and a wet waterline. All CPU cost is a

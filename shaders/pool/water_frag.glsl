@@ -85,6 +85,14 @@ void main() {
     bump = clamp(bump, 0.0, 1.0);
     foam = clamp(foam, 0.0, 1.0);
 
+    // HYPER-REAL AMBIENT MICRO-CHOP: real pool water never sits glass-flat
+    // between splashes — a faint wind/return-wave chop keeps the surface
+    // alive, modulating both the mirror ray and the highlight. Subtle by
+    // design (0.05 bump), two crossing moving sin fields, no textures.
+    float chop = sin(vWorld.x * 7.3 + uTime * 2.1) * sin(vWorld.z * 6.1 - uTime * 1.7);
+    chop = 0.5 + 0.5 * chop;
+    bump = clamp(bump + chop * 0.05, 0.0, 1.0);
+
     // --- hidden light specular: the only light you ever see ---------------
     // GGX microfacet answer instead of two hard Blinn lobes: ONE energy-true
     // highlight with a physical long tail of grazing glints off ripple slopes.
@@ -98,7 +106,11 @@ void main() {
     float fres = pow(1.0 - clamp(dot(vec3(0.0, 1.0, 0.0), V), 0.0, 1.0), 5.0);
     float Fk = 0.02 + 0.98 * fres;
     float spec = min(dGGX, 6.0) * Fk * 0.25;    // capped: an unbounded GGX peak minted white fireflies on ripple slopes
-    float sheen = pow(NdH, 14.0) * 0.35;        // broad faint glow floor
+    // the hidden light FALLS OFF with distance from the viewer side of the
+    // pool (inverse-square-ish over the room scale) — far water's sheen dims
+    float lightFall = 1.0 - 0.45 * dist01;
+    spec *= lightFall;
+    float sheen = pow(NdH, 14.0) * 0.35 * lightFall; // broad faint glow floor
 
     // --- colour ------------------------------------------------------------
     vec3 refl = reflectedCheckerColor(-V, vWorld, bump);
@@ -116,7 +128,7 @@ void main() {
     // light that skirts the surface picks up a cool cast, which keeps the
     // pool reading blue at plane-level views instead of warm-pink.
     col *= vec3(0.86, 0.99, 1.09);
-    col += uLightTint * (spec * 1.6 + sheen * 0.25);  // the hidden light (tamed)
+    col += uLightTint * (spec * 1.6 + sheen * 0.25 + chop * 0.018);  // the hidden light (tamed) + chop shimmer
     col += vec3(0.90, 0.94, 1.0) * foam * 0.22;       // foam brightening (cool white, sits in the room)
     col += vec3(0.05, 0.004, 0.005);                  // ambient skylight (red room)
 
@@ -134,7 +146,7 @@ void main() {
     // faintly with the same caustic web the surface shows, brightest near the
     // camera where the volume is shallow and readable.
     float bodyShimmer = max(web1 * web2 - 0.25, 0.0) * (1.0 - dist01) * 0.10;
-    col += uLightTint * caustic * (0.10 + 0.55 * bump);
+    col += uLightTint * caustic * (0.10 + 0.55 * bump) * lightFall;
     col += uLightTint * bodyShimmer;                  // volume shimmer
 
     // haze toward the horizon blends water into the sky glow — tinted

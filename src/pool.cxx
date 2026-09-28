@@ -148,14 +148,18 @@ static void Mat4LookAt(Mat4 &m, const Vec3 &eye, const Vec3 &center, const Vec3 
   m[14] = Vec3Dot(f, eye);
 }
 
-// TRS-ish model matrix for the teapot: translate * rotY * uniform scale.
-static void Mat4Model(Mat4 &m, const Vec3 &pos, float yaw, float scale) {
+// TRS-ish model matrix for the teapot: translate * rotY(yaw) * rotX(pitch)
+// * uniform scale — the pitch column is the HYPER-REAL falling tumble.
+static void Mat4Model(Mat4 &m, const Vec3 &pos, float yaw, float scale,
+                      float pitch = 0.0f) {
   float c = std::cos(yaw), s = std::sin(yaw);
+  float cp = std::cos(pitch), sp = std::sin(pitch);
   Mat4Identity(m);
-  m[0] = c * scale;  m[4] = 0.0f;    m[8]  = -s * scale;  m[12] = pos.x;
-  m[1] = 0.0f;       m[5] = scale;   m[9]  = 0.0f;        m[13] = pos.y;
-  m[2] = s * scale;  m[6] = 0.0f;    m[10] = c * scale;   m[14] = pos.z;
-  m[3] = 0.0f;       m[7] = 0.0f;    m[11] = 0.0f;        m[15] = 1.0f;
+  // rotY then rotX: columns combine as R = Ry * Rx
+  m[0] = c * scale;        m[4] = s * sp * scale;  m[8]  = -s * cp * scale;  m[12] = pos.x;
+  m[1] = 0.0f;             m[5] = cp * scale;      m[9]  = sp * scale;       m[13] = pos.y;
+  m[2] = s * scale;        m[6] = -c * sp * scale; m[10] = c * cp * scale;   m[14] = pos.z;
+  m[3] = 0.0f;             m[7] = 0.0f;            m[11] = 0.0f;             m[15] = 1.0f;
 }
 
 // --------------------------------------------------------------- file helpers
@@ -607,6 +611,8 @@ struct TeapotPhysics {
   Vec3 vel{0.0f, 0.0f, 0.0f};
   float yaw = 0.0f;
   float yawVel = 1.1f;      // slow tumble while airborne
+  float pitch = 0.0f;       // HYPER-REAL: forward tumble about the X axis —
+  float pitchVel = 0.0f;    // a dropped pot doesn't just spin on the spot
   float radius = 0.55f;     // bounding radius (world units, scale 1.0)
   float restDepth = 0.16f;  // submerged depth at equilibrium (scales with size)
   bool inWater = false;
@@ -894,8 +900,14 @@ static void UpdatePhysics(double now, double dt) {
         p.active = true;
         float sc = kFleetScale[i];
         p.pos = {kFleetPos[i][0], kFleetDrop[i], kFleetPos[i][1]};
-        p.vel = {0.0f, -1.2f, 0.0f};
+        // HYPER-REAL drop: a small horizontal drift (no pot falls perfectly
+        // straight), a tumble about BOTH axes, and per-pot phases so the
+        // fleet doesn't fall in lockstep
+        float ph = (float)((i * 37) % 11) / 11.0f;
+        p.vel = {(ph - 0.5f) * 0.9f, -1.2f, ((i * 53) % 7 - 3.0f) / 7.0f * 0.9f};
         p.yawVel = 1.1f * (0.6f + 0.8f * ((i * 7) % 5) / 5.0f);
+        p.pitch = 0.15f * ((i % 3) - 1);
+        p.pitchVel = 1.7f * (0.5f + 0.9f * ph);
         p.radius = 0.55f * sc;
         p.restDepth = 0.16f * sc;
       }
@@ -904,8 +916,13 @@ static void UpdatePhysics(double now, double dt) {
 
     bool water = p.pos.y < kWaterLevel + p.restDepth;
 
-    // gravity always
+    // gravity always; AIR DRAG while falling (a real pot has drag — the
+    // old vacuum fall reached unrealistic speeds on the 15 m drops)
     p.vel.y += kGravity * (float)dt;
+    if (!water) {
+      float ad = 1.0f - std::fmin(0.16f * (float)dt, 0.2f);
+      p.vel.x *= ad; p.vel.y *= ad; p.vel.z *= ad;
+    }
 
     if (water) {
       if (!p.inWater) {
@@ -920,9 +937,13 @@ static void UpdatePhysics(double now, double dt) {
                     kFleetScale[i]);
         // a real impact throws a second, broader ring a beat behind the first
         SpawnRing(i, p.pos.x, p.pos.z, 0.40f + 0.3f * std::fmin(speed / 9.0f, 1.0f));
-        // no rebound — the water absorbs the plunge; buoyancy takes over
+        // no rebound — the water absorbs the plunge; buoyancy takes over.
+        // The horizontal drift dies on entry (the cavity grabs the pot) and
+        // the pitch tumble is arrested by the same righting that fixes yaw.
         p.vel.y = speed * kBounce;
+        p.vel.x *= 0.4f; p.vel.z *= 0.4f;
         p.yawVel *= 0.25f;
+        p.pitchVel *= 0.25f;
       }
       // SINK-AWARE CAVITY: past ~1.6x rest depth the cavity has collapsed
       // around the pot — it decelerates HARD there (virtual drag floor)
@@ -953,9 +974,13 @@ static void UpdatePhysics(double now, double dt) {
         p.pos.y = floatLine;
         p.vel.y = 0.0f;
       }
-      // righting: spin back to yaw 0 and settle
+      // righting: spin back to yaw AND pitch 0 and settle (the water's
+      // restoring torque levels the floating pot on both axes)
       p.yawVel *= 1.0f - std::fmin(3.0f * (float)dt, 0.9f);
       p.yaw += p.yawVel * (float)dt;
+      p.pitchVel *= 1.0f - std::fmin(3.0f * (float)dt, 0.9f);
+      p.pitchVel += -p.pitch * 2.2f * (float)dt;   // spring toward upright
+      p.pitch += p.pitchVel * (float)dt;
       // bob: damped spring around restDepth once the plunge has settled
       if (now - p.splashTime > 0.55f) {
         float target = kWaterLevel - p.restDepth * 0.5f + 0.05f * std::sin((now - p.splashTime) * 2.1f);
@@ -965,7 +990,8 @@ static void UpdatePhysics(double now, double dt) {
       }
     } else {
       p.inWater = false;
-      p.yaw += p.yawVel * (float)dt; // tumble
+      p.yaw += p.yawVel * (float)dt;      // tumble
+      p.pitch += p.pitchVel * (float)dt;  // HYPER-REAL forward tumble
     }
 
     p.pos = Vec3Add(p.pos, Vec3Scale(p.vel, (float)dt));
@@ -1193,7 +1219,7 @@ static void DrawTeapot(const Mat4 &view, const Vec3 &eye, const TeapotPhysics &p
     pos.z += wobble[1];                 // the pot's own rings pass under it
   }
   Mat4 model;
-  Mat4Model(model, pos, pot.yaw, scale);
+  Mat4Model(model, pos, pot.yaw, scale, pot.pitch);
   if (reflectionPass) {
     // Mirror the geometry itself: M' = M * diag(1,-1,1), i.e. negate the
     // second column (column-major). This flips winding — culling stays off.
@@ -1308,8 +1334,9 @@ static void DrawCrowns(const Mat4 &view, double now) {
   glUniform3f(gSplashProg.loc("uEyePos"), gCamPos.x, gCamPos.y, gCamPos.z);
   glUniform3f(gSplashProg.loc("uLightDir"), kLightDir[0], kLightDir[1], kLightDir[2]);
   glUniform3f(gSplashProg.loc("uLightTint"), kLightTint[0], kLightTint[1], kLightTint[2]);
-  glUniform3f(gSplashProg.loc("uSkyA"), kTileA[0], kTileA[1], kTileA[2]);
-  glUniform3f(gSplashProg.loc("uSkyB"), kTileB[0], kTileB[1], kTileB[2]);
+  // splash films are POOL WATER now: bright surface blue / deep body blue
+  glUniform3f(gSplashProg.loc("uWaterA"), 0.30f, 0.62f, 0.86f);
+  glUniform3f(gSplashProg.loc("uWaterB"), 0.030f, 0.180f, 0.320f);
   glUniform1f(gSplashProg.loc("uTime"), (float)now);
   glDepthMask(GL_FALSE);
   glDisable(GL_CULL_FACE); // the sheet is seen from both sides
@@ -1386,8 +1413,8 @@ static void DrawJets(const Mat4 &view, const Vec3 &eye) {
   glBufferData(GL_ARRAY_BUFFER, jbuf.size() * sizeof(float), jbuf.data(), GL_STREAM_DRAW);
   glUniformMatrix4fv(gDropletProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
   glUniform3f(gDropletProg.loc("uLightTint"), kLightTint[0], kLightTint[1], kLightTint[2]);
-  glUniform3f(gDropletProg.loc("uSkyA"), kTileA[0], kTileA[1], kTileA[2]);
-  glUniform3f(gDropletProg.loc("uSkyB"), kTileB[0], kTileB[1], kTileB[2]);
+  glUniform3f(gDropletProg.loc("uWaterA"), 0.30f, 0.62f, 0.86f);
+  glUniform3f(gDropletProg.loc("uWaterB"), 0.030f, 0.180f, 0.320f);
   glEnable(GL_BLEND);
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
   glDepthMask(GL_FALSE);
