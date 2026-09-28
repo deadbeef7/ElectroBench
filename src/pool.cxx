@@ -637,8 +637,10 @@ static const float kFleetPos[kFleetCount][2] = {
     {3.1f, 8.4f},   {9.3f, 0.9f},   {-9.0f, -2.7f}, {0.4f, -9.4f},
     {5.7f, -8.6f}};
 static const float kFleetScale[kFleetCount] = {
-    1.45f, 1.23f, 1.74f, 1.04f, 1.33f, 1.60f, 1.13f, 1.28f, 1.52f,
-    1.38f, 1.16f, 1.65f, 0.99f, 1.48f, 1.31f, 1.22f, 1.57f, 1.10f};
+    // fleet-wide +35% per the user: pots read bigger against the splash
+    // crowns they spawn (crowns/jets scale with the same factor already)
+    1.96f, 1.66f, 2.35f, 1.40f, 1.80f, 2.16f, 1.53f, 1.73f, 2.05f,
+    1.86f, 1.57f, 2.23f, 1.34f, 2.00f, 1.77f, 1.65f, 2.12f, 1.49f};
 static const float kFleetDrop[kFleetCount] = {
     8.0f, 10.0f, 9.0f, 11.5f, 8.6f, 10.6f, 9.4f, 12.0f, 11.0f,
     13.0f, 14.5f, 12.4f, 15.0f, 13.6f, 14.0f, 12.8f, 15.5f, 13.2f};
@@ -906,13 +908,32 @@ static void UpdatePhysics(double now, double dt) {
         p.vel.y = speed * kBounce;
         p.yawVel *= 0.25f;
       }
-      // buoyancy: stronger the deeper it sits, up to equilibrium
+      // buoyancy: stronger the deeper it sits, up to equilibrium.
+      // SINK-AWARE CAVOITY: past ~1.6x rest depth the cavity has collapsed
+      // around the pot — it decelerates HARD there (virtual drag floor)
+      // instead of converting the whole plunge into a spring launch. This
+      // is the real fix for the "still bounces" bug: kBounce=0 only removed
+      // restitution at the surface; the buoyancy spring itself was ejecting
+      // deep-diving pots ballistically out of the water, re-splashing them.
       float depth = kWaterLevel - p.pos.y;
-      float buoy = kBuoyancy * (depth / p.restDepth) * (float)dt;
-      if (buoy > 0.0f) p.vel.y += buoy;
+      if (depth > p.restDepth * 1.6f) {
+        p.vel.y *= 1.0f - std::fmin(8.0f * (float)dt, 0.9f); // cavity drag
+        p.vel.y += kBuoyancy * 0.50f * (float)dt;            // weak up-drive
+      } else {
+        float buoy = kBuoyancy * (depth / p.restDepth) * (float)dt;
+        if (buoy > 0.0f) p.vel.y += buoy;
+      }
       // water drag (quadratic-ish, clamped)
       float drag = 1.0f - std::fmin(kDragWater * (float)dt, 0.9f);
       p.vel.x *= drag; p.vel.y *= drag; p.vel.z *= drag;
+      // FLOAT-LINE CLAMP (hard guarantee): a real pot rises to its water
+      // line and stays there — buoyancy cannot eject it. Rising past the
+      // float line would re-enter the ballistic regime and splash again.
+      float floatLine = kWaterLevel - p.restDepth * 0.5f;
+      if (p.vel.y > 0.0f && p.pos.y > floatLine) {
+        p.pos.y = floatLine;
+        p.vel.y = 0.0f;
+      }
       // righting: spin back to yaw 0 and settle
       p.yawVel *= 1.0f - std::fmin(3.0f * (float)dt, 0.9f);
       p.yaw += p.yawVel * (float)dt;

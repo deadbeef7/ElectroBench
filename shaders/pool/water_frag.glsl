@@ -107,10 +107,10 @@ void main() {
     vec3 body = mix(vec3(0.045, 0.210, 0.360), vec3(0.012, 0.105, 0.225),
                     clamp(dist01, 0.0, 1.0));
 
-    // Fresnel-correct mix: the user's final balance is 0.9 water / 0.1 sky —
-    // the pool reads as deep blue water with a faint tile sheen on top, at
-    // every view angle (the old grazing boost made reflections dominate).
-    float mirror = 0.10;
+    // Fresnel-correct mix: reflections are now nearly PERCEPTIBLE-FREE per
+    // the user — 0.035 of the tile colour is a faint sheen that hints the
+    // ceiling is mirrored without painting tiles on the water.
+    float mirror = 0.035;
     vec3 col = mix(body, refl, clamp(mirror, 0.0, 1.0));
     // Water absorbs red as light travels through it: even the REFLECTED
     // light that skirts the surface picks up a cool cast, which keeps the

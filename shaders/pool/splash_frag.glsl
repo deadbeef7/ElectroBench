@@ -2,9 +2,17 @@
 // Crown splash: a thin sheet of water erupting around the impact point.
 // Physically it is a curved film of water: it both REFLECTS and TRANSMITS
 // the environment, so its colour is a Fresnel-weighted blend of the two
-// checker tiles sweeping around the ring — it never reads grey. As the sheet
-// climbs it tears into FINGERS (alpha stripes around the ring), and the rim
-// catches the hidden light in sharp glints.
+// checker tiles sweeping around the ring — it never reads grey.
+//
+// ANTI-PLASTIC PASS: the old sheet was a smooth film crossed by one even
+// sinusoid stripe ring — uniform thickness, uniform brightness, regular
+// spacing — which read as moulded plastic. Real crowns disintegrate in
+// stages: a dense base, a tearing midsection whose fingers lengthen and
+// pinch off at irregular azimuths, and a rim that is already individual
+// droplets. The alpha now breaks up with phase-jittered fingers (warped
+// by smooth azimuth noise so the spacing is never regular), a thickness
+// ripple along the sheet, and a tear term that deepens toward the rim;
+// brightness follows the local thickness so the mass reads granular.
 
 in vec3 vWorld;
 in vec3 vNormal;
@@ -39,19 +47,36 @@ void main() {
     vec3 H = normalize(V + normalize(uLightDir));
     float spec = pow(max(dot(N, H), 0.0), 64.0);
 
-    // real crowns tear into FINGERS — alpha stripes around the ring that
-    // deepen toward the rim as the sheet disintegrates
-    float fingers = 0.68 + 0.32 * sin(vAngle * 6.2831853 * 22.0 + vParam * 2.6);
-
-    // the sheet is dense at the base and breaks apart toward the rim
-    float sheet = 1.0 - 0.55 * vParam;
+    // ---- irregular tearing ----
+    // smooth phase warps (NOT per-pixel hash: the crown is only a few
+    // hundred pixels around, unfiltered noise would alias to glitter) with
+    // two incommensurate frequencies, seeded by world position so every
+    // crown tears differently.
+    float ang = vAngle * 6.2831853;
+    float jitter = sin(ang * 3.0 + vWorld.x * 2.3) * 0.85
+                 + sin(ang * 7.0 - vWorld.z * 1.7) * 0.55;
+    // finger field: base comb + warped phase; climbs to a second wobble
+    // frequency as the sheet climbs, so the rim spacing differs from the base
+    float fingers = 0.5 + 0.5 * sin(ang * 22.0 + jitter * 2.2
+                                   + vParam * vParam * 4.0);
+    // thickness ripple along the sheet so the film never reads uniform
+    float grain = 0.5 + 0.5 * sin(ang * 41.0 - jitter * 3.0 - vParam * 5.0);
+    // the sheet is dense at the base and disintegrates toward the rim:
+    // the tear contrast DEEPENS with height (fingers pinch off there)
+    float tear = mix(0.22, 0.62, smoothstep(0.15, 0.9, vParam));
+    float sheet = (1.0 - 0.62 * vParam) * (0.55 + 0.45 * grain);
+    sheet *= 1.0 - tear * (1.0 - fingers);
+    sheet = max(sheet, 0.0);
 
     // transmitted env + reflection sheen; the thin rim transmits MORE
     // environment (a thinner film hides less behind it) and the rim catches
     // the hidden light in sharp glints
     vec3 col = env * (0.42 + 0.25 * vParam + 0.38 * (1.0 - edge))
              + uLightTint * (0.08 + diff * 0.28 + spec * 1.7 + edge * 0.45);
+    // local thickness shading: dense finger cores carry more water (brighter),
+    // torn gaps are thinner film (dimmer, more env through them)
+    col *= 0.72 + 0.55 * fingers * vParam + 0.18 * grain;
 
-    float alpha = (0.30 + edge * 0.55) * sheet * fingers;
+    float alpha = (0.30 + edge * 0.55) * sheet;
     fragColor = vec4(col, alpha);
 }
