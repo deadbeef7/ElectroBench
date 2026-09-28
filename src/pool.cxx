@@ -700,7 +700,8 @@ static TeapotPhysics gPots[kFleetCount];
 
 static const float kGravity = -13.6f;   // slightly heavier than Earth for drama
 static const float kWaterLevel = 0.0f;
-static const float kBounce = 0.18f;     // small rebound off the surface
+static const float kBounce = 0.0f;      // no rebound: the plunge is fully
+                                        // absorbed (buoyancy + drag settle the pot)
 static const float kDragWater = 2.6f;   // /s velocity damping in water
 static const float kBuoyancy = 34.0f;   // upward accel when submerged
 
@@ -901,7 +902,7 @@ static void UpdatePhysics(double now, double dt) {
                     kFleetScale[i]);
         // a real impact throws a second, broader ring a beat behind the first
         SpawnRing(i, p.pos.x, p.pos.z, 0.40f + 0.3f * std::fmin(speed / 9.0f, 1.0f));
-        // small rebound then buoyancy takes over
+        // no rebound — the water absorbs the plunge; buoyancy takes over
         p.vel.y = speed * kBounce;
         p.yawVel *= 0.25f;
       }
@@ -915,7 +916,7 @@ static void UpdatePhysics(double now, double dt) {
       // righting: spin back to yaw 0 and settle
       p.yawVel *= 1.0f - std::fmin(3.0f * (float)dt, 0.9f);
       p.yaw += p.yawVel * (float)dt;
-      // bob: damped spring around restDepth once the bounce has decayed
+      // bob: damped spring around restDepth once the plunge has settled
       if (now - p.splashTime > 0.55f) {
         float target = kWaterLevel - p.restDepth * 0.5f + 0.05f * std::sin((now - p.splashTime) * 2.1f);
         p.pos.y += (target - p.pos.y) * std::fmin(2.2f * (float)dt, 1.0f);

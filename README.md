@@ -132,8 +132,8 @@ What it renders :
   up on the pool's outer ring from ~11 s — and the camera stays at water-plane
   level while they fall: the drops come down INTO frame, it never chases or
   rises after the fleet. Each pot has scattered positions, sizes and drop heights
-  on a staggered timeline, with real-ish physics: gravity and tumble in the air, splash with
-  rebound on impact, buoyancy + drag underwater, then a damped bob to rest while it slowly rights
+  on a staggered timeline, with real-ish physics: gravity and tumble in the air, a splash that
+  fully absorbs the plunge (no bounce), buoyancy + drag underwater, then a damped bob to rest while it slowly rights
   itself. `R` re-drops the whole fleet
 - **Splash FX**: a GPU-animated **Worthington crown** — a water sheet that erupts around the impact,
   reflects and transmits the checker tiles through it, and tears into alpha-striped **fingers** as
