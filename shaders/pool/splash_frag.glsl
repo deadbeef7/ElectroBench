@@ -71,12 +71,22 @@ void main() {
     // transmitted env + reflection sheen; the thin rim transmits MORE
     // environment (a thinner film hides less behind it) and the rim catches
     // the hidden light in sharp glints
-    vec3 col = env * (0.42 + 0.25 * vParam + 0.38 * (1.0 - edge))
-             + uLightTint * (0.08 + diff * 0.28 + spec * 1.7 + edge * 0.45);
+    // reflection-dominant film: at grazing angles a water sheet shows the
+    // ROOM it reflects (the red/white checker sweep), never flat white —
+    // the old lightTint-heavy stack painted every edge-on crown as a solid
+    // white plastic dome. Face-on, the thin film stays translucent.
+    vec3 col = env * (0.50 + 0.30 * vParam + 0.85 * edge)
+             + uLightTint * (0.06 + diff * 0.22 + spec * 0.55);
     // local thickness shading: dense finger cores carry more water (brighter),
     // torn gaps are thinner film (dimmer, more env through them)
     col *= 0.72 + 0.55 * fingers * vParam + 0.18 * grain;
+    // clamp below clip: the crown sheet blends over bright water where many
+    // crowns overlap; unclamped it saturated the framebuffer into a solid
+    // white dome (the plastic-mould look the user screenshotted)
+    col = min(col, vec3(0.97, 0.96, 0.95));
 
-    float alpha = (0.30 + edge * 0.55) * sheet;
+    // thin film alpha: transmission-dominant even at grazing (the reflection
+    // TERM above carries the grazing look, not opacity)
+    float alpha = (0.18 + edge * 0.38) * sheet;
     fragColor = vec4(col, alpha);
 }

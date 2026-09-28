@@ -668,6 +668,7 @@ struct CrownSplash {
   float height = 0.0f;
   float spike = 0.0f;   // spike amplitude 0..1
   float life = 1.0f;    // fades the sheet out
+  float scale = 1.0f;   // pot scale — radius growth must stay pot-proportional
 };
 static CrownSplash gCrowns[kFleetCount];
 
@@ -732,8 +733,12 @@ static void SpawnSplash(int pot, float x, float z, float impactSpeed, float scal
   crown.active = true;
   crown.center = {x, kWaterLevel, z};
   crown.age = 0.0f;
+  crown.scale = scale;
   crown.radius = 0.30f * scale;
-  crown.height = (0.22f + 0.55f * s) * scale * (waveTwo ? 1.12f : 1.0f);
+  crown.height = std::fmin((0.22f + 0.55f * s) * scale * (waveTwo ? 1.12f : 1.0f),
+                           0.90f); // ABSOLUTE cap: real crowns stay under a
+                                   // metre; scaled-up heights made the sheet
+                                   // a 2.6 m camera-facing dome (the artifact)
   crown.spike = std::fmin(1.0f, 0.35f + 0.4f * s);
   crown.life = waveTwo ? 1.1f : 1.0f;
 
@@ -762,7 +767,8 @@ static void SpawnSplash(int pot, float x, float z, float impactSpeed, float scal
     float up = 1.6f + 2.6f * s * r01;
     d.vel = {std::cos(a) * out, up, std::sin(a) * out};
     d.radius = (0.035f + 0.045f * ((i * 13) % 7) / 7.0f) * scale;
-    if (fragment) d.radius *= 2.3f; // heavy sheet chunk, lands hard
+    if (fragment) d.radius *= 1.6f; // torn sheet chunk (2.3x ballooned the
+                                    // sprites into white overlap clouds)
     d.maxLife = d.life = (0.9f + 0.6f * ((i * 29) % 5) / 5.0f) *
                          (waveTwo ? 1.15f : 1.0f);
     gDroplets.push_back(d);
@@ -835,9 +841,12 @@ static void UpdatePhysics(double now, double dt) {
     // --- crown: expands fast, decelerates, then collapses ---
     if (crown.active) {
       crown.age += (float)dt;
-      // radius grows decelerating: r ~ sqrt(t) (energy spread over the ring)
+      // radius grows decelerating: r ~ sqrt(t), SCALED by the pot (the
+      // growth previously ignored the scale, so every crown ran to the
+      // same ~1.3 m regardless of pot size — and huge pots got crowns
+      // dwarfed by their own spray).
       float t = crown.age;
-      crown.radius = 0.30f + 1.9f * std::sqrt(t) * 0.55f;
+      crown.radius = (0.30f + 1.045f * std::sqrt(t)) * crown.scale;
       crown.height *= 1.0f - std::fmin(1.6f * (float)dt, 0.9f); // falls back
       crown.spike *= 1.0f - std::fmin(0.8f * (float)dt, 0.9f);
       crown.life = 1.0f - t / 0.95f;
@@ -848,7 +857,14 @@ static void UpdatePhysics(double now, double dt) {
         // bigger, faster splashes cavitate deeper and punch a taller column.
         float s = gJetPunch[i];
         jet.velY = 4.0f + 1.8f * s;
-        jet.radius *= (0.85f + 0.5f * s);
+        // thin Rayleigh column: the old radius scaled linearly with the
+        // (now 35% bigger) pots, producing ~1 m wide billboards that stacked
+        // 22-sprites deep and read as a glowing solid dome when the fleet
+        // settled. A real collapse jet is a slender column: root-scale.
+        jet.radius = std::fmin(jet.radius * std::sqrt(crown.scale) * (0.85f + 0.5f * s),
+                               0.06f * crown.scale + 0.02f); // slender Rayleigh
+        // column: wide jet billboards stacked 22 deep and blended into a
+        // solid glowing dome when the fleet settled
         // the cavity is slightly off the impact centre (the pot floats to one
         // side of it), so the column rises beside the floating pot instead of
         // hiding behind it
@@ -908,8 +924,7 @@ static void UpdatePhysics(double now, double dt) {
         p.vel.y = speed * kBounce;
         p.yawVel *= 0.25f;
       }
-      // buoyancy: stronger the deeper it sits, up to equilibrium.
-      // SINK-AWARE CAVOITY: past ~1.6x rest depth the cavity has collapsed
+      // SINK-AWARE CAVITY: past ~1.6x rest depth the cavity has collapsed
       // around the pot — it decelerates HARD there (virtual drag floor)
       // instead of converting the whole plunge into a spring launch. This
       // is the real fix for the "still bounces" bug: kBounce=0 only removed
@@ -917,7 +932,11 @@ static void UpdatePhysics(double now, double dt) {
       // deep-diving pots ballistically out of the water, re-splashing them.
       float depth = kWaterLevel - p.pos.y;
       if (depth > p.restDepth * 1.6f) {
-        p.vel.y *= 1.0f - std::fmin(8.0f * (float)dt, 0.9f); // cavity drag
+        // quadratic cavity drag: deceleration ~ |v|*v, so a 20 m/s plunge
+        // from the 15 m drops stops within ~1 m of water (a linear-only
+        // drag let pots slam the sim floor and then spring back up)
+        p.vel.y += -0.55f * std::fabs(p.vel.y) * p.vel.y * (float)dt;
+        p.vel.y *= 1.0f - std::fmin(6.0f * (float)dt, 0.9f);
         p.vel.y += kBuoyancy * 0.50f * (float)dt;            // weak up-drive
       } else {
         float buoy = kBuoyancy * (depth / p.restDepth) * (float)dt;
@@ -950,7 +969,12 @@ static void UpdatePhysics(double now, double dt) {
     }
 
     p.pos = Vec3Add(p.pos, Vec3Scale(p.vel, (float)dt));
-    if (p.pos.y < kWaterLevel - 1.2f) p.pos.y = kWaterLevel - 1.2f; // hard floor of the sim
+    if (p.pos.y < kWaterLevel - 1.2f) {
+      // hard floor of the sim: kill downward velocity too, or the pot
+      // grinds along the floor and pops back up when buoyancy wins
+      p.pos.y = kWaterLevel - 1.2f;
+      p.vel.y = std::fmax(p.vel.y, 0.0f);
+    }
   }
 }
 
@@ -1157,7 +1181,8 @@ static void DrawWater(const Mat4 &view, const Vec3 &eye, double timeSec) {
 }
 
 static void DrawTeapot(const Mat4 &view, const Vec3 &eye, const TeapotPhysics &pot,
-                       float scale, bool reflectionPass, const float *wobble) {
+                       float scale, bool reflectionPass, const float *wobble,
+                       float now = 0.0f) {
   if (!pot.active) return;
   Mat4 vp;
   Mat4Multiply(vp, gProj, view);
@@ -1194,6 +1219,7 @@ static void DrawTeapot(const Mat4 &view, const Vec3 &eye, const TeapotPhysics &p
   glUniform1f(gTeapotProg.loc("uWaterLine"), kWaterLevel);
   glUniform3f(gTeapotProg.loc("uWaterBody"), 0.030f, 0.180f, 0.320f);
   glUniform1f(gTeapotProg.loc("uReflect"), reflectionPass ? 1.0f : 0.0f);
+  glUniform1f(gTeapotProg.loc("uTime"), now);
   glActiveTexture(GL_TEXTURE0);
   glBindTexture(GL_TEXTURE_2D, gTeapotTex);
   glUniform1i(gTeapotProg.loc("uBaseColor"), 0);
@@ -1202,11 +1228,12 @@ static void DrawTeapot(const Mat4 &view, const Vec3 &eye, const TeapotPhysics &p
   if (!reflectionPass) glEnable(GL_CULL_FACE); // the reflection caller restores
 }
 
-static void DrawFleet(const Mat4 &view, const Vec3 &eye, bool reflectionPass) {
+static void DrawFleet(const Mat4 &view, const Vec3 &eye, bool reflectionPass,
+                      double now = 0.0) {
   const float zero[2] = {0.0f, 0.0f};
   for (int i = 0; i < kFleetCount; i++)
     DrawTeapot(view, eye, gPots[i], kFleetScale[i], reflectionPass,
-               reflectionPass ? nullptr : zero);
+               reflectionPass ? nullptr : zero, (float)now);
 }
 
 // ---- real planar reflections ---------------------------------------------
@@ -1322,14 +1349,14 @@ static void DrawJets(const Mat4 &view, const Vec3 &eye) {
     if (!jet.active || jet.height <= 0.01f) continue;
     Vec3 toCam = Vec3Normalize(Vec3Sub(eye, jet.center));
     float a = std::atan2(toCam.x, toCam.z);
-    const float fade = std::fmin(1.0f, 1.3f - jet.life * 0.3f);
+    const float fade = std::fmin(1.0f, 1.3f - jet.life * 0.3f) * 0.62f;
     const float halfW = jet.radius;
     for (int pass = 0; pass < 2; pass++) {
       float aa = a + pass * 1.5707963f;
       (void)aa;
       // stack overlapping billboards up the column so the sprites merge into
       // a solid water column (2 crossed layers, 11 anchors each = 132 tris)
-      const int kSteps = 10;
+      const int kSteps = 8;
       for (int i = 0; i <= kSteps; i++) {
         float sy = (float)i / kSteps;
         float taper = 1.0f - 0.35f * sy; // column thins as it rises
@@ -1469,7 +1496,7 @@ static void RenderScene() {
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 
   DrawSky(view, eye, now);
-  DrawFleet(view, eye, false);      // pots above the surface
+  DrawFleet(view, eye, false, now);      // pots above the surface
   DrawWater(view, eye, now);        // opaque water covers the submerged parts
   DrawFleetReflection(view, eye);   // mirrored fleet blended into the water
   DrawCrowns(view, now);
