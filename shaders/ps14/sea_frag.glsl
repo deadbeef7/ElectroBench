@@ -432,8 +432,9 @@ void main() {
     // HARD CAP on the additive sparkle — and a LOW one: a high cap makes
     // plateaus of near-knee colour that read as whitish PAINT BLOBS in the
     // sun path. Capped low and tinted warm orange, clumps stay granular
-    // glints instead of fusing into white patches.
-    float spark = min(glint * 0.047 + glintMid + glintWide * pathGate, 0.85);
+    // glints instead of fusing into white patches. Final pass: 0.85 -> 0.45
+    // per the user — glints shimmer gently instead of blazing white.
+    float spark = min(glint * 0.047 + glintMid + glintWide * pathGate, 0.45);
     color += vec3(1.0, 0.55, 0.22)
            * spark
            * (0.25 + max(L.y, 0.0) * 1.2) * pathGate * shadow * sparkleGate;

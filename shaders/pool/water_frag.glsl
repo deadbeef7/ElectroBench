@@ -32,23 +32,25 @@ vec3 normalize3(vec3 v) { return v / max(length(v), 1e-5); }
 // ---- the SAME checker as sky_frag.glsl (copy kept intentional: one file
 // ---- cannot include the other without extension support on all drivers)
 float checker(vec2 p) {
-    vec2 w = fract(p) - 0.5;
-    vec2 a = abs(fract(p * 0.5) - 0.5) / fwidth(p * 0.5);
-    vec2 fade = clamp(a * 1.6 - 0.5, 0.0, 1.0);
-    float cw = min(fade.x, fade.y);
-    return mix(step(dot(w, w), 0.25), 0.5, cw);
+    // TRUE alternating checkerboard (analytically box-filtered, iq-style) —
+    // the SAME function as sky_frag.glsl so the water mirror lines up with
+    // the ceiling tile for tile. The old test (dot(w,w) <= 0.25) lit a disc
+    // per cell, not a checker. Equal red/white squares, antialiased.
+    vec2 w = fwidth(p) + 1e-4;
+    vec2 i = 2.0 * (abs(fract((p - 0.5 * w) * 0.5) - 0.5)
+                  - abs(fract((p + 0.5 * w) * 0.5) - 0.5)) / w;
+    return 0.5 - 0.5 * i.x * i.y;
 }
 
-// reflected ray into the dome-space checker, evaluated exactly like the sky:
-// mirror the view ray about the water plane, then unroll like the dome does.
+// reflected ray into the dome-space checker: mirror the view ray about the
+// water plane, then map through the SAME ANGULAR GRID as sky_frag.glsl —
+// tile columns line up across the horizon like a real room.
 vec3 reflectedCheckerColor(vec3 dirToViewer, vec3 pos, float rippleBump) {
     vec3 rd = reflect(dirToViewer, normalize(vec3(0.0, 1.0, 0.0)) + vec3(rippleBump, 0.0, rippleBump) * 0.35);
     rd.y = abs(rd.y) * 0.85 + 0.02;      // keep rays skimming upward-ish
     float up = clamp(rd.y, 0.02, 1.0);
-    // gnomic unroll with the SAME 1.05 gain as the sky dome, then the same
-    // 0.16-cell checker scale — tiles line up across the horizon line
-    vec2 plane = rd.xz / up * 1.05;
-    float c = checker(plane / 0.16);
+    vec2 plane = vec2(atan(rd.x, rd.z), asin(clamp(up, -1.0, 1.0))) * 4.0;
+    float c = checker(plane);
     vec3 albedo = mix(uTileB, uTileA, c);
     // Water reflects its surroundings strongly at ALL angles (water's Fresnel
     // only kills the reflection at very steep views, and even there R~0.02
@@ -105,18 +107,17 @@ void main() {
     vec3 body = mix(vec3(0.045, 0.210, 0.360), vec3(0.012, 0.105, 0.225),
                     clamp(dist01, 0.0, 1.0));
 
-    // Fresnel-correct mix: grazing angles (far water) mirror the sky hard,
-    // steep angles (near camera) show the BLUE body through. Without this the
-    // coral tiles' reflections out-shout the blue everywhere and the whole
-    // pool reads orange.
-    float mirror = 0.16 + 0.58 * pow(1.0 - clamp(V.y, 0.0, 1.0), 2.2);
+    // Fresnel-correct mix: the user's final balance is 0.9 water / 0.1 sky —
+    // the pool reads as deep blue water with a faint tile sheen on top, at
+    // every view angle (the old grazing boost made reflections dominate).
+    float mirror = 0.10;
     vec3 col = mix(body, refl, clamp(mirror, 0.0, 1.0));
     // Water absorbs red as light travels through it: even the REFLECTED
     // light that skirts the surface picks up a cool cast, which keeps the
     // pool reading blue at plane-level views instead of warm-pink.
     col *= vec3(0.86, 0.99, 1.09);
-    col += uLightTint * (spec * 2.4 + sheen * 0.35);  // the hidden light
-    col += vec3(0.9) * foam * 0.22;                   // foam brightening
+    col += uLightTint * (spec * 1.6 + sheen * 0.25);  // the hidden light (tamed)
+    col += vec3(0.90, 0.94, 1.0) * foam * 0.22;       // foam brightening (cool white, sits in the room)
     col += vec3(0.05, 0.004, 0.005);                  // ambient skylight (red room)
 
     // --- caustics: the hidden light focuses through the curved crown walls
@@ -129,7 +130,12 @@ void main() {
     float web1 = 0.5 + 0.5 * sin(cp.x + sin(cp.y * 1.7 + uTime * 1.9) * 1.4);
     float web2 = 0.5 + 0.5 * sin(cp.y * 1.3 - uTime * 1.4 + sin(cp.x * 1.9 - uTime * 0.8) * 1.4);
     float caustic = pow(web1 * web2, 3.0);
+    // FINAL PASS: light dancing through the water volume — the body shimmers
+    // faintly with the same caustic web the surface shows, brightest near the
+    // camera where the volume is shallow and readable.
+    float bodyShimmer = max(web1 * web2 - 0.25, 0.0) * (1.0 - dist01) * 0.10;
     col += uLightTint * caustic * (0.10 + 0.55 * bump);
+    col += uLightTint * bodyShimmer;                  // volume shimmer
 
     // haze toward the horizon blends water into the sky glow — tinted
     // pool-WATER blue, not room-pink: the old haze target was dominated by
