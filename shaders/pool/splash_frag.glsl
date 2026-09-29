@@ -83,14 +83,37 @@ vec3 poolEnv(vec3 dir) {
 void main() {
     vec3 V = normalize(uEyePos - vWorld);
     vec3 N = normalize(vNormal);
+    float camDist = length(uEyePos - vWorld);
+
+    // PER-PIXEL MICRO-NORMALS: the single strongest water-vs-plastic tell.
+    // A real spray sheet is covered in micro-ripples that continuously bend
+    // the reflected and transmitted images — the film SWIMS. Two world-
+    // anchored smooth fields + a fine angular octave that analytically fades
+    // before it aliases (fwidth gate), and a distance fade so far crowns
+    // keep clean silhouettes.
+    float f1 = sin(vWorld.x * 9.1 + uTime * 3.1 + vWorld.z * 7.3)
+             + sin(vWorld.z * 11.7 - uTime * 2.3 + vParam * 6.0);
+    float f2 = sin(vWorld.x * 23.7 - uTime * 4.7 + vWorld.z * 19.1);
+    float finePhase = vAngle * 6.2831853 * 87.0 + uTime * 5.0
+                    + vWorld.x * 3.0 + vWorld.z * 2.0;
+    float fineGate = 1.0 - smoothstep(0.4, 1.2, fwidth(finePhase));
+    float fine = sin(finePhase) * fineGate;
+    // gentle distance fade: the swim must stay visible at typical viewing
+    // range (~60-70 m) — the first fade (0.02) throttled it to 25% there
+    float microAmp = 0.55 + 0.45 * exp(-camDist * 0.008);
+    vec3 micro = vec3(f1 * 0.20 + f2 * 0.10 + fine * 0.09, 0.0,
+                      f1 * 0.14 - f2 * 0.09 + fine * 0.16) * microAmp;
+    vec3 Np = normalize(N + micro);
 
     // the film sees the REAL POOL: reflect and refract the view ray against
     // the wobbly sheet and sample the actual dome checkerboard / water body.
     // Neighbouring fingers bend the rays differently, so red/white tiles
     // smear and swim across the film exactly like reflections on real water.
-    vec3 rd = reflect(-V, N);                 // mirror ray -> the dome
-    vec3 rt = refract(-V, N, 0.75);           // transmitted ray -> the body
+    vec3 rd = reflect(-V, Np);                // mirror ray -> the dome
+    vec3 rt = refract(-V, Np, 0.75);          // transmitted ray -> the body
                                               // (air->water, eta = 1/1.33)
+    if (dot(rt, rt) < 1e-4) rt = -V;          // TIR guard: perturbed normals
+                                              // can tip past the critical angle
     vec3 envMirror = poolEnv(rd);
     vec3 envRefr   = poolEnv(rt);
 
@@ -103,8 +126,9 @@ void main() {
     // (rim brightening now comes from the Beer-Lambert film absorption below —
     // thin torn film transmits bright, thick base absorbs toward body blue)
 
-    float edge = 1.0 - abs(dot(N, V));         // grazing = surface sheen
-    float diff = max(dot(N, normalize(uLightDir)), 0.0);
+    float edge = 1.0 - abs(dot(Np, V));        // grazing = surface sheen (now
+                                               // fluttering per-pixel: ragged film)
+    float diff = max(dot(Np, normalize(uLightDir)), 0.0);
     vec3 H = normalize(V + normalize(uLightDir));
 
     // ---- irregular, CRAWLING tearing ----
@@ -139,7 +163,6 @@ void main() {
     // sheets, not haze (individual droplets resolve below the eye's angular
     // threshold). Steepen the curve with distance so far crowns are MORE
     // discrete, not less.
-    float camDist = length(uEyePos - vWorld);
     sheet = smoothstep(0.30 - 0.15 * clamp(camDist / 90.0, 0.0, 1.0),
                        0.75, sheet);
 
@@ -164,35 +187,66 @@ void main() {
     //     answer on the wobbly sheet — energy-conserving sparkle streaks on
     //     finger rims, finite on every driver.
     vec3 L = normalize(uLightDir);
-    float NoV = clamp(dot(N, V), 1e-3, 1.0);
-    float NoL = max(dot(N, L), 0.0);
+    float NoV = clamp(dot(Np, V), 1e-3, 1.0);
+    float NoL = max(dot(Np, L), 0.0);
     float fres = F_Schlick(NoV, 0.02);           // mirror-ness of the film
     fres = clamp(fres * 1.6, 0.02, 0.85);        // film reads reflective sooner
 
     // Cook-Torrance microfacet glint on the film surface
     float aGGX = 0.18;                           // fairly sharp water glints
     float a2 = aGGX * aGGX;
-    float NoH = max(dot(N, H), 0.0);
+    float NoH = max(dot(Np, H), 0.0);
     float dGGX = D_GGX(NoH, a2) * V_SmithGGX(NoV, NoL, a2) * F_Schlick(NoH, 0.02);
     float glint = min(dGGX * 2.2, 1.8);          // capped, tamed: at fleet
                                                  // scale stacked glints fed
                                                  // the fog-wash glow
+    // dancing micro-sparkles: tight specular points that ride the micro-
+    // normal field and twinkle as the sheet ripples (only where the fine
+    // octave survives the alias gate)
+    float sparkle = pow(max(dot(Np, H), 0.0), 300.0) * fineGate * microAmp;
 
     // Beer-Lambert absorption through the film thickness: deep film tints
     // toward the saturated body colour, torn thin film stays watery-bright
     vec3 absorb = vec3(0.35, 0.08, 0.04);        // per-unit-film-thickness
     vec3 filmTint = exp(-absorb * thick * 2.4);
+    // THICKNESS FLUTTER: the film's optical path length breathes with the
+    // micro-ripple field — transmission visibly SWIMS across the face-on
+    // top of the sheet (the biggest pixel area of the crown, where normal
+    // perturbation alone shows nothing)
+    filmTint *= 0.85 + 0.30 * (0.5 + 0.5 * sin(thick * 17.0 + f1 * 2.3
+                                                + uTime * 2.9));
 
     vec3 transmitted = envRefr * (0.55 + 0.45 * vParam) * filmTint; // through-film:
                                                                     // the far room,
                                                                     // dimmed by film
                                                                     // thickness
+    // THIN-FILM BANDING: real films show soft luminance bands crawling
+    // through them as local thickness varies (soap-film interference,
+    // kept white-ish — water barely shows colour fringes)
+    float band = 0.5 + 0.5 * sin(thick * 28.0 + f1 * 1.5 + vParam * 9.0);
+    transmitted *= 0.80 + 0.40 * band;
     vec3 mirrored   = envMirror * 1.15;                            // grazing mirror:
                                                                     // hot dome tiles
+    // microscopic roughness: the film is not a perfect mirror — desaturate
+    // the reflection slightly toward its luminance (kills the clean-plastic
+    // mirror look)
+    float mlum = dot(mirrored, vec3(0.299, 0.587, 0.114));
+    mirrored = mix(mirrored, vec3(mlum), 0.18);
     vec3 col = mix(transmitted, mirrored, fres * (0.45 + 0.55 * edge));
     // aerated foam overlays the optics: bubble scatter washes toward white
     // regardless of what the rays do (this is the crumbling-edge look)
     col = mix(col, vec3(0.94, 0.97, 1.0), foam * 0.75);
+    // micro-sparkle twinkle rides on top of the formed film colour
+    col += uLightTint * sparkle * 1.6;
+
+    // FINGER-STRUCTURE COLOUR: the film is not uniformly lit — light catches
+    // on the finger crests and the sheet sags DARKER (thinner water) in the
+    // troughs between fingers. Without this the crown top reads as one flat
+    // plastic sheet. Two octaves: broad radial striations + finger shading.
+    float streak = 0.5 + 0.5 * sin(ang * 6.2831853 * 34.0 + jitter * 5.0
+                                  + vParam * 3.0 - uTime * 2.6);
+    col *= 0.72 + 0.34 * fingers * (0.35 + 0.65 * vParam)   // crest vs trough
+         + 0.14 * streak;                                    // radial striations
 
     // light answer: broad diffuse wrap + the microfacet glint + a faint
     // bright rim where fingers pinch off (thin edges catch the light)
@@ -251,10 +305,15 @@ void main() {
     if (uJet > 0.5) {
         float jetFade = 1.0 - smoothstep(0.78, 0.98, camDist / 90.0); // pop-in veil
         vec3 jcol = mix(envMirror * 1.25, envRefr * 0.8, fres * 0.45); // glassy column
-        jcol += uLightTint * glint * 0.9;                              // strong glint
+        jcol += uLightTint * glint * 0.9 + uLightTint * sparkle;       // strong glints
         float aerate = 0.35 + 0.65 * grain;                            // crawling breakup
         jcol = mix(jcol, vec3(0.92, 0.96, 1.0), (1.0 - aerate) * 0.55);// aeration foam
-        float jalpha = (0.55 + 0.40 * edge) * aerate * jetFade;
+        // rising flutter: brightness races up the column (the jet's surface
+        // is a moving flow, not a static moulded cone)
+        float flutter = 0.78 + 0.22 * sin(vParam * 34.0 - uTime * 11.0
+                                          + jitter * 4.0);
+        jcol *= flutter;
+        float jalpha = (0.55 + 0.40 * edge) * aerate * jetFade * flutter;
         fragColor = vec4(jcol, clamp(jalpha, 0.0, 1.0));
         return;
     }
