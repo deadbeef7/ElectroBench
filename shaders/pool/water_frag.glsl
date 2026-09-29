@@ -121,6 +121,11 @@ vec4 fleetGhost(vec3 V, vec3 pos, float bump) {
     float fade = 1.0 - 0.55 * ht01;         // the top of the ghost dies first
     vec2 dv = pos.xz - base;
     float ghost = ground * fade * exp(-dot(dv, dv) / (smear * smear));
+    // distance gate: far reflections compress to slivers and lose strength —
+    // without this the far fleet's overlapping smears read as a black band
+    // across the horizon (the wide-view render showed exactly that)
+    float gdist = length(uEyePos - pos);
+    ghost *= 1.0 / (1.0 + gdist * 0.045);
 
     return vec4(0.008, 0.012, 0.020, clamp(ghost * 1.35, 0.0, 1.0));
 }
@@ -216,9 +221,13 @@ void main() {
     // Fresnel makes the pool go dark-blue overhead and mirror-like in the
     // distance — the single biggest realism cue the old flat 0.035 missed.
     float mirror = F_Schlick(NoV, 0.02);
-    mirror = clamp(mirror * 1.45, 0.05, 0.62);   // tuned: brighter tile sheen
-                                                 // face-on (0.05 floor), still a
-                                                 // pool, not chrome (0.62 cap)
+    mirror = clamp(mirror * 1.45, 0.05, 0.88);   // grazing = near-FULL mirror
+                                                 // (0.88 cap): real water at
+                                                 // plane-level views IS the
+                                                 // reflection — the old 0.62 cap
+                                                 // mixed 38% dark body into the
+                                                 // far water and painted a black
+                                                 // band across the horizon
     vec3 col = mix(body, refl, clamp(mirror, 0.0, 1.0));
     // the fleet's 2D black ghosts ride ON TOP of the Fresnel mix — they are
     // the pots' reflections, not part of the sky mirror

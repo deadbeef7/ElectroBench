@@ -63,9 +63,11 @@ vec3 poolEnv(vec3 dir) {
         float fres = 0.35 + 0.65 * pow(1.0 - up, 1.5);   // grazing rays brighter
         return albedo * fres;
     }
-    // refracted rays go DOWN into the pool: the deep water mass, faintly
-    // lighter near the surface — the film transmits this face-on
-    return mix(vec3(0.028, 0.150, 0.300), vec3(0.012, 0.105, 0.225), clamp(-up, 0.0, 1.0));
+    // refracted rays go DOWN into the pool: the deep water mass, brighter
+    // near the surface — the film transmits this face-on. (LIFTED from the
+    // murky v1 values: from afar a dark transmission turned the whole fleet
+    // into a blue fog bank against the bright sky)
+    return mix(vec3(0.10, 0.42, 0.62), vec3(0.028, 0.150, 0.300), clamp(-up, 0.0, 1.0));
 }
 
 void main() {
@@ -118,6 +120,19 @@ void main() {
     sheet *= 1.0 - tear * (1.0 - fingers);
     sheet = max(sheet, 0.0);
 
+    // ANTI-FOG S-CURVE: raw sheet values hover in the 0.3-0.7 mush band;
+    // hundreds of those stacked by overdraw = the grey-blue fog bank seen
+    // from afar. Pushing the field to its ENDS (dense film or nothing) keeps
+    // the torn edges AND restores contrast between the crowns and the sky.
+    sheet = smoothstep(0.18, 0.62, sheet);
+    // DISTANCE HARDENING: real crowns seen from across a pool are distinct
+    // sheets, not haze (individual droplets resolve below the eye's angular
+    // threshold). Steepen the curve with distance so far crowns are MORE
+    // discrete, not less.
+    float camDist = length(uEyePos - vWorld);
+    sheet = smoothstep(0.30 - 0.15 * clamp(camDist / 90.0, 0.0, 1.0),
+                       0.75, sheet);
+
     // ---- PHOTOREAL FILM SHADING ------------------------------------------
     // Real water-film optics, three ingredients:
     //  1. FRESNEL (Schlick, F0 = 0.02): face-on the film TRANSMITS (you see
@@ -141,7 +156,9 @@ void main() {
     float a2 = aGGX * aGGX;
     float NoH = max(dot(N, H), 0.0);
     float dGGX = D_GGX(NoH, a2) * V_SmithGGX(NoV, NoL, a2) * F_Schlick(NoH, 0.02);
-    float glint = min(dGGX * 3.0, 2.2);          // capped: no fireflies
+    float glint = min(dGGX * 2.2, 1.8);          // capped, tamed: at fleet
+                                                 // scale stacked glints fed
+                                                 // the fog-wash glow
 
     // Beer-Lambert absorption through the film thickness: deep film tints
     // toward the saturated body colour, torn thin film stays watery-bright
@@ -181,7 +198,7 @@ void main() {
     // PHYSICS alpha: transmission face-on (film nearly invisible), mirror at
     // grazing (bright sheen reads even at low alpha). Thickness raises alpha;
     // torn film (low sheet) fades to near-nothing.
-    float alpha = mix(0.12 + 0.26 * thick, 0.60 + 0.35 * edge, fres);
+    float alpha = mix(0.06 + 0.24 * thick, 0.58 + 0.35 * edge, fres);
     alpha *= sheet;
     alpha += collar * 0.30;
     alpha += edge * (1.0 - thick) * 0.15;             // pinched-off rim glint
