@@ -14,6 +14,7 @@ This file records the reference imagery and realism principles used to stage the
   - https://onlineartlessons.com/class/the-12-secrets-of-reflective-water/
 
 Realism takeaways applied:
+- Whole-room filmic ACES (Narkowicz) tonemapping — sky, water and teapots share one camera grading, so overshoots roll off like film instead of clipping into flat white sheets (the single biggest CGI tell the render-critique battery exposed).
 - A reflected object seen through water should read as a dim, tinted ghost, not a full bright replica. The water body absorbs and tints the reflection; where the surface is rippled the image breaks up and disappears.
 - Reflections in water are darker than the object because some light penetrates instead of bouncing.
 - Water body reads as saturated blue/cooler than the sky near the camera and blends toward the sky band at the horizon, not toward the walls' warm tile.

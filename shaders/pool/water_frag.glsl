@@ -216,10 +216,17 @@ void main() {
     vec3 hazeCol = vec3(0.16, 0.42, 0.62);            // airy pool-water blue
     col = mix(col, hazeCol, haze * 0.55);
 
-    // The reflected sky colour is ALREADY tonemapped+gamma'd by sky_frag; a
-    // second knee here desaturated everything to grey. Just clamp + a mild
-    // gamma trim so bright reflections keep their tile colours.
-    col = clamp(col, 0.0, 1.0);
+    // FILMIC ACES tail — the old hard clamp(col,0,1) was the biggest CGI
+    // tell in the room: every mirrored checker tile brighter than 1.0 linear
+    // fused into FLAT WHITE SHEETS (the render-critique tool flagged 3-6%
+    // solid overbright masses + 13-14% whole-frame clipping). The water
+    // reflection colour is computed analytically from the raw hot uTileA/B
+    // values, so it is LINEAR here and gets the same filmic shoulder as the
+    // sky and teapots: one coherent camera grading across the whole room.
+    // Exposure 0.8 keeps the mid-tone water brightness where the old
+    // pow(1/1.15) presentation sat — only the overshoot changes shape.
+    col *= 0.8;
+    col = clamp((col * (2.51 * col + 0.03)) / (col * (2.43 * col + 0.59) + 0.14), 0.0, 1.0);
     col = pow(col, vec3(1.0 / 1.15));
     fragColor = vec4(col, 1.0);
 }

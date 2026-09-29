@@ -76,8 +76,15 @@ void main() {
     vec3 col = albedo * uLightTint * (0.85 + 0.55 * wash);
     col += uLightTint * 0.05 * horiz;
 
-    // tonemap + gamma, same pipeline as the other scenes
-    col = col / (col + vec3(0.35));               // gentle filmic knee
+    // FILMIC ACES (Narkowicz) tonemap — the same grading the teapots wear.
+    // The old x/(x+0.35) knee let the hot-white tiles plateau at clip level
+    // (27% of the sky band over 0.97 luma, fused into flat sheets). ACES'
+    // shoulder compresses every overshoot into a graded roll-off instead of
+    // a clip wall, so tiles stay BLAZING but never flatten — and the deep-red
+    // tiles stop washing out to salmon (ACES keeps their hue while crushing
+    // the near-zero G/B, so red finally reads RED).
+    col *= 0.85;                                  // exposure under the shoulder
+    col = clamp((col * (2.51 * col + 0.03)) / (col * (2.43 * col + 0.59) + 0.14), 0.0, 1.0);
     col = pow(col, vec3(1.0 / 2.2));
     fragColor = vec4(col, 1.0);
 }
