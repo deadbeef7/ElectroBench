@@ -63,10 +63,19 @@ vec3 poolEnv(vec3 dir) {
         float fres = 0.35 + 0.65 * pow(1.0 - up, 1.5);   // grazing rays brighter
         return albedo * fres;
     }
-    // refracted rays go DOWN into the pool: the deep water mass, brighter
-    // near the surface — the film transmits this face-on. (LIFTED from the
-    // murky v1 values: from afar a dark transmission turned the whole fleet
-    // into a blue fog bank against the bright sky)
+    // refracted rays: what you see THROUGH the film. The crown sits ABOVE
+    // the waterline — through its upper sheet you see the far side of the
+    // room (bright tiles, horizon glow), NOT the seabed. Deep blue is only
+    // for rays that plunge steeply down. This single distinction is what
+    // separates real spray from the "blue cotton cloud" look.
+    if (up > 0.0) {
+        // grazing up-rays skim along the water plane: horizon glow
+        float horiz = 1.0 - up;
+        vec3 albedo = vec3(0.42, 0.40, 0.40);
+        return albedo * (0.45 + 0.55 * horiz);
+    }
+    // rays that plunge into the pool: the deep water mass, brighter near
+    // the surface
     return mix(vec3(0.10, 0.42, 0.62), vec3(0.028, 0.150, 0.300), clamp(-up, 0.0, 1.0));
 }
 
@@ -96,6 +105,13 @@ void main() {
     float edge = 1.0 - abs(dot(N, V));         // grazing = surface sheen
     float diff = max(dot(N, normalize(uLightDir)), 0.0);
     vec3 H = normalize(V + normalize(uLightDir));
+
+    // FOAM WHITENING: a crumbling sheet is not clear water — entrained air
+    // bubbles scatter ALL wavelengths. The whiteness follows the tear field:
+    // where the film is disintegrating (low fingers, high tear) it reads as
+    // aerated foam; where it is still a continuous sheet it stays glassy.
+    float foam = (1.0 - fingers) * tear * smoothstep(0.15, 0.85, vParam);
+    foam = clamp(foam * 1.7, 0.0, 1.0);
 
     // ---- irregular, CRAWLING tearing ----
     // smooth phase warps (NOT per-pixel hash: the crown is only a few
@@ -166,12 +182,15 @@ void main() {
     vec3 filmTint = exp(-absorb * thick * 2.4);
 
     vec3 transmitted = envRefr * (0.55 + 0.45 * vParam) * filmTint; // through-film:
-                                                                    // the deep body,
+                                                                    // the far room,
                                                                     // dimmed by film
                                                                     // thickness
     vec3 mirrored   = envMirror * 1.15;                            // grazing mirror:
                                                                     // hot dome tiles
     vec3 col = mix(transmitted, mirrored, fres * (0.45 + 0.55 * edge));
+    // aerated foam overlays the optics: bubble scatter washes toward white
+    // regardless of what the rays do (this is the crumbling-edge look)
+    col = mix(col, vec3(0.94, 0.97, 1.0), foam * 0.75);
 
     // light answer: broad diffuse wrap + the microfacet glint + a faint
     // bright rim where fingers pinch off (thin edges catch the light)
@@ -192,6 +211,21 @@ void main() {
     float beadBand = smoothstep(0.55, 0.95, vParam) * smoothstep(0.35, 0.75, fingers);
     float beads = pow(max(sin(ang * 6.2831853 * 9.0 + jitter * 3.0 + uTime * 1.3), 0.0), 6.0);
     col += vec3(0.85, 0.93, 1.0) * beadBand * beads * 0.85;
+
+    // SPRAY STREAKS: real crowns throw a burst of ballistic droplets from
+    // the crest of every finger. Analytic sparkle spikes hugging the rim,
+    // seeded per-finger so they burst WHERE the film is tearing, with a
+    // fast per-frame drift (spray lives fractions of a second).
+    float burst = smoothstep(0.80, 1.0, vParam) * smoothstep(0.45, 0.85, fingers);
+    float streakPhase = ang * 6.2831853 * 17.0 + jitter * 5.0 + uTime * 6.0;
+    float streaks = pow(max(sin(streakPhase), 0.0), 14.0)
+                  * pow(max(sin(streakPhase * 0.53 + 1.7), 0.0), 6.0);
+    col += vec3(0.96, 0.98, 1.0) * burst * streaks * 1.2;
+    // sparse ballistic droplets beyond the rim: high-frequency twinkle just
+    // above the crown lip (the "sparkle spray" of high-speed footage)
+    float dropletField = pow(max(sin(ang * 6.2831853 * 31.0 - uTime * 9.0
+                                        + jitter * 2.0), 0.0), 24.0);
+    col += vec3(1.0) * burst * dropletField * 0.8;
     // clamp below clip: no amount of overlap can saturate a solid white mass
     col = min(col, vec3(0.97, 0.96, 0.95));
 
@@ -199,6 +233,8 @@ void main() {
     // grazing (bright sheen reads even at low alpha). Thickness raises alpha;
     // torn film (low sheet) fades to near-nothing.
     float alpha = mix(0.06 + 0.24 * thick, 0.58 + 0.35 * edge, fres);
+    alpha = mix(alpha, 0.94, foam * 0.8);             // foam is nearly opaque
+    alpha = clamp(alpha + burst * streaks * 0.5 + burst * dropletField * 0.35, 0.0, 1.0);
     alpha *= sheet;
     alpha += collar * 0.30;
     alpha += edge * (1.0 - thick) * 0.15;             // pinched-off rim glint

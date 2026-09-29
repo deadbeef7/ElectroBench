@@ -44,6 +44,10 @@ float spikeField(float a, float t) {
     v += sin(a * 6.2831853 * 21.0 + t * 1.7) * 0.15;
     v += sin(a * 6.2831853 * 34.0 - t * 2.3) * 0.09;   // fine tearing octave
     v += sin(a * 6.2831853 * 5.0 + t * 0.35) * 0.22;   // broad lobe drift
+    // CROWN-TOP SHARPENING: real finger tips TAPER to points while the sheet
+    // between fingers sags rounded. A nonlinear boost on the positive lobes
+    // rises the spikes into sharp crests without touching the troughs.
+    v += 0.45 * max(v, 0.0) * max(v, 0.0);
     return v;
 }
 
