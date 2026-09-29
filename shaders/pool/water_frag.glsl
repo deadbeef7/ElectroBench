@@ -14,7 +14,11 @@
 //     real pools go blue with depth), subsurface-ish body colour and distance
 //     haze into the sky tint.
 
-#define MAX_RINGS 30
+#define MAX_RINGS 54   // MUST match MAX_RINGS in src/pool.cxx: the scene
+                       // uploads all 54 slots (18 pots x 3 private windows)
+                       // in one glUniform4fv — a shorter array here makes the
+                       // whole upload GL_INVALID_OPERATION (silent no-op),
+                       // killing every ripple ring in the room.
 
 in vec3 vWorld;
 in vec3 vNormal;
