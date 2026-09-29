@@ -30,6 +30,10 @@ The PoolBench pool room — an infinite white-and-red checkerboard sky mirrored 
 
 ![ElectroBench PoolBench scene](docs/screenshots/pool_teapot.png)
 
+**In motion** — 8 seconds of the first teapot wave, captured headless frame-by-frame (0.5 s between frames): GPU-animated Worthington splash crowns erupt, tear into crawling fingers, ballistic droplet streaks, and expanding ripple rings propagating outward while the mirrored checkerboard shatters across the surface. The fleet's own reflection breaks up with every ring:
+
+![PoolBench in motion: teapot splash crowns, droplet streaks and ripple rings propagating across the checkerboard-mirrored water](docs/screenshots/pool_splash.gif)
+
 # How to build ?
 
 Dependencies : `make`, `g++`, SDL2, GLEW, GLU (+ dev headers). On Debian/Ubuntu that is
@@ -165,6 +169,8 @@ Headless visual-test flags (used to verify the render output in CI-like environm
 ./build/ElectroBench --pool-only --width 960 --screenshot /tmp/shot.ppm --shot-times 2,3.2,5,12
 ./build/ElectroBench --og-only --screenshot /tmp/shot.ppm --shot-time 3
 ```
+
+Any `--screenshot` path containing `%d` becomes a **frame sequence**: each `--shot-times` entry writes the next numbered frame (`frames/f-%03d.ppm` → `f-000.ppm`, `f-001.ppm`, …), so a timed burst assembles straight into an animation — that is exactly how the GIF above was made (16 shots, 0.5 s apart, stitched with ImageMagick).
 
 # How the score is calculated ?
 

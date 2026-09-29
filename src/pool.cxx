@@ -39,6 +39,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -1533,7 +1534,7 @@ static void RenderScene() {
 
   if (gScreenshotPath && gNextShot < gShotTimes.size() &&
       now - gStartTime >= (double)gShotTimes[gNextShot]) {
-    WriteScreenshotPPM(gScreenshotPath);
+    WriteScreenshotPPM(gScreenshotPath);   // %d targets advance per shot
     gNextShot++;
     if (gNextShot >= gShotTimes.size()) {
       SDL_Quit();
@@ -1659,6 +1660,14 @@ static void WriteScreenshotPPM(const char *path) {
   std::vector<unsigned char> rgb((size_t)w * h * 3);
   glPixelStorei(GL_PACK_ALIGNMENT, 1);
   glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, rgb.data());
+  char resolved[1024];
+  if (std::strchr(path, '%')) {
+    // printf-style frame-sequence target (e.g. frames/frame-%03d.ppm) so the
+    // headless flags can also capture ANIMATED sequences: each call writes
+    // frame 000, 001, 002... which assemble into GIF/MP4 showcase clips.
+    std::snprintf(resolved, sizeof(resolved), path, gNextShot);
+    path = resolved;
+  }
   FILE *f = std::fopen(path, "wb");
   if (!f) {
     std::fprintf(stderr, "Cannot write screenshot %s\n", path);

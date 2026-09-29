@@ -31,6 +31,7 @@
 
 #include <array>
 #include <cmath>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -914,7 +915,7 @@ static void RenderScene() {
     // pixels we analyse are exactly what this frame rendered.
     if (gScreenshotPath && gNextShot < gShotTimes.size() &&
         now - gStartTime >= (double)gShotTimes[gNextShot]) {
-      WriteScreenshotPPM(gScreenshotPath);
+      WriteScreenshotPPM(gScreenshotPath);   // %d targets advance per shot
       gNextShot++;
       if (gNextShot >= gShotTimes.size()) {
         SDL_Quit();
