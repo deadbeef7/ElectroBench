@@ -67,6 +67,7 @@ void main() {
     // --- splash rings: expand + fade, disturb the reflection ---------------
     float bump = 0.0;
     float foam = 0.0;
+    float foamCrest = 0.0;   // thin bright highlight hugging the expanding crest
     for (int i = 0; i < MAX_RINGS; i++) {
         vec4 r = uRings[i];
         if (r.w <= 0.001) continue;   // dead slot (rings are per-pot windows now)
@@ -76,6 +77,11 @@ void main() {
         float ring = exp(-band * band / (width * width));
         bump += ring * r.w * 0.55;
         foam  += ring * r.w;
+        // thin bright crest line: the ring's advancing lip is a brighter sheet
+        // of water (entrained air + surface normal facing the light), so it
+        // reads as a moving ring rather than a flat stain.
+        float crest = exp(-band * band / (width * width * 0.9));
+        foamCrest += crest * r.w * 0.30;
         // Residual foam trail: a wide, WEAK halo behind the expanding ring
         // (a decaying wake that dissolves with the ring's own strength —
         // tame, so the pool still reads blue between impacts).
@@ -84,6 +90,7 @@ void main() {
     }
     bump = clamp(bump, 0.0, 1.0);
     foam = clamp(foam, 0.0, 1.0);
+    foamCrest = clamp(foamCrest, 0.0, 1.0);
 
     // HYPER-REAL AMBIENT MICRO-CHOP: real pool water never sits glass-flat
     // between splashes — a faint wind/return-wave chop keeps the surface
@@ -119,6 +126,14 @@ void main() {
     vec3 body = mix(vec3(0.045, 0.210, 0.360), vec3(0.012, 0.105, 0.225),
                     clamp(dist01, 0.0, 1.0));
 
+    // HYPER-REAL WATER VOLUME: the water body is lit by the hidden light
+    // through the ripple slopes — a faint subsurface glow where the light
+    // enters a ripple and scatters back out toward the eye. This is what
+    // keeps the pool reading as real water between the splashes, not flat
+    // blue plastic. (V and dist01 are already declared above.)
+    float subsurface = pow(max(dot(V, -normalize(uLightDir)), 0.0), 3.0) * bump * 0.30;
+    body += uLightTint * subsurface * 0.12;
+
     // Fresnel-correct mix: reflections are now nearly PERCEPTIBLE-FREE per
     // the user — 0.035 of the tile colour is a faint sheen that hints the
     // ceiling is mirrored without painting tiles on the water.
@@ -129,7 +144,16 @@ void main() {
     // pool reading blue at plane-level views instead of warm-pink.
     col *= vec3(0.86, 0.99, 1.09);
     col += uLightTint * (spec * 1.6 + sheen * 0.25 + chop * 0.018);  // the hidden light (tamed) + chop shimmer
-    col += vec3(0.90, 0.94, 1.0) * foam * 0.22;       // foam brightening (cool white, sits in the room)
+
+    // HYPER-REAL FOAM: the expanding rings are not flat bright stains — they
+    // have a brighter advancing lip (entrained air + surface facing the light)
+    // and a softer foam wash inside the ring. The foam is pool water lit by
+    // the hidden light, so it reads as bright blue-white in the room, not
+    // generic white.
+    float foamLit = foam * (0.55 + 0.45 * (0.5 + 0.5 * dot(V, normalize(uLightDir))));
+    col += uLightTint * foamLit * 0.22;
+    col += vec3(0.90, 0.94, 1.0) * foamCrest * 0.28;   // bright lip highlight
+
     col += vec3(0.05, 0.004, 0.005);                  // ambient skylight (red room)
 
     // --- caustics: the hidden light focuses through the curved crown walls

@@ -421,7 +421,12 @@ void main() {
     // the horizon line — so the far edge of the patch converges into the sky
     // band above it (bright glow on the sun side, dark maroon away from it).
     float haze = 1.0 - exp(-dist * 0.00075);
-    color = mix(color, skyAtHorizon, haze * (0.30 + 0.70 * haze));
+    // HYPER-REAL HAZE: real atmospheric haze near the horizon is not neutral —
+    // it carries the colour of the sky band and the water's own scatter toward
+    // the viewer. Tint the haze slightly toward the water body so far water
+    // still reads as water and not as a flat colour wash.
+    vec3 hazeTarget = mix(skyAtHorizon, vec3(0.10, 0.16, 0.22), 0.22);
+    color = mix(color, hazeTarget, haze * (0.30 + 0.70 * haze));
 
     // ---- phase 3: address + blend - sun glitter path ----
     // tight sparkle core + broad soft sheen, gated to the sun's azimuth column
@@ -429,11 +434,11 @@ void main() {
     // side. Killed entirely inside cloud shadows, tinted orange, and the
     // sparkle variance rides the ripple chaos.
     //
-    // Firefly fix: the old pow(NdH, 520) core amplified 1-ULP normal noise
-    // into isolated white pixels on lit water. The core is now a tight GGX
-    // lobe (alpha bounded by the ripple chaos, so its peak is FINITE and its
-    // width a smooth function of the same texture the eye already reads as
-    // chop) plus a tempered micro-sparkle at half the old exponent.
+    // HYPER-REAL GLITTER: real water glitter is a bright sparkly path WITH a
+    // softer warm sheen spread under it; the sheen is wider and tints the whole
+    // sun-facing column a little warm, not just isolated sparkles. Add a small
+    // broad warm sheen under the tight sparkles so the path reads as a sun path
+    // on water, not as random white dots.
     vec3 H = normalize(L + V);
     float NdH = max(dot(N, H), 0.0);
     float pathGate = pow(sunAlign, 10.0) * 0.96 + 0.04;
@@ -451,9 +456,12 @@ void main() {
     float a2 = aGGX * aGGX;
     float dGGX = a2 / (PI * pow(NdH * NdH * (a2 - 1.0) + 1.0, 2.0));
     float spark = min(dGGX * (0.10 + 0.04 * chaos), 0.60);
+    // broad warm sheen under the sparkles: a lower exponent, lower gain, still
+    // gated to the sun path and shadow, so the whole path warms a little.
+    float sheen = pow(NdH, 6.0) * 0.06 * pathGate * shadow;
     color += vec3(1.0, 0.55, 0.22)
-           * spark
-           * (0.25 + max(L.y, 0.0) * 1.2) * pathGate * shadow * sparkleGate;
+           * (spark + sheen)
+           * (0.25 + max(L.y, 0.0) * 1.2) * sparkleGate;
 
     // HDR safety: flush negatives and bound the HDR range before the knee —
     // no single term can ever blow up to a white pixel, on any driver.
