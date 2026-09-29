@@ -1285,6 +1285,8 @@ static void DrawCrowns(const Mat4 &view, double now) {
   // splash films are POOL WATER now: bright surface blue / deep body blue
   glUniform3f(gSplashProg.loc("uWaterA"), 0.30f, 0.62f, 0.86f);
   glUniform3f(gSplashProg.loc("uWaterB"), 0.030f, 0.180f, 0.320f);
+  glUniform3f(gSplashProg.loc("uTileA"), kTileA[0], kTileA[1], kTileA[2]);
+  glUniform3f(gSplashProg.loc("uTileB"), kTileB[0], kTileB[1], kTileB[2]);
   glUniform1f(gSplashProg.loc("uTime"), (float)now);
   glDepthMask(GL_FALSE);
   glDisable(GL_CULL_FACE); // the sheet is seen from both sides

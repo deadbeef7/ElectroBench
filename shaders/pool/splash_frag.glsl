@@ -20,6 +20,8 @@ uniform vec3 uLightDir;
 uniform vec3 uLightTint;
 uniform vec3 uWaterA;  // bright pool-water surface blue
 uniform vec3 uWaterB;  // deep pool-water body blue
+uniform vec3 uTileA;   // hot white checker tile (linear) — the room's dome
+uniform vec3 uTileB;   // deep pure red checker tile — the room's dome
 uniform float uTime;
 out vec4 fragColor;
 
@@ -39,20 +41,46 @@ float F_Schlick(float u, float F0) {
     return F0 + (1.0 - F0) * f;
 }
 
+// ---- the pool-dome environment: THE SAME angular-grid checkerboard the
+// ---- water mirror shows (identical checker + mapping constants as
+// ---- water_frag.glsl, *4.0 grid). The crown film is part of the ROOM now:
+// ---- its reflected and refracted rays land in the same world the surface
+// ---- mirrors, so the splash finally reads as water IN this pool.
+float checker(vec2 p) {
+    vec2 w = fwidth(p) + 1e-4;
+    vec2 i = 2.0 * (abs(fract((p - 0.5 * w) * 0.5) - 0.5)
+                  - abs(fract((p + 0.5 * w) * 0.5) - 0.5)) / w;
+    return 0.5 - 0.5 * i.x * i.y;
+}
+vec3 poolEnv(vec3 dir) {
+    float up = clamp(dir.y, -1.0, 1.0);
+    if (up > 0.0) {
+        // mirrored rays see the checkerboard dome — same angular grid as the
+        // water mirror (tile columns line up between film and surface)
+        vec2 plane = vec2(atan(dir.x, dir.z), asin(up)) * 4.0;
+        float c = checker(plane);
+        vec3 albedo = mix(uTileB, uTileA, c);
+        float fres = 0.35 + 0.65 * pow(1.0 - up, 1.5);   // grazing rays brighter
+        return albedo * fres;
+    }
+    // refracted rays go DOWN into the pool: the deep water mass, faintly
+    // lighter near the surface — the film transmits this face-on
+    return mix(vec3(0.028, 0.150, 0.300), vec3(0.012, 0.105, 0.225), clamp(-up, 0.0, 1.0));
+}
+
 void main() {
     vec3 V = normalize(uEyePos - vWorld);
     vec3 N = normalize(vNormal);
 
-    // the film sees the POOL: bright surface blue where the sheet curves
-    // toward the camera's reflected view, deep body blue where it shows
-    // the water mass behind it. The sweep follows the ACTUAL reflected
-    // ray's azimuth, so neighbouring fingers pick up different blues as
-    // the wobbly sheet tilts — the film reads 3D, not painted.
-    vec3 rd = reflect(-V, N);
-    float sweepPhase = atan(rd.z, rd.x);
-    float sweep = 0.5 + 0.5 * sin(sweepPhase * 3.0 +
-                                  vWorld.x * 0.7 + vWorld.z * 0.9);
-    vec3 env = mix(uWaterB, uWaterA, sweep);
+    // the film sees the REAL POOL: reflect and refract the view ray against
+    // the wobbly sheet and sample the actual dome checkerboard / water body.
+    // Neighbouring fingers bend the rays differently, so red/white tiles
+    // smear and swim across the film exactly like reflections on real water.
+    vec3 rd = reflect(-V, N);                 // mirror ray -> the dome
+    vec3 rt = refract(-V, N, 0.75);           // transmitted ray -> the body
+                                              // (air->water, eta = 1/1.33)
+    vec3 envMirror = poolEnv(rd);
+    vec3 envRefr   = poolEnv(rt);
 
     // thickness-driven film: a real crown sheet is THIN at the rim and thick
     // at the base, so it reflects at grazing angles (the rim glints) and
@@ -66,7 +94,6 @@ void main() {
     float edge = 1.0 - abs(dot(N, V));         // grazing = surface sheen
     float diff = max(dot(N, normalize(uLightDir)), 0.0);
     vec3 H = normalize(V + normalize(uLightDir));
-    float spec = pow(max(dot(N, H), 0.0), 64.0);
 
     // ---- irregular, CRAWLING tearing ----
     // smooth phase warps (NOT per-pixel hash: the crown is only a few
@@ -121,8 +148,12 @@ void main() {
     vec3 absorb = vec3(0.35, 0.08, 0.04);        // per-unit-film-thickness
     vec3 filmTint = exp(-absorb * thick * 2.4);
 
-    vec3 transmitted = env * (0.42 + 0.30 * vParam) * filmTint;   // through-film
-    vec3 mirrored   = env * 1.15;                                 // grazing mirror
+    vec3 transmitted = envRefr * (0.55 + 0.45 * vParam) * filmTint; // through-film:
+                                                                    // the deep body,
+                                                                    // dimmed by film
+                                                                    // thickness
+    vec3 mirrored   = envMirror * 1.15;                            // grazing mirror:
+                                                                    // hot dome tiles
     vec3 col = mix(transmitted, mirrored, fres * (0.45 + 0.55 * edge));
 
     // light answer: broad diffuse wrap + the microfacet glint + a faint
@@ -136,15 +167,24 @@ void main() {
     // dense white-blue foam COLLAR at the water line (the crown base churns)
     float collar = exp(-pow((vParam - 0.05) * 7.0, 2.0));
     col += vec3(0.72, 0.86, 0.98) * collar * 0.34;
+
+    // DROPLET BEADS: as the film tears, each finger's rim beads up into a
+    // necklace of droplets — the last thing a real crown does before it
+    // collapses. Bright micro-highlights riding the torn edge, drifting with
+    // the crawl of the tear field.
+    float beadBand = smoothstep(0.55, 0.95, vParam) * smoothstep(0.35, 0.75, fingers);
+    float beads = pow(max(sin(ang * 6.2831853 * 9.0 + jitter * 3.0 + uTime * 1.3), 0.0), 6.0);
+    col += vec3(0.85, 0.93, 1.0) * beadBand * beads * 0.85;
     // clamp below clip: no amount of overlap can saturate a solid white mass
     col = min(col, vec3(0.97, 0.96, 0.95));
 
     // PHYSICS alpha: transmission face-on (film nearly invisible), mirror at
     // grazing (bright sheen reads even at low alpha). Thickness raises alpha;
     // torn film (low sheet) fades to near-nothing.
-    float alpha = mix(0.10 + 0.25 * thick, 0.55 + 0.35 * edge, fres);
+    float alpha = mix(0.12 + 0.26 * thick, 0.60 + 0.35 * edge, fres);
     alpha *= sheet;
     alpha += collar * 0.30;
     alpha += edge * (1.0 - thick) * 0.15;             // pinched-off rim glint
+    alpha += beadBand * beads * 0.25;                 // droplet beads catch light
     fragColor = vec4(col, alpha);
 }

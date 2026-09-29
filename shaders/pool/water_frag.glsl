@@ -193,11 +193,15 @@ void main() {
     // water path. Pure water eats red first (absorb ~0.35/m), then green —
     // this is the real reason pools and deep lakes go blue, and it makes the
     // body colour depend on the actual view path instead of a constant.
-    vec3 absorb = vec3(0.42, 0.09, 0.045);      // per-metre extinction
+    vec3 absorb = vec3(0.28, 0.07, 0.04);       // per-metre extinction (tamed:
+                                                // real outdoor pool water is
+                                                // LIGHTER than textbook ocean
+                                                // absorption — shallow basin +
+                                                // bright hidden light)
     float path = length(uEyePos - vWorld) * 0.5 + 0.5;   // metres, damped for the room scale
     vec3 trans = exp(-absorb * path);
-    vec3 scatter = vec3(0.045, 0.210, 0.360) * mix(vec3(1.0), trans, 0.55); // shallow tint
-    vec3 body = mix(scatter, vec3(0.012, 0.105, 0.225), clamp(dist01, 0.0, 1.0));
+    vec3 scatter = vec3(0.085, 0.300, 0.470) * mix(vec3(1.0), trans, 0.55); // shallow tint (lifted)
+    vec3 body = mix(scatter, vec3(0.028, 0.150, 0.300), clamp(dist01, 0.0, 1.0));
 
     // HYPER-REAL WATER VOLUME: the water body is lit by the hidden light
     // through the ripple slopes — a faint subsurface glow where the light
@@ -212,7 +216,9 @@ void main() {
     // Fresnel makes the pool go dark-blue overhead and mirror-like in the
     // distance — the single biggest realism cue the old flat 0.035 missed.
     float mirror = F_Schlick(NoV, 0.02);
-    mirror = clamp(mirror * 1.35, 0.02, 0.55);   // tuned: room reads as pool, not chrome
+    mirror = clamp(mirror * 1.45, 0.05, 0.62);   // tuned: brighter tile sheen
+                                                 // face-on (0.05 floor), still a
+                                                 // pool, not chrome (0.62 cap)
     vec3 col = mix(body, refl, clamp(mirror, 0.0, 1.0));
     // the fleet's 2D black ghosts ride ON TOP of the Fresnel mix — they are
     // the pots' reflections, not part of the sky mirror
@@ -258,8 +264,8 @@ void main() {
     // the back"). Air picks up the WATER colour, not the walls.
     float dist = length(uEyePos - vWorld);
     float haze = 1.0 - exp(-dist * 0.004);
-    vec3 hazeCol = vec3(0.16, 0.42, 0.62);            // airy pool-water blue
-    col = mix(col, hazeCol, haze * 0.55);
+    vec3 hazeCol = vec3(0.19, 0.47, 0.68);            // airy pool-water blue (lifted)
+    col = mix(col, hazeCol, haze * 0.60);
 
     // FILMIC ACES tail — the old hard clamp(col,0,1) was the biggest CGI
     // tell in the room: every mirrored checker tile brighter than 1.0 linear
@@ -268,9 +274,10 @@ void main() {
     // reflection colour is computed analytically from the raw hot uTileA/B
     // values, so it is LINEAR here and gets the same filmic shoulder as the
     // sky and teapots: one coherent camera grading across the whole room.
-    // Exposure 0.8 keeps the mid-tone water brightness where the old
-    // pow(1/1.15) presentation sat — only the overshoot changes shape.
-    col *= 0.8;
+    // Exposure 0.92 (FINAL PASS lift): the pool read a touch dark in the
+    // previous build — real outdoor pool water is luminous, not moody. The
+    // filmic shoulder still eats the overshoot; only the mid-tone floor rose.
+    col *= 0.92;
     col = clamp((col * (2.51 * col + 0.03)) / (col * (2.43 * col + 0.59) + 0.14), 0.0, 1.0);
     col = pow(col, vec3(1.0 / 1.15));
     fragColor = vec4(col, 1.0);
