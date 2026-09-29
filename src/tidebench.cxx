@@ -517,7 +517,7 @@ static int gHudQuadCount = 0;
 // its glitter path running toward the camera — dominates the benchmark,
 // occasionally drifting away for variety.
 static void UpdateAutoCamera(float t) {
-  float a = t * 0.10f;                                   // orbit: 2x faster than before
+  float a = t * 0.16f;                                   // orbit: 1.6x faster (user-requested speedup)
   float radius = 42.0f + std::sin(t * 0.042f) * 10.0f;   // breathe in/out at 2x
 
   Vec3 eye;

@@ -23,6 +23,22 @@ uniform vec3 uWaterB;  // deep pool-water body blue
 uniform float uTime;
 out vec4 fragColor;
 
+// ---- Cook-Torrance terms (same forms as water_frag.glsl) -----------------
+float D_GGX(float NoH, float a2) {
+    float d = NoH * NoH * (a2 - 1.0) + 1.0;
+    return a2 / (3.14159265 * d * d);
+}
+float V_SmithGGX(float NoV, float NoL, float a2) {
+    float a = sqrt(a2);
+    float gv = NoL * sqrt(NoV * NoV * (1.0 - a2) + a2);
+    float gl = NoV * sqrt(NoL * NoL * (1.0 - a2) + a2);
+    return 0.5 / max(gv + gl, 1e-4);
+}
+float F_Schlick(float u, float F0) {
+    float f = pow(1.0 - u, 5.0);
+    return F0 + (1.0 - F0) * f;
+}
+
 void main() {
     vec3 V = normalize(uEyePos - vWorld);
     vec3 N = normalize(vNormal);
@@ -44,8 +60,8 @@ void main() {
     // brightening — the first thing that separates real water film from
     // moulded plastic — comes from tying alpha to the local thickness.
     float thick = 1.0 - vParam;                       // 1 at base, 0 at rim
-    float filmTint = mix(0.72, 1.0, thick);           // thin rim -> brighter sheen
-    env *= filmTint;
+    // (rim brightening now comes from the Beer-Lambert film absorption below —
+    // thin torn film transmits bright, thick base absorbs toward body blue)
 
     float edge = 1.0 - abs(dot(N, V));         // grazing = surface sheen
     float diff = max(dot(N, normalize(uLightDir)), 0.0);
@@ -75,10 +91,45 @@ void main() {
     sheet *= 1.0 - tear * (1.0 - fingers);
     sheet = max(sheet, 0.0);
 
-    // reflection-dominant film: grazing views show the bright surface sheen,
-    // face-on views stay translucent blue. Thin light glints only.
-    vec3 col = env * (0.50 + 0.30 * vParam + 0.85 * edge)
-             + uLightTint * (0.06 + diff * 0.22 + spec * 0.55);
+    // ---- PHOTOREAL FILM SHADING ------------------------------------------
+    // Real water-film optics, three ingredients:
+    //  1. FRESNEL (Schlick, F0 = 0.02): face-on the film TRANSMITS (you see
+    //     the water body through it, alpha low); at grazing angles it becomes
+    //     a MIRROR (bright surface sheen, alpha up). This single term is the
+    //     crown's most important realism cue.
+    //  2. BEER-LAMBERT thin-film absorption: thicker film (crown base) eats
+    //     more light and shifts blue, torn thin fingers stay bright —
+    //     thickness variation now reads as COLOUR, not just alpha.
+    //  3. COOK-TORRANCE glints (GGX + Smith + Fresnel): the microfacet
+    //     answer on the wobbly sheet — energy-conserving sparkle streaks on
+    //     finger rims, finite on every driver.
+    vec3 L = normalize(uLightDir);
+    float NoV = clamp(dot(N, V), 1e-3, 1.0);
+    float NoL = max(dot(N, L), 0.0);
+    float fres = F_Schlick(NoV, 0.02);           // mirror-ness of the film
+    fres = clamp(fres * 1.6, 0.02, 0.85);        // film reads reflective sooner
+
+    // Cook-Torrance microfacet glint on the film surface
+    float aGGX = 0.18;                           // fairly sharp water glints
+    float a2 = aGGX * aGGX;
+    float NoH = max(dot(N, H), 0.0);
+    float dGGX = D_GGX(NoH, a2) * V_SmithGGX(NoV, NoL, a2) * F_Schlick(NoH, 0.02);
+    float glint = min(dGGX * 3.0, 2.2);          // capped: no fireflies
+
+    // Beer-Lambert absorption through the film thickness: deep film tints
+    // toward the saturated body colour, torn thin film stays watery-bright
+    vec3 absorb = vec3(0.35, 0.08, 0.04);        // per-unit-film-thickness
+    vec3 filmTint = exp(-absorb * thick * 2.4);
+
+    vec3 transmitted = env * (0.42 + 0.30 * vParam) * filmTint;   // through-film
+    vec3 mirrored   = env * 1.15;                                 // grazing mirror
+    vec3 col = mix(transmitted, mirrored, fres * (0.45 + 0.55 * edge));
+
+    // light answer: broad diffuse wrap + the microfacet glint + a faint
+    // bright rim where fingers pinch off (thin edges catch the light)
+    col += uLightTint * (0.05 + diff * 0.16);
+    col += uLightTint * glint * (0.30 + 0.40 * edge);
+
     // local thickness shading: dense finger cores carry more water (brighter),
     // torn gaps are thinner film (dimmer, more water body through them)
     col *= 0.72 + 0.55 * fingers * vParam + 0.18 * grain;
@@ -88,11 +139,12 @@ void main() {
     // clamp below clip: no amount of overlap can saturate a solid white mass
     col = min(col, vec3(0.97, 0.96, 0.95));
 
-    // thin film alpha: transmission-dominant; the foam collar is denser.
-    // Thickness-driven: thick base alpha up, thin rim nearly transparent with
-    // a BRIGHT grazing glint instead — real water sheets vanish at their rims.
-    float alpha = (0.18 + edge * 0.38) * sheet + collar * 0.30;
-    alpha *= (0.55 + 0.45 * thick);
-    alpha += edge * (1.0 - thick) * 0.18;             // bright rim glint
+    // PHYSICS alpha: transmission face-on (film nearly invisible), mirror at
+    // grazing (bright sheen reads even at low alpha). Thickness raises alpha;
+    // torn film (low sheet) fades to near-nothing.
+    float alpha = mix(0.10 + 0.25 * thick, 0.55 + 0.35 * edge, fres);
+    alpha *= sheet;
+    alpha += collar * 0.30;
+    alpha += edge * (1.0 - thick) * 0.15;             // pinched-off rim glint
     fragColor = vec4(col, alpha);
 }

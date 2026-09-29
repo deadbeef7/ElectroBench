@@ -1245,7 +1245,6 @@ static void DrawTeapot(const Mat4 &view, const Vec3 &eye, const TeapotPhysics &p
   glUniform1f(gTeapotProg.loc("uWetness"), wetness);
   glUniform1f(gTeapotProg.loc("uWaterLine"), kWaterLevel);
   glUniform3f(gTeapotProg.loc("uWaterBody"), 0.030f, 0.180f, 0.320f);
-  glUniform1f(gTeapotProg.loc("uReflect"), reflectionPass ? 1.0f : 0.0f);
   glUniform1f(gTeapotProg.loc("uTime"), now);
   glActiveTexture(GL_TEXTURE0);
   glBindTexture(GL_TEXTURE_2D, gTeapotTex);
@@ -1263,64 +1262,12 @@ static void DrawFleet(const Mat4 &view, const Vec3 &eye, bool reflectionPass,
                reflectionPass ? nullptr : zero, (float)now);
 }
 
-// ---- real planar reflections ---------------------------------------------
-// The fleet is re-rendered mirrored about the water plane and alpha-blended
-// over the water shading. A stencil pass marks exactly the water pixels the
-// camera sees; the mirrored pots are drawn only there (the camera never dives
-// below the surface, so the mask is a safety net rather than a requirement).
-// Each pot's own ripple rings shear its image, so reflections wobble while
-// the surface is disturbed.
-static void DrawFleetReflection(const Mat4 &view, const Vec3 &eye) {
-  bool any = false;
-  for (int i = 0; i < kFleetCount; i++) any = any || gPots[i].active;
-  if (!any) return;
-
-  // 1) stencil = water-visible pixels (colour + depth writes stay off)
-  glEnable(GL_STENCIL_TEST);
-  glStencilFunc(GL_ALWAYS, 1, 0xff);
-  glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
-  glStencilMask(0xff);
-  glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
-  glDepthMask(GL_FALSE);
-  glUseProgram(gWaterProg.handle);
-  glBindVertexArray(gWaterMesh.vao);
-  Mat4 vp, ident;
-  Mat4Multiply(vp, gProj, view);
-  Mat4Identity(ident);
-  glUniformMatrix4fv(gWaterProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
-  glUniformMatrix4fv(gWaterProg.loc("uModel"), 1, GL_FALSE, ident.data());
-  glDrawElements(GL_TRIANGLES, gWaterMesh.indexCount, GL_UNSIGNED_INT, nullptr);
-  glBindVertexArray(0);
-  glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-
-  // 2) mirrored fleet, blended over the water
-  glStencilFunc(GL_EQUAL, 1, 0xff);
-  glStencilMask(0x00);
-  glDisable(GL_DEPTH_TEST); // mirrored geometry lives below the water depth
-  glDepthMask(GL_FALSE);
-  glEnable(GL_BLEND);
-  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-  for (int i = 0; i < kFleetCount; i++) {
-    if (!gPots[i].active) continue;
-    float wob[2] = {0.0f, 0.0f};
-    Ring *win = RingWindow(i);
-    for (int j = 0; j < gRingUsed[i]; j++) {
-      float dx = gPots[i].pos.x - win[j].x;
-      float dz = gPots[i].pos.z - win[j].z;
-      float d = std::sqrt(dx * dx + dz * dz) + 1e-4f;
-      float band = d - win[j].radius;
-      float infl = win[j].strength * std::exp(-band * band / 0.25f);
-      wob[0] += dx / d * infl * 0.05f;
-      wob[1] += dz / d * infl * 0.05f;
-    }
-    DrawTeapot(view, eye, gPots[i], kFleetScale[i], true, wob);
-  }
-  glDisable(GL_BLEND);
-  glDisable(GL_STENCIL_TEST);
-  glDepthMask(GL_TRUE);
-  glEnable(GL_DEPTH_TEST);
-  glEnable(GL_CULL_FACE);
-}
+// ---- reflected teapots: 2D black ghosts ----------------------------------
+// The old pass re-rendered the fleet mirrored about the water plane and
+// alpha-blended it — a 3D ceramic pot swimming underwater, which is NOT what
+// a real reflection looks like. The water shader now paints each pot as a
+// 2D black silhouette: a smeared upright ghost anchored at the pot's base,
+// drowned by the water body and broken apart by the ripple field.
 
 static void DrawCrowns(const Mat4 &view, double now) {
   bool any = false;
@@ -1525,8 +1472,9 @@ static void RenderScene() {
 
   DrawSky(view, eye, now);
   DrawFleet(view, eye, false, now);      // pots above the surface
-  DrawWater(view, eye, now);        // opaque water covers the submerged parts
-  DrawFleetReflection(view, eye);   // mirrored fleet blended into the water
+  DrawWater(view, eye, now);        // opaque water covers the submerged parts;
+                                    // its shader now paints the reflected pots
+                                    // as 2D black ghost silhouettes
   DrawCrowns(view, now);
   DrawJets(view, eye);
   DrawDroplets(view, eye);
@@ -1687,7 +1635,7 @@ static void Setup() {
   BuildDomeMesh();
   BuildFontAtlas();
   gTeapotMesh = LoadObjMesh(resolveAssetPath("assets/teapot.obj").c_str(), 0.55f);
-  gTeapotTex = LoadTextureRGBA("assets/teapot_placeholder.png");
+  gTeapotTex = LoadTextureRGBA("assets/teapot_copper.png");
 
   glGenVertexArrays(1, &gEmptyVao);
   glGenVertexArrays(1, &gHudVao);

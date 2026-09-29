@@ -88,6 +88,43 @@ vec3 reflectedCheckerColor(vec3 dirToViewer, vec3 pos, float rippleBump) {
     return albedo * fres;
 }
 
+// REFLECTED TEAPOTS: 2D black ghost silhouettes painted directly into the
+// water — the old 3D mirrored-fleet pass (a ceramic pot swimming underwater)
+// is gone. A real reflection of an object above the surface appears as an
+// upright, darkened SMEAR anchored at the object's waterline contact, seen
+// along the MIRRORED view ray; where the surface is disturbed it smears
+// further and breaks apart. Returns rgb = near-black ghost tint,
+// a = coverage.
+vec4 fleetGhost(vec3 V, vec3 pos, float bump) {
+    // mirrored view ray (surface -> sky): reflect about the y=0 plane
+    vec3 rd = vec3(-V.x, V.y, -V.z);
+    float elev = clamp(rd.y / max(length(rd.xz), 1e-4), 0.0, 1.5);
+    // ghosts live at GRAZING reflection angles — looking straight down at
+    // the water next to a pot shows the body, not the mirror
+    float ground = clamp(1.0 - elev * 1.25, 0.0, 1.0);
+    ground *= ground;
+
+    // the pot's waterline contact is at pos.y ~ -2 (pot bottom); march the
+    // mirrored ray back up to the pot's hull (up to ~9 m tall) and ghost it
+    float ht01 = clamp((-2.0 - pos.y) / 9.0, 0.0, 1.0);
+    vec2 dirXZ = normalize(rd.xz + vec2(1e-5));
+    vec2 base = pos.xz + dirXZ * (2.0 * ht01) * (1.0 + 0.6 * elev);
+
+    // the ripple field smears the ghost — image wobble grows with bump
+    float sway = sin(base.x * 1.7 + base.y * 1.3 + uTime * 1.1)
+               + sin(base.x * 0.9 - base.y * 2.1 - uTime * 0.7);
+    base += dirXZ * sway * (0.05 + 0.35 * bump);
+
+    // upright smear: a tight core at the waterline stretching upward with
+    // the pot height, loosening fast where rings disturb the surface
+    float smear = 0.55 + 2.6 * ht01 + 2.0 * bump;
+    float fade = 1.0 - 0.55 * ht01;         // the top of the ghost dies first
+    vec2 dv = pos.xz - base;
+    float ghost = ground * fade * exp(-dot(dv, dv) / (smear * smear));
+
+    return vec4(0.008, 0.012, 0.020, clamp(ghost * 1.35, 0.0, 1.0));
+}
+
 void main() {
     vec3 V = normalize(uEyePos - vWorld);
     float dist01 = clamp(length(uEyePos - vWorld) / 120.0, 0.0, 1.0); // for body depth
@@ -177,6 +214,10 @@ void main() {
     float mirror = F_Schlick(NoV, 0.02);
     mirror = clamp(mirror * 1.35, 0.02, 0.55);   // tuned: room reads as pool, not chrome
     vec3 col = mix(body, refl, clamp(mirror, 0.0, 1.0));
+    // the fleet's 2D black ghosts ride ON TOP of the Fresnel mix — they are
+    // the pots' reflections, not part of the sky mirror
+    vec4 ghost = fleetGhost(V, vWorld, bump);
+    col = mix(col, ghost.rgb, clamp(ghost.a, 0.0, 1.0));
     // Water absorbs red as light travels through it: even the REFLECTED
     // light that skirts the surface picks up a cool cast, which keeps the
     // pool reading blue at plane-level views instead of warm-pink.
