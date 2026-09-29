@@ -75,9 +75,9 @@ vec3 poolEnv(vec3 dir) {
         vec3 albedo = vec3(0.42, 0.40, 0.40);
         return albedo * (0.45 + 0.55 * horiz);
     }
-    // rays that plunge into the pool: the deep water mass, brighter near
-    // the surface
-    return mix(vec3(0.10, 0.42, 0.62), vec3(0.028, 0.150, 0.300), clamp(-up, 0.0, 1.0));
+    // rays that plunge into the pool: faint NEUTRAL aqua (the reference
+    // look: clear water with a whisper of cyan, not a blue dye)
+    return mix(vec3(0.35, 0.52, 0.58), vec3(0.10, 0.28, 0.38), clamp(-up, 0.0, 1.0));
 }
 
 void main() {
@@ -172,7 +172,8 @@ void main() {
     // aerated foam; where it is still a continuous sheet it stays glassy.
     // (declared AFTER fingers/tear — strict drivers reject forward refs)
     float foam = (1.0 - fingers) * tear * smoothstep(0.15, 0.85, vParam);
-    foam = clamp(foam * 1.7, 0.0, 1.0);
+    foam = clamp(foam * 1.3, 0.0, 1.0);          // clearer film: less milk,
+                                                 // matching the reference
 
     // ---- PHOTOREAL FILM SHADING ------------------------------------------
     // Real water-film optics, three ingredients:
@@ -207,7 +208,8 @@ void main() {
 
     // Beer-Lambert absorption through the film thickness: deep film tints
     // toward the saturated body colour, torn thin film stays watery-bright
-    vec3 absorb = vec3(0.35, 0.08, 0.04);        // per-unit-film-thickness
+    vec3 absorb = vec3(0.10, 0.04, 0.03);        // near-neutral (clear water:
+                                                 // barely tints, faint cyan only)
     vec3 filmTint = exp(-absorb * thick * 2.4);
     // THICKNESS FLUTTER: the film's optical path length breathes with the
     // micro-ripple field — transmission visibly SWIMS across the face-on
@@ -247,6 +249,9 @@ void main() {
                                   + vParam * 3.0 - uTime * 2.6);
     col *= 0.72 + 0.34 * fingers * (0.35 + 0.65 * vParam)   // crest vs trough
          + 0.14 * streak;                                    // radial striations
+    // BRIGHT THIN RIMS: every finger edge glows where the film thins to
+    // nothing (the defining look of a real crown against a bright room)
+    col += uLightTint * pow(edge, 3.0) * 0.30;
 
     // light answer: broad diffuse wrap + the microfacet glint + a faint
     // bright rim where fingers pinch off (thin edges catch the light)

@@ -756,7 +756,7 @@ static void SpawnSplash(int pot, float x, float z, float impactSpeed, float scal
   // crowns carry more energy: a thicker sheet, more ejecta, and torn sheet
   // fragments (fat droplets) that break off the crown rim mid-air and land
   // as their own secondary splashes.
-  int n = (26 + (int)(16.0f * s)) * (waveTwo ? 2 : 1);
+  int n = (52 + (int)(24.0f * s)) * (waveTwo ? 2 : 1);
   for (int i = 0; i < n; i++) {
     // fixed pseudo-random spread (deterministic across runs like the rest
     // of the bench)
@@ -769,14 +769,15 @@ static void SpawnSplash(int pot, float x, float z, float impactSpeed, float scal
     d.pos = {x + std::cos(a) * rimR,
              kWaterLevel + 0.15f + 0.5f * crown.height * r01,
              z + std::sin(a) * rimR};
-    // mostly outward + moderate up: real crown ejecta travels far sideways
-    float out = (1.6f + 2.8f * s * (0.35f + 0.65f * r01)) * scale;
-    float up = 1.6f + 2.6f * s * r01;
+    // mostly outward + solid up: the reference crown throws a wide halo of
+    // discrete droplets arcing well above the sheet
+    float out = (2.0f + 3.2f * s * (0.35f + 0.65f * r01)) * scale;
+    float up = 2.2f + 3.2f * s * r01;
     d.vel = {std::cos(a) * out, up, std::sin(a) * out};
     d.radius = (0.035f + 0.045f * ((i * 13) % 7) / 7.0f) * scale;
     if (fragment) d.radius *= 1.6f; // torn sheet chunk (2.3x ballooned the
                                     // sprites into white overlap clouds)
-    d.maxLife = d.life = (0.9f + 0.6f * ((i * 29) % 5) / 5.0f) *
+    d.maxLife = d.life = (1.0f + 0.6f * ((i * 29) % 5) / 5.0f) *
                          (waveTwo ? 1.15f : 1.0f);
     gDroplets.push_back(d);
   }

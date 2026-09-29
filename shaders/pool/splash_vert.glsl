@@ -38,16 +38,19 @@ float hash(float n) {
 // drift), not just in spike height. Two extra octaves + the radius wobble
 // make every crown unique instead of a lathed 8-point star.
 float spikeField(float a, float t) {
+    // THIN-FINGER SPECTRUM: weight toward the higher octaves so the crown
+    // tears into many thin sharp fingers (the reference look) instead of a
+    // few fat lobes
     float v = 0.0;
-    v += sin(a * 6.2831853 * 8.0 + t * 0.7) * 0.55;
-    v += sin(a * 6.2831853 * 13.0 - t * 1.1) * 0.30;
-    v += sin(a * 6.2831853 * 21.0 + t * 1.7) * 0.15;
-    v += sin(a * 6.2831853 * 34.0 - t * 2.3) * 0.09;   // fine tearing octave
-    v += sin(a * 6.2831853 * 5.0 + t * 0.35) * 0.22;   // broad lobe drift
+    v += sin(a * 6.2831853 * 8.0 + t * 0.7) * 0.45;
+    v += sin(a * 6.2831853 * 13.0 - t * 1.1) * 0.35;
+    v += sin(a * 6.2831853 * 21.0 + t * 1.7) * 0.30;
+    v += sin(a * 6.2831853 * 34.0 - t * 2.3) * 0.12;   // fine tearing octave
+    v += sin(a * 6.2831853 * 5.0 + t * 0.35) * 0.18;   // broad lobe drift
     // CROWN-TOP SHARPENING: real finger tips TAPER to points while the sheet
     // between fingers sags rounded. A nonlinear boost on the positive lobes
     // rises the spikes into sharp crests without touching the troughs.
-    v += 0.45 * max(v, 0.0) * max(v, 0.0);
+    v += 0.35 * max(v, 0.0) * max(v, 0.0);
     return v;
 }
 
