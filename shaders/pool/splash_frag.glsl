@@ -23,6 +23,7 @@ uniform vec3 uWaterB;  // deep pool-water body blue
 uniform vec3 uTileA;   // hot white checker tile (linear) — the room's dome
 uniform vec3 uTileB;   // deep pure red checker tile — the room's dome
 uniform float uTime;
+uniform float uJet;    // 0 = crown sheet, 1 = central Worthington jet cone
 out vec4 fragColor;
 
 // ---- Cook-Torrance terms (same forms as water_frag.glsl) -----------------
@@ -106,13 +107,6 @@ void main() {
     float diff = max(dot(N, normalize(uLightDir)), 0.0);
     vec3 H = normalize(V + normalize(uLightDir));
 
-    // FOAM WHITENING: a crumbling sheet is not clear water — entrained air
-    // bubbles scatter ALL wavelengths. The whiteness follows the tear field:
-    // where the film is disintegrating (low fingers, high tear) it reads as
-    // aerated foam; where it is still a continuous sheet it stays glassy.
-    float foam = (1.0 - fingers) * tear * smoothstep(0.15, 0.85, vParam);
-    foam = clamp(foam * 1.7, 0.0, 1.0);
-
     // ---- irregular, CRAWLING tearing ----
     // smooth phase warps (NOT per-pixel hash: the crown is only a few
     // hundred pixels around, unfiltered noise would alias to glitter) with
@@ -148,6 +142,14 @@ void main() {
     float camDist = length(uEyePos - vWorld);
     sheet = smoothstep(0.30 - 0.15 * clamp(camDist / 90.0, 0.0, 1.0),
                        0.75, sheet);
+
+    // FOAM WHITENING: a crumbling sheet is not clear water — entrained air
+    // bubbles scatter ALL wavelengths. The whiteness follows the tear field:
+    // where the film is disintegrating (low fingers, high tear) it reads as
+    // aerated foam; where it is still a continuous sheet it stays glassy.
+    // (declared AFTER fingers/tear — strict drivers reject forward refs)
+    float foam = (1.0 - fingers) * tear * smoothstep(0.15, 0.85, vParam);
+    foam = clamp(foam * 1.7, 0.0, 1.0);
 
     // ---- PHOTOREAL FILM SHADING ------------------------------------------
     // Real water-film optics, three ingredients:
@@ -239,5 +241,22 @@ void main() {
     alpha += collar * 0.30;
     alpha += edge * (1.0 - thick) * 0.15;             // pinched-off rim glint
     alpha += beadBand * beads * 0.25;                 // droplet beads catch light
+
+    // ---- WORTHINGTON JET MODE (uJet = 1): the central column erupting
+    // from the crown's middle — the element every real splash has that a
+    // lone ring lacks (high-speed footage: crown first, then the jet
+    // spikes up through it, shedding droplets). Same film optics, tuned
+    // for a fast column: near-mirror grazing sides (vertical walls seen
+    // from afar), heavy wind-driven aerated breakup along the column.
+    if (uJet > 0.5) {
+        float jetFade = 1.0 - smoothstep(0.78, 0.98, camDist / 90.0); // pop-in veil
+        vec3 jcol = mix(envMirror * 1.25, envRefr * 0.8, fres * 0.45); // glassy column
+        jcol += uLightTint * glint * 0.9;                              // strong glint
+        float aerate = 0.35 + 0.65 * grain;                            // crawling breakup
+        jcol = mix(jcol, vec3(0.92, 0.96, 1.0), (1.0 - aerate) * 0.55);// aeration foam
+        float jalpha = (0.55 + 0.40 * edge) * aerate * jetFade;
+        fragColor = vec4(jcol, clamp(jalpha, 0.0, 1.0));
+        return;
+    }
     fragColor = vec4(col, alpha);
 }

@@ -1301,8 +1301,27 @@ static void DrawCrowns(const Mat4 &view, double now) {
     glUniform1f(gSplashProg.loc("uSpike"), c.spike);
     // Per-pot spike animation phase so nine crowns don't pulse in lockstep.
     glUniform1f(gSplashProg.loc("uPhase"), (float)i * 1.7f);
+    glUniform1f(gSplashProg.loc("uJet"), 0.0f);
     glDrawElements(GL_TRIANGLES, gCrownVertexCount, GL_UNSIGNED_INT, nullptr);
   }
+  // WORTHINGTON JET CONES: the central column erupting through each crown's
+  // middle — the element every real splash has that a lone ring lacks
+  // (high-speed footage: crown first, then the Rayleigh jet spikes up
+  // through it, shedding droplets). The crown mesh doubles as the jet cone
+  // via uJet=1 in the fragment shader; the sprite jets below add the
+  // droplet texture around it.
+  for (int i = 0; i < kFleetCount; i++) {
+    const JetColumn &jet = gJets[i];
+    if (!jet.active || jet.height <= 0.02f) continue;
+    glUniform3f(gSplashProg.loc("uCenter"), jet.center.x, jet.center.y, jet.center.z);
+    glUniform1f(gSplashProg.loc("uRadius"), jet.radius + 0.10f);
+    glUniform1f(gSplashProg.loc("uHeight"), jet.height * 1.15f);
+    glUniform1f(gSplashProg.loc("uSpike"), 0.9f);
+    glUniform1f(gSplashProg.loc("uPhase"), (float)i * 1.7f);
+    glUniform1f(gSplashProg.loc("uJet"), 1.0f);
+    glDrawElements(GL_TRIANGLES, gCrownVertexCount, GL_UNSIGNED_INT, nullptr);
+  }
+  glUniform1f(gSplashProg.loc("uJet"), 0.0f);
   glBindVertexArray(0);
   glDisable(GL_BLEND);
   glDepthMask(GL_TRUE);
@@ -1326,7 +1345,7 @@ static void DrawJets(const Mat4 &view, const Vec3 &eye) {
     if (!jet.active || jet.height <= 0.01f) continue;
     Vec3 toCam = Vec3Normalize(Vec3Sub(eye, jet.center));
     float a = std::atan2(toCam.x, toCam.z);
-    const float fade = std::fmin(1.0f, 1.3f - jet.life * 0.3f) * 0.62f;
+    const float fade = std::fmin(1.0f, 1.3f - jet.life * 0.3f) * 0.85f;
     const float halfW = jet.radius;
     for (int pass = 0; pass < 2; pass++) {
       float aa = a + pass * 1.5707963f;
