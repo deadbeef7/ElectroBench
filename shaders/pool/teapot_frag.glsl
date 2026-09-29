@@ -30,6 +30,29 @@ uniform float uTime;
 
 out vec4 fragColor;
 
+// ---- full Cook-Torrance terms (mirrors water_frag.glsl) --------------------
+float D_GGX(float NoH, float a2) {
+    float d = NoH * NoH * (a2 - 1.0) + 1.0;
+    return a2 / (3.14159265 * d * d);
+}
+float V_SmithGGX(float NoV, float NoL, float a2) {
+    float a = sqrt(a2);
+    float gv = NoL * sqrt(NoV * NoV * (1.0 - a2) + a2);
+    float gl = NoV * sqrt(NoL * NoL * (1.0 - a2) + a2);
+    return 0.5 / max(gv + gl, 1e-4);
+}
+float F_Schlick(float u, float F0) {
+    float f = pow(1.0 - u, 5.0);
+    return F0 + (1.0 - F0) * f;
+}
+// ACES filmic tone curve (Narkowicz fit) — the highlight roll-off Hollywood
+// cameras show: saturated colours stay saturated into the shoulder instead
+// of washing to white the way Reinhard does.
+vec3 ACESFilm(vec3 x) {
+    const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
+    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
+
 void main() {
     vec3 N = normalize(vNormal);
     vec3 V = normalize(uEyePos - vWorld);
@@ -58,8 +81,10 @@ void main() {
 
     vec3 H = normalize(V + L);
     float NdH = max(dot(N, H), 0.0);
-    float dGGX = a2 / (3.14159265 * pow(NdH * NdH * (a2 - 1.0) + 1.0, 2.0));
-    float diff = clamp(dot(N, L), 0.0, 1.0);
+    float NoV = clamp(dot(N, V), 1e-3, 1.0);
+    float NoL = clamp(dot(N, L), 0.0, 1.0);
+    float dGGX = D_GGX(NdH, a2) * V_SmithGGX(NoV, NoL, a2) * 4.0;
+    float diff = NoL;
 
     // anisotropic wet streaks: vertical drips shear the grazing sheen along
     // the pot's local V direction; stronger on wet ceramic, weakest on bone-
@@ -118,9 +143,20 @@ void main() {
     float meniscus = exp(-pow((vWorld.y - uWaterLine) * 12.0, 2.0));
     col += uLightTint * meniscus * wet * 0.10;
 
-    // tone-map without the knee: plain Reinhard keeps the ceramic's colour
-    // from desaturating into grey plastic.
-    col = col / (col + vec3(0.9));
+    // CLEAR-COAT GLAZE (the modern ceramic/car-paint trick): a thin smooth
+    // lacquer over the shaded base — a second, sharper GGX lobe with its own
+    // Fresnel. Glazed ceramic reads as TWO layers (matte body + lacquer),
+    // which is exactly what separates a rendered teapot from a matte blob.
+    float ccA2 = 0.012;                              // very smooth lacquer
+    float ccD = D_GGX(NdH, ccA2);
+    float ccV = V_SmithGGX(NoV, NoL, ccA2);
+    float ccF = F_Schlick(NoV, 0.05);                // lacquer F0 ~ 0.05
+    vec3 clearcoat = uLightTint * (ccD * ccV * ccF * 4.0) * 0.55;
+    col += clearcoat * mix(0.5, 1.0, wet);           // wetter = glossier coat
+
+    // ACES filmic tonemap: colours stay saturated into the highlight shoulder
+    // (Reinhard's washed-out white rim is the last big 'CGI' tell).
+    col = ACESFilm(col);
     col = clamp(col, 0.0, 1.0);
     col = pow(col, vec3(1.0 / 2.2));
 

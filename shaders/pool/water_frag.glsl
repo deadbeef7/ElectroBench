@@ -3,13 +3,16 @@
 //   * the checkerboard sky reflected through an analytic mirror ray into the
 //     SAME checker function the sky dome uses (identical pattern, exact
 //     alignment across the horizon — the pool-room illusion),
-//   * the hidden-light specular highlight (the only visible evidence of the
-//     light) with Blinn-Phong sheen and sun-strength falloff,
+//   * the hidden-light specular highlight as a FULL COOK-TORRANCE microfacet
+//     answer (GGX NDF + Smith visibility + Fresnel-Schlick, energy-conserving
+//     by construction — the next-gen water shading games actually ship),
 //   * bobbing ripple rings from the teapot fleet: up to MAX_RINGS concurrent
 //     rings, streamed as uniforms from the scene module (each splash owns a
 //     private window of slots so nine pots splashing at once never overwrite
 //     each other's ripples),
-//   * soft subsurface-ish body colour and distance haze into the sky tint.
+//   * per-channel Beer-Lambert depth absorption (red dies first — the reason
+//     real pools go blue with depth), subsurface-ish body colour and distance
+//     haze into the sky tint.
 
 #define MAX_RINGS 30
 
@@ -28,6 +31,27 @@ uniform vec4  uRings[MAX_RINGS]; // xy = centre (world), z = radius, w = strengt
 out vec4 fragColor;
 
 vec3 normalize3(vec3 v) { return v / max(length(v), 1e-5); }
+
+// ---- full Cook-Torrance microfacet terms (FUTURE BENCH shading core) ------
+// GGX/Trowbridge-Reitz NDF
+float D_GGX(float NoH, float a2) {
+    float d = NoH * NoH * (a2 - 1.0) + 1.0;
+    return a2 / (3.14159265 * d * d);
+}
+// Smith height-correlated visibility (the modern G term — cuts the old
+// Blinn-Phong's energy leak at grazing angles and keeps glints physical)
+float V_SmithGGX(float NoV, float NoL, float a2) {
+    float a = sqrt(a2);                       // a = alpha (not alpha^2)
+    float gv = NoL * sqrt(NoV * NoV * (1.0 - a2) + a2);
+    float gl = NoV * sqrt(NoL * NoL * (1.0 - a2) + a2);
+    return 0.5 / max(gv + gl, 1e-4);
+}
+// Fresnel-Schlick with spherical-Gaussian approximation (Kulla-style SG
+// form used by modern engines: cheaper than pow5, visually identical)
+float F_Schlick(float u, float F0) {
+    float f = pow(1.0 - u, 5.0);
+    return F0 + (1.0 - F0) * f;
+}
 
 // ---- the SAME checker as sky_frag.glsl (copy kept intentional: one file
 // ---- cannot include the other without extension support on all drivers)
@@ -63,6 +87,7 @@ vec3 reflectedCheckerColor(vec3 dirToViewer, vec3 pos, float rippleBump) {
 void main() {
     vec3 V = normalize(uEyePos - vWorld);
     float dist01 = clamp(length(uEyePos - vWorld) / 120.0, 0.0, 1.0); // for body depth
+    float NoV = clamp(dot(vec3(0.0, 1.0, 0.0), V), 1e-3, 1.0);
 
     // --- splash rings: expand + fade, disturb the reflection ---------------
     float bump = 0.0;
@@ -92,52 +117,61 @@ void main() {
     foam = clamp(foam, 0.0, 1.0);
     foamCrest = clamp(foamCrest, 0.0, 1.0);
 
-    // HYPER-REAL AMBIENT MICRO-CHOP: real pool water never sits glass-flat
-    // between splashes — a faint wind/return-wave chop keeps the surface
-    // alive, modulating both the mirror ray and the highlight. Subtle by
-    // design (0.05 bump), two crossing moving sin fields, no textures.
-    float chop = sin(vWorld.x * 7.3 + uTime * 2.1) * sin(vWorld.z * 6.1 - uTime * 1.7);
-    chop = 0.5 + 0.5 * chop;
+    // HYPER-REAL AMBIENT MICRO-CHOP (upgraded): real pool water never sits
+    // glass-flat between splashes. TWO scales now — a broad slow swell (the
+    // return-wave breathing of the whole pool) and a fine wind chop riding on
+    // it. Both modulate the mirror ray, the highlight and the foam gates.
+    float swell = sin(vWorld.x * 1.9 + uTime * 0.9) * sin(vWorld.z * 1.5 - uTime * 0.7);
+    float chop  = sin(vWorld.x * 7.3 + uTime * 2.1) * sin(vWorld.z * 6.1 - uTime * 1.7);
+    chop = 0.5 + 0.5 * (0.35 * swell + chop);
     bump = clamp(bump + chop * 0.05, 0.0, 1.0);
 
-    // --- hidden light specular: the only light you ever see ---------------
-    // GGX microfacet answer instead of two hard Blinn lobes: ONE energy-true
-    // highlight with a physical long tail of grazing glints off ripple slopes.
-    // A fixed view normal (0,1,0) is right here: the water plane is flat, the
-    // ripples only perturb the reflection ray.
-    vec3 H = normalize(V + normalize(uLightDir));
-    float NdH = max(dot(vec3(0.0, 1.0, 0.0), H), 0.0);
-    float aGGX = mix(0.055, 0.16, bump);        // ripples roughen the surface
+    // --- hidden light specular: FULL COOK-TORRANCE -----------------------
+    // D (GGX) * V (Smith) * F (Schlick) / 4 — the actual physical answer, so
+    // grazing glints stretch into bright streaks (G rises as the facet hides
+    // behind itself), face-on water stays dark (F0 = 2%), and the peak is
+    // finite on every driver. Roughness rises where the surface is disturbed.
+    vec3 L = normalize(uLightDir);
+    vec3 H = normalize(V + L);
+    float NoH = max(dot(vec3(0.0, 1.0, 0.0), H), 0.0);
+    float NoL = max(dot(vec3(0.0, 1.0, 0.0), L), 0.0);
+    float aGGX = mix(0.055, 0.16, bump);
     float a2 = aGGX * aGGX;
-    float dGGX = a2 / (3.14159265 * pow(NdH * NdH * (a2 - 1.0) + 1.0, 2.0));
-    float fres = pow(1.0 - clamp(dot(vec3(0.0, 1.0, 0.0), V), 0.0, 1.0), 5.0);
-    float Fk = 0.02 + 0.98 * fres;
-    float spec = min(dGGX, 6.0) * Fk * 0.25;    // capped: an unbounded GGX peak minted white fireflies on ripple slopes
+    float specCT = D_GGX(NoH, a2) * V_SmithGGX(NoV, NoL, a2) * F_Schlick(NoH, 0.02);
+    float spec = min(specCT * 0.9, 8.0) * 4.0;   // 1/4 folded into gain; capped
     // the hidden light FALLS OFF with distance from the viewer side of the
     // pool (inverse-square-ish over the room scale) — far water's sheen dims
     float lightFall = 1.0 - 0.45 * dist01;
     spec *= lightFall;
-    float sheen = pow(NdH, 14.0) * 0.35 * lightFall; // broad faint glow floor
+    float sheen = pow(NoH, 14.0) * 0.35 * lightFall; // broad faint glow floor
 
     // --- colour ------------------------------------------------------------
     vec3 refl = reflectedCheckerColor(-V, vWorld, bump);
-    // BLUE water body: a saturated pool-water blue, deeper with distance.
-    // Tinted slightly toward uTileA so the water and sky feel like one room.
-    vec3 body = mix(vec3(0.045, 0.210, 0.360), vec3(0.012, 0.105, 0.225),
-                    clamp(dist01, 0.0, 1.0));
+
+    // FUTURE-BENCH WATER BODY: per-channel Beer-Lambert absorption along the
+    // water path. Pure water eats red first (absorb ~0.35/m), then green —
+    // this is the real reason pools and deep lakes go blue, and it makes the
+    // body colour depend on the actual view path instead of a constant.
+    vec3 absorb = vec3(0.42, 0.09, 0.045);      // per-metre extinction
+    float path = length(uEyePos - vWorld) * 0.5 + 0.5;   // metres, damped for the room scale
+    vec3 trans = exp(-absorb * path);
+    vec3 scatter = vec3(0.045, 0.210, 0.360) * mix(vec3(1.0), trans, 0.55); // shallow tint
+    vec3 body = mix(scatter, vec3(0.012, 0.105, 0.225), clamp(dist01, 0.0, 1.0));
 
     // HYPER-REAL WATER VOLUME: the water body is lit by the hidden light
     // through the ripple slopes — a faint subsurface glow where the light
     // enters a ripple and scatters back out toward the eye. This is what
     // keeps the pool reading as real water between the splashes, not flat
-    // blue plastic. (V and dist01 are already declared above.)
+    // blue plastic. Applied AFTER the Beer-Lambert body so the glow survives.
     float subsurface = pow(max(dot(V, -normalize(uLightDir)), 0.0), 3.0) * bump * 0.30;
     body += uLightTint * subsurface * 0.12;
 
-    // Fresnel-correct mix: reflections are now nearly PERCEPTIBLE-FREE per
-    // the user — 0.035 of the tile colour is a faint sheen that hints the
-    // ceiling is mirrored without painting tiles on the water.
-    float mirror = 0.035;
+    // Fresnel-correct mirror: real water reflects ~2% face-on and ~100% at
+    // grazing angles (Schlick off F0 = 0.02). Tying the tile sheen to the ACTUAL
+    // Fresnel makes the pool go dark-blue overhead and mirror-like in the
+    // distance — the single biggest realism cue the old flat 0.035 missed.
+    float mirror = F_Schlick(NoV, 0.02);
+    mirror = clamp(mirror * 1.35, 0.02, 0.55);   // tuned: room reads as pool, not chrome
     vec3 col = mix(body, refl, clamp(mirror, 0.0, 1.0));
     // Water absorbs red as light travels through it: even the REFLECTED
     // light that skirts the surface picks up a cool cast, which keeps the

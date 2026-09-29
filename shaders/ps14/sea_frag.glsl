@@ -32,6 +32,27 @@ uniform vec3  uSunDir;
 uniform vec3  uHorizonColor;
 uniform vec3  uWaterColor;
 
+// ---- full Cook-Torrance terms (FUTURE-BENCH sea shading) -------------------
+float D_GGX(float NoH, float a2) {
+    float d = NoH * NoH * (a2 - 1.0) + 1.0;
+    return a2 / (3.14159265 * d * d);
+}
+float V_SmithGGX(float NoV, float NoL, float a2) {
+    float a = sqrt(a2);
+    float gv = NoL * sqrt(NoV * NoV * (1.0 - a2) + a2);
+    float gl = NoV * sqrt(NoL * NoL * (1.0 - a2) + a2);
+    return 0.5 / max(gv + gl, 1e-4);
+}
+float F_Schlick(float u, float F0) {
+    float f = pow(1.0 - u, 5.0);
+    return F0 + (1.0 - F0) * f;
+}
+// local surface steepness 0..1 from the wave-gradient magnitude: real white
+// water forms where waves actually TILT sharply (crest + wind), which is a
+// different gate from height alone.
+float steepnessGate(vec2 grad) {
+    return clamp(length(grad) * 0.85, 0.0, 1.0);
+}
 #define MAX_CLOUDS 9             // must match sky_frag.glsl and tidebench.cxx
 uniform int   uCloudCount;
 uniform float uCloudPhase[MAX_CLOUDS]; // cloud-local aging frame, matches sky_frag.glsl
@@ -353,7 +374,13 @@ void main() {
     float patchNoise = cloudErosion(vUV * 90.0 + vec2(uTime * 0.0010, -uTime * 0.0006));
     patchNoise = patchNoise * 0.70 + 0.30 *
         cloudErosion(vUV * 330.0 + vec2(-uTime * 0.0012, uTime * 0.0008) + 41.7);
+    // WAVE STEEPNESS GATE (FUTURE-BENCH foam): white water forms where waves
+    // TILT, not merely where they rise — a sharp bank lit from behind breaks
+    // long before a tall swell does. Tie the foam gate to the analytic gradient
+    // so foam hugs the breaking faces exactly where the geometry says so.
+    float steep = steepnessGate(grad);
     float crest = smoothstep(0.55, 1.25, hC + (patchNoise - 0.5) * 0.70)
+                * mix(0.55, 1.0, steep)          // steep faces foam earlier
                 * mix(0.25, 1.0, shadow);
     // NOTE: no identifier named "patch" — it is a reserved keyword in
     // several GLSL front-ends (NVIDIA rejects it even under #version 330).
@@ -434,28 +461,25 @@ void main() {
     // side. Killed entirely inside cloud shadows, tinted orange, and the
     // sparkle variance rides the ripple chaos.
     //
-    // HYPER-REAL GLITTER: real water glitter is a bright sparkly path WITH a
-    // softer warm sheen spread under it; the sheen is wider and tints the whole
-    // sun-facing column a little warm, not just isolated sparkles. Add a small
-    // broad warm sheen under the tight sparkles so the path reads as a sun path
-    // on water, not as random white dots.
+    // HYPER-REAL GLITTER — FULL COOK-TORRANCE: the sun path is now a real
+    // microfacet answer (D * V * F / 4) instead of a bare NDF lobe. Smith G is
+    // what stretches grazing glints into long streaks (the physical reason a
+    // low sun paints a road of light) and Schlick F0 keeps face-on water dark.
     vec3 H = normalize(L + V);
     float NdH = max(dot(N, H), 0.0);
+    float NoV = max(dot(N, V), 1e-3);
+    float NoL = max(dot(N, L), 0.0);
     float pathGate = pow(sunAlign, 10.0) * 0.96 + 0.04;
     float sparkleGate = (0.55 + 0.90 * chaos);
-    // SUN GLINT COLUMN, FINAL: one broad footprint-safe GGX lobe. The
-    // lobe alpha is widened by the per-pixel NdH gradient — where detail
-    // normals flicker (the noise the sun used to spotlight), the lobe
-    // smears wider than the noise and the column renders SMOOTH; near
-    // camera it keeps its shape. Gain contrast with ripple chaos is cut
-    // to a whisper (0.10 + 0.04c) so the sun no longer amplifies noise.
+    // footprint-safe lobe: widen alpha by the per-pixel NdH gradient so the
+    // lobe always covers the noise the pixel spans (no fireflies, any driver).
     float rough = clamp(0.40 + 0.35 * chaos, 0.0, 0.95);
     float aGGX = max(0.30, (1.0 - rough) * 0.62);
     float ndhGrad = fwidth(NdH);
     aGGX = sqrt(aGGX * aGGX + ndhGrad * ndhGrad * 24.0);
     float a2 = aGGX * aGGX;
-    float dGGX = a2 / (PI * pow(NdH * NdH * (a2 - 1.0) + 1.0, 2.0));
-    float spark = min(dGGX * (0.10 + 0.04 * chaos), 0.60);
+    float specCT = D_GGX(NdH, a2) * V_SmithGGX(NoV, NoL, a2) * F_Schlick(NoV, 0.02);
+    float spark = min(specCT * (0.10 + 0.04 * chaos), 0.60);
     // broad warm sheen under the sparkles: a lower exponent, lower gain, still
     // gated to the sun path and shadow, so the whole path warms a little.
     float sheen = pow(NdH, 6.0) * 0.06 * pathGate * shadow;
