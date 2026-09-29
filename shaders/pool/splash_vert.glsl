@@ -32,12 +32,27 @@ float hash(float n) {
 
 // smooth pseudo-noise around the ring: 8 fixed spikes + 13 wobble spikes
 // (+ a per-crown phase so a fleet of crowns never pulses in lockstep)
+// FUTURE-BENCH CROWN GEOMETRY: real Worthington crowns are not rotationally
+// symmetric — the sheet is thicker where the pot's own cavity walls were
+// roughest, so the whole crown ring WOBBLES in radius (2nd-order azimuthal
+// drift), not just in spike height. Two extra octaves + the radius wobble
+// make every crown unique instead of a lathed 8-point star.
 float spikeField(float a, float t) {
     float v = 0.0;
     v += sin(a * 6.2831853 * 8.0 + t * 0.7) * 0.55;
     v += sin(a * 6.2831853 * 13.0 - t * 1.1) * 0.30;
     v += sin(a * 6.2831853 * 21.0 + t * 1.7) * 0.15;
+    v += sin(a * 6.2831853 * 34.0 - t * 2.3) * 0.09;   // fine tearing octave
+    v += sin(a * 6.2831853 * 5.0 + t * 0.35) * 0.22;   // broad lobe drift
     return v;
+}
+
+// second-order radius wobble: the crown is NOT a circle. Low-frequency
+// azimuthal drift that multiplies the ring radius itself — the sheet bulges
+// where it tears, exactly like the high-speed footage of real crowns.
+float radiusWobble(float a, float t, float phase) {
+    return 1.0 + 0.18 * sin(a * 6.2831853 * 2.0 + phase * 3.1 + t * 0.9)
+              + 0.10 * sin(a * 6.2831853 * 3.0 - phase * 1.7 - t * 1.4);
 }
 
 void main() {
@@ -51,7 +66,10 @@ void main() {
     spikes += uSpike * 0.35 * sin(aAngleH.x * 6.2831853 * 26.0 +
                                   uTime * 2.3 + uPhase * 1.3);
     float hMul = 1.0 + uSpike * spikes * hp;
-    float rMul = 1.0 + uSpike * 0.35 * spikes * hp;
+    // radius wobble is part of the ring shape now (not just spike height):
+    // the crown bulges asymmetrically as it tears, like real high-speed
+    // footage — this is the "not CGI" geometry cue.
+    float rMul = (1.0 + uSpike * 0.35 * spikes * hp) * radiusWobble(aAngleH.x, uTime + uPhase, uPhase);
 
     vec3 pos = uCenter + vec3(cos(ang) * uRadius * rMul,
                               uHeight * hp * hMul,

@@ -21,7 +21,6 @@ uniform vec3 uLightTint;
 uniform vec3 uWaterA;  // bright pool-water surface blue
 uniform vec3 uWaterB;  // deep pool-water body blue
 uniform float uTime;
-
 out vec4 fragColor;
 
 void main() {
@@ -38,6 +37,15 @@ void main() {
     float sweep = 0.5 + 0.5 * sin(sweepPhase * 3.0 +
                                   vWorld.x * 0.7 + vWorld.z * 0.9);
     vec3 env = mix(uWaterB, uWaterA, sweep);
+
+    // thickness-driven film: a real crown sheet is THIN at the rim and thick
+    // at the base, so it reflects at grazing angles (the rim glints) and
+    // transmits face-on (the body shows the water behind). Thin-film edge
+    // brightening — the first thing that separates real water film from
+    // moulded plastic — comes from tying alpha to the local thickness.
+    float thick = 1.0 - vParam;                       // 1 at base, 0 at rim
+    float filmTint = mix(0.72, 1.0, thick);           // thin rim -> brighter sheen
+    env *= filmTint;
 
     float edge = 1.0 - abs(dot(N, V));         // grazing = surface sheen
     float diff = max(dot(N, normalize(uLightDir)), 0.0);
@@ -80,7 +88,11 @@ void main() {
     // clamp below clip: no amount of overlap can saturate a solid white mass
     col = min(col, vec3(0.97, 0.96, 0.95));
 
-    // thin film alpha: transmission-dominant; the foam collar is denser
+    // thin film alpha: transmission-dominant; the foam collar is denser.
+    // Thickness-driven: thick base alpha up, thin rim nearly transparent with
+    // a BRIGHT grazing glint instead — real water sheets vanish at their rims.
     float alpha = (0.18 + edge * 0.38) * sheet + collar * 0.30;
+    alpha *= (0.55 + 0.45 * thick);
+    alpha += edge * (1.0 - thick) * 0.18;             // bright rim glint
     fragColor = vec4(col, alpha);
 }
