@@ -177,9 +177,7 @@ vec4 cloudSample(vec3 dir) {
     if (weight < 0.001) return vec4(0.0);
     return vec4(clamp(density, 0.0, 1.0),
                 heightSum / weight, baseSum / weight, clamp(edge, 0.0, 1.0));
-}
-
-// Dusk sky colour at a direction, shared by the gradient and the cloud
+}    // Dusk sky colour at a direction, shared by the gradient and the cloud
 // lighting: clouds are lit by the same sky they hang in, so the blue fill on
 // their shaded sides is the ACTUAL zenith/mid colour from that direction
 // instead of a constant.
@@ -187,8 +185,16 @@ vec3 skyGradient(vec3 dir, vec3 sd) {
     float hh = clamp(dir.y, 0.0, 1.0);
     vec3 s = mix(uHorizonColor, uMidColor, smoothstep(0.0, 0.14, hh));
     s = mix(s, uZenithColor, smoothstep(0.10, 0.38, hh));
+    // HYPER-REAL SKY FILL: real dusk sky is NOT an even warm gradient — the
+    // side facing the sun gets the warm scatter, the top is cool blue, and the
+    // anti-sun sky falls toward the dark Earth shadow. A directional falloff
+    // here already does that; add a gentle spatial softening so the gradient
+    // itself reads as atmospheric depth, not a painted dome.
     float sa = max(dot(dir, sd), 0.0);
-    return s * mix(0.22, 1.0, pow(sa, 4.0));
+    float shadowedWarmth = 0.22 + 0.78 * pow(sa, 4.0);
+    // push the brightest warm light toward the horizon band, not the zenith
+    float horizonBoost = smoothstep(0.0, 0.20, hh) * (1.0 - smoothstep(0.20, 0.60, hh));
+    return s * (shadowedWarmth + 0.08 * horizonBoost);
 }
 
 void main() {
@@ -322,8 +328,14 @@ void main() {
     // ball, not a bloom blob. Drawn last, attenuated by cloud cover.
     float cover = 1.0 - exp(-cl * 2.65);
     float disc = smoothstep(0.9977, 0.9992, sunAmount) * (1.0 - 0.88 * clamp(cover, 0.0, 1.0));
+    // halo stays tight and warm: real sun glare is a small bright disc with a
+    // soft warm halo, not a large bloom; collapse the halo with cloud cover so
+    // thin clouds don't erase the disc but heavy ones do.
     float halo = pow(sunAmount, 900.0) * 0.45 * (1.0 - 0.6 * clamp(cover, 0.0, 1.0));
-    sky = mix(sky, vec3(8.5, 4.6, 1.7), clamp(disc + halo, 0.0, 1.0));
+    // push the disc a touch warmer where it is brightest so the HDR core still
+    // reads orange after tone map (the previous hot white core washed to pale).
+    vec3 sunColHot = vec3(9.2, 5.1, 1.9);
+    sky = mix(sky, sunColHot, clamp(disc + halo, 0.0, 1.0));
 
     // Env-cubemap pass keeps HDR values (the sea shader tone maps after adding
     // glitter). The on-screen dome pass tone maps + gammas right here so the
