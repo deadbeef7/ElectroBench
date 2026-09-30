@@ -66,18 +66,22 @@ vec3 poolEnv(vec3 dir) {
     }
     // refracted rays: what you see THROUGH the film. The crown sits ABOVE
     // the waterline — through its upper sheet you see the far side of the
-    // room (bright tiles, horizon glow), NOT the seabed. Deep blue is only
-    // for rays that plunge steeply down. This single distinction is what
-    // separates real spray from the "blue cotton cloud" look.
-    if (up > 0.0) {
-        // grazing up-rays skim along the water plane: horizon glow
-        float horiz = 1.0 - up;
-        vec3 albedo = vec3(0.42, 0.40, 0.40);
-        return albedo * (0.45 + 0.55 * horiz);
+    // room (bright tiles, horizon glow), NOT the seabed. DE-DECLoud FIX:
+    // this branch used to be dead code (the mirror branch above already
+    // returned), so every near-horizontal transmitted ray fell through to
+    // the saturated cyan below — that WAS the "blue cotton envelope".
+    // A vertical sheet seen across the pool transmits almost-horizontal
+    // rays: they must show the BRIGHT room, not a blue dye.
+    if (up > -0.22) {
+        // skimming transmitted rays: the bright far room / horizon glow
+        float horiz = clamp(1.0 + up * 4.5, 0.0, 1.0); // fades as the ray steepens
+        vec3 albedo = vec3(0.62, 0.64, 0.65);          // near-neutral room light
+        return albedo * (0.55 + 0.45 * horiz);
     }
-    // rays that plunge into the pool: faint NEUTRAL aqua (the reference
-    // look: clear water with a whisper of cyan, not a blue dye)
-    return mix(vec3(0.35, 0.52, 0.58), vec3(0.10, 0.28, 0.38), clamp(-up, 0.0, 1.0));
+    // rays that plunge into the pool: CLEAR water, near-neutral with a
+    // whisper of cyan (the reference look — not a blue dye)
+    return mix(vec3(0.60, 0.72, 0.76), vec3(0.14, 0.32, 0.40),
+               clamp(-up * 1.35 - 0.18, 0.0, 1.0));
 }
 
 void main() {
@@ -263,7 +267,7 @@ void main() {
     col *= 0.72 + 0.55 * fingers * vParam + 0.18 * grain;
     // dense white-blue foam COLLAR at the water line (the crown base churns)
     float collar = exp(-pow((vParam - 0.05) * 7.0, 2.0));
-    col += vec3(0.72, 0.86, 0.98) * collar * 0.34;
+    col += vec3(0.84, 0.92, 0.98) * collar * 0.28;    // whiter, weaker collar
 
     // DROPLET BEADS: as the film tears, each finger's rim beads up into a
     // necklace of droplets — the last thing a real crown does before it
@@ -293,8 +297,17 @@ void main() {
     // PHYSICS alpha: transmission face-on (film nearly invisible), mirror at
     // grazing (bright sheen reads even at low alpha). Thickness raises alpha;
     // torn film (low sheet) fades to near-nothing.
-    float alpha = mix(0.06 + 0.24 * thick, 0.58 + 0.35 * edge, fres);
-    alpha = mix(alpha, 0.94, foam * 0.8);             // foam is nearly opaque
+    // DE-CLOUD: the film is a thin sheet, not a fog volume — face-on alpha
+    // floor cut ~40% and grazing sheen cut ~25% so stacked crowns read as
+    // discrete glassy films, never a translucent bank.
+    float alpha = mix(0.035 + 0.15 * thick, 0.44 + 0.26 * edge, fres);
+    alpha = mix(alpha, 0.88, foam * 0.7);             // foam is nearly opaque
+    // DISTANCE GATE: eighteen far crowns stacking 15%-alpha sheets across
+    // the horizon re-forms the fog bank even after every other fix. Real
+    // distant splashes read as thin bright flickers against the water, not
+    // translucent domes — fade the SHEET BODY with distance and let the rim
+    // glints (added to col below) carry the far-field splash.
+    alpha *= 1.0 - 0.65 * smoothstep(38.0, 78.0, camDist);
     alpha = clamp(alpha + burst * streaks * 0.5 + burst * dropletField * 0.35, 0.0, 1.0);
     alpha *= sheet;
     alpha += collar * 0.30;
@@ -318,7 +331,8 @@ void main() {
         float flutter = 0.78 + 0.22 * sin(vParam * 34.0 - uTime * 11.0
                                           + jitter * 4.0);
         jcol *= flutter;
-        float jalpha = (0.55 + 0.40 * edge) * aerate * jetFade * flutter;
+        float jalpha = (0.34 + 0.26 * edge) * aerate * jetFade * flutter; // slim,
+                                              // translucent column (de-cloud)
         fragColor = vec4(jcol, clamp(jalpha, 0.0, 1.0));
         return;
     }

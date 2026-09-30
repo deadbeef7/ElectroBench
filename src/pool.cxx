@@ -741,9 +741,9 @@ static void SpawnSplash(int pot, float x, float z, float impactSpeed, float scal
   crown.center = {x, kWaterLevel, z};
   crown.age = 0.0f;
   crown.scale = scale;
-  crown.radius = 0.30f * scale;
+  crown.radius = 0.24f * scale;
   crown.height = std::fmin((0.22f + 0.55f * s) * scale * (waveTwo ? 1.12f : 1.0f),
-                           0.90f); // ABSOLUTE cap: real crowns stay under a
+                           0.85f); // ABSOLUTE cap: real crowns stay under a
                                    // metre; scaled-up heights made the sheet
                                    // a 2.6 m camera-facing dome (the artifact)
   crown.spike = std::fmin(1.0f, 0.35f + 0.4f * s);
@@ -854,7 +854,10 @@ static void UpdatePhysics(double now, double dt) {
       // same ~1.3 m regardless of pot size — and huge pots got crowns
       // dwarfed by their own spray).
       float t = crown.age;
-      crown.radius = (0.30f + 1.045f * std::sqrt(t)) * crown.scale;
+      // DE-CLOUD: slower radial growth (peak ~0.79x scale, ~1.4x the pot's
+      // footprint like the reference crown — the old 1.32x scale ring read
+      // as a translucent envelope 4x the pot width once sheets overlapped)
+      crown.radius = (0.24f + 0.55f * std::sqrt(t)) * crown.scale;
       crown.height *= 1.0f - std::fmin(1.6f * (float)dt, 0.9f); // falls back
       crown.spike *= 1.0f - std::fmin(0.8f * (float)dt, 0.9f);
       crown.life = 1.0f - t / 0.95f;
@@ -1129,8 +1132,11 @@ static void RenderText(float x, float y, const char *text, float scale = 2.0f) {
 }
 
 static void RenderHUD() {
+  // build tag: on-screen proof of which splash code the exe runs (the splash
+  // look changed massively across commits — stale-build screenshots must be
+  // detectable at a glance)
   char line1[128];
-  std::snprintf(line1, sizeof(line1), "FPS: %d", gFps);
+  std::snprintf(line1, sizeof(line1), "FPS: %d   build D2", gFps);
   RenderText(16.0f, 16.0f, line1);
 }
 
@@ -1315,9 +1321,11 @@ static void DrawCrowns(const Mat4 &view, double now) {
     const JetColumn &jet = gJets[i];
     if (!jet.active || jet.height <= 0.02f) continue;
     glUniform3f(gSplashProg.loc("uCenter"), jet.center.x, jet.center.y, jet.center.z);
-    glUniform1f(gSplashProg.loc("uRadius"), jet.radius + 0.10f);
-    glUniform1f(gSplashProg.loc("uHeight"), jet.height * 1.15f);
-    glUniform1f(gSplashProg.loc("uSpike"), 0.9f);
+    // DE-CLOUD: slim translucent column — the old +0.10/×1.15/spike-0.9
+    // cone rendered as a fat envelope wider than the pot itself
+    glUniform1f(gSplashProg.loc("uRadius"), jet.radius + 0.02f);
+    glUniform1f(gSplashProg.loc("uHeight"), jet.height * 1.02f);
+    glUniform1f(gSplashProg.loc("uSpike"), 0.55f);
     glUniform1f(gSplashProg.loc("uPhase"), (float)i * 1.7f);
     glUniform1f(gSplashProg.loc("uJet"), 1.0f);
     glDrawElements(GL_TRIANGLES, gCrownVertexCount, GL_UNSIGNED_INT, nullptr);
