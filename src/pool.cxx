@@ -1136,7 +1136,7 @@ static void RenderHUD() {
   // look changed massively across commits — stale-build screenshots must be
   // detectable at a glance)
   char line1[128];
-  std::snprintf(line1, sizeof(line1), "FPS: %d   build D2", gFps);
+  std::snprintf(line1, sizeof(line1), "FPS: %d   build D3", gFps);
   RenderText(16.0f, 16.0f, line1);
 }
 
