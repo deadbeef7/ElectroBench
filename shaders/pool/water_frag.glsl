@@ -144,9 +144,12 @@ void main() {
         if (r.w <= 0.001) continue;   // dead slot (rings are per-pot windows now)
         float d = length(vWorld.xz - r.xy);
         float band = d - r.z;
-        float width = 0.30 + r.z * 0.05;
+        // BUILD-D3: the old band width (0.30 + 0.05*r) grew to ~0.6 m and
+        // dozens of overlapping rings fused into broad soft cotton bands.
+        // Narrower, and the ring perturbs the mirror less.
+        float width = 0.26 + r.z * 0.032;
         float ring = exp(-band * band / (width * width));
-        bump += ring * r.w * 0.55;
+        bump += ring * r.w * 0.38;
         foam  += ring * r.w;
         // thin bright crest line: the ring's advancing lip is a brighter sheet
         // of water (entrained air + surface normal facing the light), so it
@@ -154,10 +157,12 @@ void main() {
         float crest = exp(-band * band / (width * width * 0.9));
         foamCrest += crest * r.w * 0.30;
         // Residual foam trail: a wide, WEAK halo behind the expanding ring
-        // (a decaying wake that dissolves with the ring's own strength —
-        // tame, so the pool still reads blue between impacts).
-        float halo = exp(-band * band / (width * width * 14.0));
-        foam += halo * r.w * r.w * 0.22;
+        // (a decaying wake that dissolves with the ring's own strength).
+        // BUILD-D3 TIGHTENING: dozens of landing droplets spawn rings every
+        // second and their halos stack into the broad soft blue bank across
+        // the mid-pool — halved gain, narrower spread.
+        float halo = exp(-band * band / (width * width * 8.0));
+        foam += halo * r.w * r.w * 0.10;
     }
     bump = clamp(bump, 0.0, 1.0);
     foam = clamp(foam, 0.0, 1.0);
@@ -192,7 +197,9 @@ void main() {
     float sheen = pow(NoH, 14.0) * 0.35 * lightFall; // broad faint glow floor
 
     // --- colour ------------------------------------------------------------
-    vec3 refl = reflectedCheckerColor(-V, vWorld, bump);
+    vec3 refl = reflectedCheckerColor(-V, vWorld, bump * 0.62); // build D3:
+                                    // ring storms no longer smear the mirror
+                                    // into soft cyan ribbons
 
     // FUTURE-BENCH WATER BODY: per-channel Beer-Lambert absorption along the
     // water path. Pure water eats red first (absorb ~0.35/m), then green —
@@ -213,8 +220,8 @@ void main() {
     // enters a ripple and scatters back out toward the eye. This is what
     // keeps the pool reading as real water between the splashes, not flat
     // blue plastic. Applied AFTER the Beer-Lambert body so the glow survives.
-    float subsurface = pow(max(dot(V, -normalize(uLightDir)), 0.0), 3.0) * bump * 0.30;
-    body += uLightTint * subsurface * 0.12;
+    float subsurface = pow(max(dot(V, -normalize(uLightDir)), 0.0), 3.0) * bump * 0.20;
+    body += uLightTint * subsurface * 0.10;
 
     // Fresnel-correct mirror: real water reflects ~2% face-on and ~100% at
     // grazing angles (Schlick off F0 = 0.02). Tying the tile sheen to the ACTUAL
@@ -233,10 +240,11 @@ void main() {
     // the pots' reflections, not part of the sky mirror
     vec4 ghost = fleetGhost(V, vWorld, bump);
     col = mix(col, ghost.rgb, clamp(ghost.a, 0.0, 1.0));
-    // Water absorbs red as light travels through it: even the REFLECTED
-    // light that skirts the surface picks up a cool cast, which keeps the
-    // pool reading blue at plane-level views instead of warm-pink.
-    col *= vec3(0.86, 0.99, 1.09);
+    // BUILD-D3: the old cool cast (0.86,0.99,1.09) tinted even the mirrored
+    // red/white dome toward cyan — every reflection of the room washed one
+    // step toward the blue smoke bank. Near-neutral now: the mirror shows
+    // the room as it is; blue belongs to the water BODY only.
+    col *= vec3(0.97, 1.0, 1.02);
     col += uLightTint * (spec * 1.6 + sheen * 0.25 + chop * 0.018);  // the hidden light (tamed) + chop shimmer
 
     // HYPER-REAL FOAM: the expanding rings are not flat bright stains — they
@@ -245,8 +253,8 @@ void main() {
     // the hidden light, so it reads as bright blue-white in the room, not
     // generic white.
     float foamLit = foam * (0.55 + 0.45 * (0.5 + 0.5 * dot(V, normalize(uLightDir))));
-    col += uLightTint * foamLit * 0.22;
-    col += vec3(0.90, 0.94, 1.0) * foamCrest * 0.28;   // bright lip highlight
+    col += uLightTint * foamLit * 0.13;
+    col += vec3(0.90, 0.94, 1.0) * foamCrest * 0.20;   // bright lip highlight
 
     col += vec3(0.05, 0.004, 0.005);                  // ambient skylight (red room)
 
@@ -264,8 +272,11 @@ void main() {
     // faintly with the same caustic web the surface shows, brightest near the
     // camera where the volume is shallow and readable.
     float bodyShimmer = max(web1 * web2 - 0.25, 0.0) * (1.0 - dist01) * 0.10;
-    col += uLightTint * caustic * (0.10 + 0.55 * bump) * lightFall;
-    col += uLightTint * bodyShimmer;                  // volume shimmer
+    // BUILD-D3: bump saturates to 1 across whole ring storms, which let the
+    // caustic web pump +0.65/channel of blue-white wash over huge areas —
+    // the glowing bank. Gain reined in; the web still lives where it should.
+    col += uLightTint * caustic * (0.08 + 0.28 * bump) * lightFall;
+    col += uLightTint * bodyShimmer * 0.6;             // volume shimmer
 
     // haze toward the horizon blends water into the sky glow — tinted
     // pool-WATER blue, not room-pink: the old haze target was dominated by
@@ -273,8 +284,12 @@ void main() {
     // the back"). Air picks up the WATER colour, not the walls.
     float dist = length(uEyePos - vWorld);
     float haze = 1.0 - exp(-dist * 0.004);
-    vec3 hazeCol = vec3(0.19, 0.47, 0.68);            // airy pool-water blue (lifted)
-    col = mix(col, hazeCol, haze * 0.60);
+    vec3 hazeCol = vec3(0.30, 0.46, 0.56);            // airy cool grey-blue,
+                                                      // desaturated (build D3:
+                                                      // the old saturated hue
+                                                      // stacked with foam+caustic
+                                                      // wash into the blue bank)
+    col = mix(col, hazeCol, haze * 0.44);
 
     // FILMIC ACES tail — the old hard clamp(col,0,1) was the biggest CGI
     // tell in the room: every mirrored checker tile brighter than 1.0 linear
