@@ -1013,14 +1013,18 @@ static void UpdatePhysicsStep(double now, float dt) {
   }
 }
 
-// per-frame entry: accumulate real time, advance fixed substeps
+// per-frame entry: accumulate real time, advance fixed substeps.
+// BUILD-D6 FIX: the substeps must carry REAL absolute timestamps — the pot
+// spawn check (now - gStartTime >= spawnAt) compares against the scene
+// clock, and feeding the steps a hardcoded 0.0 meant no teapot EVER spawned
+// (empty pool, no splashes, no rings — the D4/D5 screenshots in a nutshell).
+// Each substep now gets a monotonic timestamp ending exactly at `now`.
 static void UpdatePhysics(double now, double frameDt) {
-  (void)now;
   if (frameDt > 0.1) frameDt = 0.1;
   gPhysicsAccum += frameDt;
   while (gPhysicsAccum >= (double)kPhysicsStep) {
-    UpdatePhysicsStep(0.0, kPhysicsStep);
     gPhysicsAccum -= (double)kPhysicsStep;
+    UpdatePhysicsStep(now - gPhysicsAccum, kPhysicsStep);
   }
 }
 
@@ -1151,7 +1155,7 @@ static void RenderHUD() {
   // look changed massively across commits — stale-build screenshots must be
   // detectable at a glance)
   char line1[128];
-  std::snprintf(line1, sizeof(line1), "FPS: %d   build D5", gFps);
+  std::snprintf(line1, sizeof(line1), "FPS: %d   build D6", gFps);
   RenderText(16.0f, 16.0f, line1);
 }
 
