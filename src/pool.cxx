@@ -618,6 +618,7 @@ struct TeapotPhysics {
   float radius = 0.55f;     // bounding radius (world units, scale 1.0)
   bool inWater = false;
   bool splashed = false;
+  double nextBoil = 0.0;    // BUILD-D7: next post-impact boil ring
   bool settled = false;
   bool active = false;      // fleet pots spawn on a stagger
   double spawnAt = 0.0;
@@ -852,6 +853,7 @@ static void UpdatePhysicsStep(double now, float dt) {
   // drag bleeds the small lateral component fast (the spray falls back
   // around the crown instead of painting a wide halo across the pool)
   // while the vertical arc stays clean.
+  std::vector<Droplet> pending;   // BUILD-D7 secondary ejecta staging
   for (Droplet &d : gDroplets) {
     float sp = std::sqrt(d.vel.x * d.vel.x + d.vel.y * d.vel.y + d.vel.z * d.vel.z);
     float cd = std::fmin(0.55f * sp * dt, 0.9f);   // quadratic-ish air drag
@@ -866,9 +868,32 @@ static void UpdatePhysicsStep(double now, float dt) {
       if (d.radius > 0.03f)
         SpawnRing(d.owner, d.pos.x, d.pos.z,
                   0.14f + 0.3f * std::fmin(-d.vel.y / 6.0f, 1.0f));
+      // BUILD-D7 SECONDARY EJECTA: a fast droplet throws a couple of tiny
+      // kids back up (real rain-on-water behaviour). Collected out-of-loop
+      // (no push_back during iteration) and hard-capped so a droplet storm
+      // can never avalanche.
+      if (d.radius > 0.03f && gDroplets.size() + pending.size() < 3200 &&
+          ((d.owner * 7 + (int)(d.pos.x * 13.0f)) % 3) == 0) {
+        for (int k = 0; k < 2; k++) {
+          Droplet s;
+          s.owner = d.owner;
+          float aa = (float)(((int)(d.pos.z * 31.0f) + k * 137) % 360) *
+                     0.0174532925f;
+          float sp2 = 0.25f + 0.20f * (float)k;
+          s.pos = {d.pos.x, 0.02f, d.pos.z};
+          s.vel = {std::cos(aa) * sp2,
+                   1.4f + 0.9f * (float)((k * 53) % 5) / 5.0f +
+                       0.15f * std::fmin(-d.vel.y, 6.0f),
+                   std::sin(aa) * sp2};
+          s.radius = d.radius * 0.5f;
+          s.maxLife = s.life = 0.45f;
+          pending.push_back(s);
+        }
+      }
       d.life = 0.0f;
     }
   }
+  gDroplets.insert(gDroplets.end(), pending.begin(), pending.end());
   gDroplets.erase(std::remove_if(gDroplets.begin(), gDroplets.end(),
                                  [](const Droplet &d) { return d.life <= 0.0f; }),
                   gDroplets.end());
@@ -1009,6 +1034,16 @@ static void UpdatePhysicsStep(double now, float dt) {
       p.yawVel = 0.0f;
       p.pitchVel = 0.0f;
       p.settled = true;
+    }
+    // BUILD-D7 POST-IMPACT BOIL: for ~2.5 s after the splash the collapsed
+    // cavity keeps outgassing — small weak rings pop across the impact area
+    // like the surface is boiling, then the pool goes glassy again.
+    if (p.settled && now - p.splashTime < 2.5 && now >= p.nextBoil) {
+      p.nextBoil = now + 0.22;
+      float ba = (float)((int)(now * 137.0) % 360) * 0.0174532925f;
+      float br = p.radius * (0.2f + 0.5f * (float)((int)(now * 89.0) % 7) / 7.0f);
+      SpawnRing(i, p.pos.x + std::cos(ba) * br, p.pos.z + std::sin(ba) * br,
+                0.16f + 0.10f * (float)((int)(now * 53.0) % 5) / 5.0f);
     }
   }
 }
@@ -1155,7 +1190,7 @@ static void RenderHUD() {
   // look changed massively across commits — stale-build screenshots must be
   // detectable at a glance)
   char line1[128];
-  std::snprintf(line1, sizeof(line1), "FPS: %d   build D6", gFps);
+  std::snprintf(line1, sizeof(line1), "FPS: %d   build D7", gFps);
   RenderText(16.0f, 16.0f, line1);
 }
 
@@ -1229,6 +1264,38 @@ static void DrawWater(const Mat4 &view, const Vec3 &eye, double timeSec) {
   // gRings is exactly MAX_RINGS x (x, z, radius, strength) — upload it flat.
   // Unused slots carry strength 0 and the shader skips them.
   glUniform4fv(gWaterProg.loc("uRings"), MAX_RINGS, &gRings[0].x);
+  // BUILD-D7: stream the ACTUAL hulls and live splashes so the water can
+  // paint real contact foam + anchored reflections (see water_frag.glsl).
+  // The old analytic ghost darkened grazing water without knowing where any
+  // pot was; these uniforms carry per-pot truth instead.
+  static GLfloat hullData[kFleetCount * 4];
+  static GLfloat splashData[kFleetCount * 4];
+  for (int i = 0; i < kFleetCount; i++) {
+    const TeapotPhysics &p = gPots[i];
+    float hs = 0.0f;
+    if (p.active && p.inWater)
+      hs = std::fmin(1.0f, (float)(timeSec - p.splashTime) * 1.2f);
+    hullData[i * 4 + 0] = p.pos.x;
+    hullData[i * 4 + 1] = p.pos.z;
+    hullData[i * 4 + 2] = p.radius;
+    hullData[i * 4 + 3] = hs;
+    const CrownSplash &c = gCrowns[i];
+    const JetColumn &j = gJets[i];
+    float cx = 0.0f, cz = 0.0f, cr = 0.0f, cs = 0.0f;
+    if (c.active) {
+      cx = c.center.x; cz = c.center.z; cr = c.radius;
+      cs = std::fmin(1.0f, c.height * c.life * 2.0f);
+    } else if (j.active && j.height > 0.01f) {
+      cx = j.center.x; cz = j.center.z; cr = j.radius;
+      cs = std::fmin(0.8f, j.height * 0.8f);
+    }
+    splashData[i * 4 + 0] = cx;
+    splashData[i * 4 + 1] = cz;
+    splashData[i * 4 + 2] = cr;
+    splashData[i * 4 + 3] = cs;
+  }
+  glUniform4fv(gWaterProg.loc("uHulls"), kFleetCount, hullData);
+  glUniform4fv(gWaterProg.loc("uSplashes"), kFleetCount, splashData);
   glDrawElements(GL_TRIANGLES, gWaterMesh.indexCount, GL_UNSIGNED_INT, nullptr);
   glBindVertexArray(0);
 }

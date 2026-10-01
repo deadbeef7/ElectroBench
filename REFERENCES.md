@@ -34,6 +34,26 @@ Realism takeaways applied:
 - Horizon sheen: far sea mirrors the sky band above it rather than fading into a haze knob.
 - Haze tinted toward a cool water body so far water still reads as water.
 
+## Pool room (scene 3) — BUILD-D7 waterline realism pass
+
+Realism takeaways applied:
+
+- A hull sitting in water drags a bright aerated contact collar and the
+  surface climbs (meniscus) where it meets the hull — an object that floats
+  or parks "cleanly" in perfectly flat water reads as pasted on.
+- Reflections must anchor at the OBJECT: a reflection smear starts at the
+  object's own waterline contact and lies along the mirrored view ray,
+  darkened and broken apart by surface disturbance. Analytic per-fragment
+  grazing darkening (the old ghost) does not survive scrutiny because it
+  does not know where anything is.
+- After a cavity collapses the surface keeps boiling for a couple of
+  seconds — outgassed air pops into small weak rings around the impact
+  before the pool returns to glass.
+- Droplets landing at speed throw tiny secondary droplets back up
+  (rain-on-water behaviour), hard-capped so a storm cannot avalanche.
+- A live crown drags bright churn across the surface around its own base;
+  the churn fades with the crown's life rather than switching off.
+
 ## Notes on staging
 
 - Reference images are informational. No image is downloaded at runtime; do not add an image fetch to the binary without explicitly wiring it through Convex/actions and the user's Keys/API keys.

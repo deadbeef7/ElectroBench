@@ -139,7 +139,8 @@ What it renders :
   on a staggered timeline, with real-ish physics: gravity and tumble in the air, a splash that
   fully absorbs the plunge (quadratic cavity drag below the surface), then heavy underwater drag
   as the pot settles a few centimetres and **parks at the fall point** — no buoyancy, no bob, no
-  righting; it keeps the orientation it landed in and stays there. Falling pots carry air drag, a
+  righting; it keeps the orientation it landed in and stays there, with a bright contact-foam
+  collar, a meniscus bump and a real anchored mirror reflection painted around its hull. Falling pots carry air drag, a
   drift arc and a two-axis tumble, and the whole simulation runs on a fixed 1/120 s substep so
   trajectories are frame-rate independent. `R` re-drops the whole fleet
 - **Splash FX**: a GPU-animated **Worthington crown** — a STEEP translucent POOL-WATER sheet
@@ -151,7 +152,9 @@ What it renders :
   fragments), expanding **ripple rings** with residual foam-trail halos that disturb the
   reflection, and a slender delayed central **Rayleigh jet** — its punch scaled by the impact —
   that fires on the cavity's inertial collapse and falls back with its own ring — the crown's
-  light sweep follows the actual reflected-ray azimuth. The pots wear an energy-corrected GGX ceramic glaze with animated underwater caustics, refraction-offset submerged shading, and a wet waterline. All CPU cost is a
+  light sweep follows the actual reflected-ray azimuth, the surface around a live crown shows its
+  bright churn, the collapsed cavity boils out micro-rings for a couple of seconds after each
+  splash, and fast landing droplets throw tiny secondary ejecta back up. The pots wear an energy-corrected GGX ceramic glaze with animated underwater caustics, refraction-offset submerged shading, and a wet waterline. All CPU cost is a
   handful of uniforms; the geometry animates in the vertex shader
 
 Run the pool scene on its own with :

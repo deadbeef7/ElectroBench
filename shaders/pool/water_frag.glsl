@@ -19,6 +19,9 @@
                        // in one glUniform4fv — a shorter array here makes the
                        // whole upload GL_INVALID_OPERATION (silent no-op),
                        // killing every ripple ring in the room.
+#define MAX_HULLS 18   // MUST match kFleetCount in src/pool.cxx: the scene
+                       // uploads all 18 hull slots and 18 live-splash slots
+                       // in one glUniform4fv each (BUILD-D7 waterline pass).
 
 in vec3 vWorld;
 in vec3 vNormal;
@@ -31,6 +34,12 @@ uniform vec3 uTileA;
 uniform vec3 uTileB;
 uniform float uTime;
 uniform vec4  uRings[MAX_RINGS]; // xy = centre (world), z = radius, w = strength 0..1
+uniform vec4  uHulls[MAX_HULLS]; // BUILD-D7: xy = hull centre (world),
+                                 // z = hull bounding radius, w = parked
+                                 // strength 0..1 (fades in as the pot settles)
+uniform vec4  uSplashes[MAX_HULLS]; // BUILD-D7: xy = impact centre,
+                                    // z = crown radius, w = live splash
+                                    // strength 0..1 (crown/jet life)
 
 out vec4 fragColor;
 
@@ -88,47 +97,12 @@ vec3 reflectedCheckerColor(vec3 dirToViewer, vec3 pos, float rippleBump) {
     return albedo * fres;
 }
 
-// REFLECTED TEAPOTS: 2D black ghost silhouettes painted directly into the
-// water — the old 3D mirrored-fleet pass (a ceramic pot swimming underwater)
-// is gone. A real reflection of an object above the surface appears as an
-// upright, darkened SMEAR anchored at the object's waterline contact, seen
-// along the MIRRORED view ray; where the surface is disturbed it smears
-// further and breaks apart. Returns rgb = near-black ghost tint,
-// a = coverage.
-vec4 fleetGhost(vec3 V, vec3 pos, float bump) {
-    // mirrored view ray (surface -> sky): reflect about the y=0 plane
-    vec3 rd = vec3(-V.x, V.y, -V.z);
-    float elev = clamp(rd.y / max(length(rd.xz), 1e-4), 0.0, 1.5);
-    // ghosts live at GRAZING reflection angles — looking straight down at
-    // the water next to a pot shows the body, not the mirror
-    float ground = clamp(1.0 - elev * 1.25, 0.0, 1.0);
-    ground *= ground;
-
-    // the pot's waterline contact is at pos.y ~ -2 (pot bottom); march the
-    // mirrored ray back up to the pot's hull (up to ~9 m tall) and ghost it
-    float ht01 = clamp((-2.0 - pos.y) / 9.0, 0.0, 1.0);
-    vec2 dirXZ = normalize(rd.xz + vec2(1e-5));
-    vec2 base = pos.xz + dirXZ * (2.0 * ht01) * (1.0 + 0.6 * elev);
-
-    // the ripple field smears the ghost — image wobble grows with bump
-    float sway = sin(base.x * 1.7 + base.y * 1.3 + uTime * 1.1)
-               + sin(base.x * 0.9 - base.y * 2.1 - uTime * 0.7);
-    base += dirXZ * sway * (0.05 + 0.35 * bump);
-
-    // upright smear: a tight core at the waterline stretching upward with
-    // the pot height, loosening fast where rings disturb the surface
-    float smear = 0.55 + 2.6 * ht01 + 2.0 * bump;
-    float fade = 1.0 - 0.55 * ht01;         // the top of the ghost dies first
-    vec2 dv = pos.xz - base;
-    float ghost = ground * fade * exp(-dot(dv, dv) / (smear * smear));
-    // distance gate: far reflections compress to slivers and lose strength —
-    // without this the far fleet's overlapping smears read as a black band
-    // across the horizon (the wide-view render showed exactly that)
-    float gdist = length(uEyePos - pos);
-    ghost *= 1.0 / (1.0 + gdist * 0.045);
-
-    return vec4(0.008, 0.012, 0.020, clamp(ghost * 1.35, 0.0, 1.0));
-}
+// REFLECTED TEAPOTS (BUILD-D7): the old analytic ghost pass darkened
+// grazing water WITHOUT knowing where any pot was — a fake. The scene now
+// streams the actual hulls (uHulls) and live crowns (uSplashes); main()
+// paints a real contact foam collar, a meniscus bump and an upright
+// darkened mirror smear anchored at EACH parked hull, plus the bright
+// churn each live crown drags across the surface.
 
 void main() {
     vec3 V = normalize(uEyePos - vWorld);
@@ -163,6 +137,47 @@ void main() {
         // the mid-pool — halved gain, narrower spread.
         float halo = exp(-band * band / (width * width * 8.0));
         foam += halo * r.w * r.w * 0.10;
+    }
+
+    // --- BUILD-D7 PER-POT CONTACT & LIVE-SPLASH WATERLINE ------------------
+    float hullFoam = 0.0;
+    float hullGhost = 0.0;
+    float splashGlow = 0.0;
+    float viewDist = length(uEyePos - vWorld);
+    for (int i = 0; i < MAX_HULLS; i++) {
+        vec4 hu = uHulls[i];
+        if (hu.w > 0.001) {
+            float d = length(vWorld.xz - hu.xy);
+            float rr = max(hu.z, 0.05);
+            // contact collar: bright aerated foam hugging the waterline of
+            // the hull (a real hull in water drags foam where it sits)
+            float collar = exp(-pow((d - rr) * (4.0 / rr), 2.0));
+            hullFoam += collar * hu.w;
+            // meniscus: the surface climbs a touch where it meets the hull
+            bump += collar * hu.w * 0.25;
+            // upright mirror smear: the pot's reflection is a darkened,
+            // broken-up streak lying along the MIRRORED view ray from its
+            // own hull — anchored at the object, not faked per-fragment
+            vec3 rdir = vec3(-V.x, V.y, -V.z);
+            float elev = clamp(rdir.y / max(length(rdir.xz), 1e-4), 0.0, 1.5);
+            float ground = clamp(1.0 - elev * 1.25, 0.0, 1.0);
+            ground *= ground;
+            vec2 dirXZ = normalize(rdir.xz + vec2(1e-5));
+            vec2 anchor = hu.xy + dirXZ * (rr * 0.8);
+            vec2 dv = vWorld.xz - anchor;
+            float smear = rr * (0.55 + 1.6 * bump);
+            float gh = ground * exp(-dot(dv, dv) / (smear * smear));
+            gh *= 1.0 / (1.0 + viewDist * 0.045);  // far slivers fade (D3 rule)
+            hullGhost += gh * hu.w;
+        }
+        vec4 sp = uSplashes[i];
+        if (sp.w > 0.001) {
+            float d = length(vWorld.xz - sp.xy);
+            // bright churn where the live crown wall meets the surface —
+            // the splash drags aerated water around its own base
+            float g = exp(-pow((d - sp.z) * (2.2 / max(sp.z, 0.1)), 2.0));
+            splashGlow += g * sp.w;
+        }
     }
     bump = clamp(bump, 0.0, 1.0);
     foam = clamp(foam, 0.0, 1.0);
@@ -236,10 +251,13 @@ void main() {
                                                  // far water and painted a black
                                                  // band across the horizon
     vec3 col = mix(body, refl, clamp(mirror, 0.0, 1.0));
-    // the fleet's 2D black ghosts ride ON TOP of the Fresnel mix — they are
-    // the pots' reflections, not part of the sky mirror
-    vec4 ghost = fleetGhost(V, vWorld, bump);
-    col = mix(col, ghost.rgb, clamp(ghost.a, 0.0, 1.0));
+    // BUILD-D7: the fleet's reflections are real now — per-hull darkened
+    // mirror smears applied on top of the Fresnel mix (the old analytic
+    // ghost rode in the same place), plus the contact foam collars and the
+    // live-splash churn painted around each erupting crown.
+    col = mix(col, vec3(0.010, 0.014, 0.022), clamp(hullGhost * 1.3, 0.0, 1.0));
+    col += vec3(0.90, 0.94, 1.0) * hullFoam * 0.22;
+    col += uLightTint * splashGlow * 0.28;
     // BUILD-D3: the old cool cast (0.86,0.99,1.09) tinted even the mirrored
     // red/white dome toward cyan — every reflection of the room washed one
     // step toward the blue smoke bank. Near-neutral now: the mirror shows
