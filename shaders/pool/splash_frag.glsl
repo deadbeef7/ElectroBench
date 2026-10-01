@@ -151,9 +151,11 @@ void main() {
     // thickness ripple along the sheet, also slowly crawling
     float grain = 0.5 + 0.5 * sin(ang * 41.0 - jitter * 3.0 - vParam * 5.0
                                   + uTime * 2.2);
-    // the sheet is dense at the base and disintegrates toward the rim:
-    // the tear contrast DEEPENS with height (fingers pinch off there)
-    float tear = mix(0.22, 0.62, smoothstep(0.15, 0.9, vParam));
+    // BUILD-D4 LATE TEAR: the sheet stays a continuous film through its
+    // lower two-thirds and only disintegrates in the last stretch below the
+    // rim (smoothstep 0.55-1.0). The old early ramp (0.15-0.9) chewed the
+    // film apart mid-sheet, which read as dissolving smoke from afar.
+    float tear = mix(0.10, 0.62, smoothstep(0.55, 1.0, vParam));
     float sheet = (1.0 - 0.62 * vParam) * (0.55 + 0.45 * grain);
     sheet *= 1.0 - tear * (1.0 - fingers);
     sheet = max(sheet, 0.0);
@@ -175,7 +177,7 @@ void main() {
     // where the film is disintegrating (low fingers, high tear) it reads as
     // aerated foam; where it is still a continuous sheet it stays glassy.
     // (declared AFTER fingers/tear — strict drivers reject forward refs)
-    float foam = (1.0 - fingers) * tear * smoothstep(0.15, 0.85, vParam);
+    float foam = (1.0 - fingers) * tear * smoothstep(0.45, 0.95, vParam);
     foam = clamp(foam * 1.3, 0.0, 1.0);          // clearer film: less milk,
                                                  // matching the reference
 
@@ -302,12 +304,12 @@ void main() {
     // discrete glassy films, never a translucent bank.
     float alpha = mix(0.035 + 0.15 * thick, 0.44 + 0.26 * edge, fres);
     alpha = mix(alpha, 0.88, foam * 0.7);             // foam is nearly opaque
-    // DISTANCE GATE: eighteen far crowns stacking 15%-alpha sheets across
-    // the horizon re-forms the fog bank even after every other fix. Real
-    // distant splashes read as thin bright flickers against the water, not
-    // translucent domes — fade the SHEET BODY with distance and let the rim
-    // glints (added to col below) carry the far-field splash.
-    alpha *= 1.0 - 0.65 * smoothstep(38.0, 78.0, camDist);
+    // BUILD-D4 DISTANCE GATE (actually engages this time): the whole fleet
+    // sits 2-19 m from the orbiting camera, so the old 38-78 m gate NEVER
+    // RAN — that is why the bank survived the D2 fix. Real crowns past a
+    // few metres of water compress to thin bright flickers; the stacked
+    // sheets of the far fleet must not wash the horizon.
+    alpha *= 1.0 - 0.55 * smoothstep(9.0, 17.0, camDist);
     alpha = clamp(alpha + burst * streaks * 0.5 + burst * dropletField * 0.35, 0.0, 1.0);
     alpha *= sheet;
     alpha += collar * 0.30;
@@ -321,7 +323,9 @@ void main() {
     // for a fast column: near-mirror grazing sides (vertical walls seen
     // from afar), heavy wind-driven aerated breakup along the column.
     if (uJet > 0.5) {
-        float jetFade = 1.0 - smoothstep(0.78, 0.98, camDist / 90.0); // pop-in veil
+        // BUILD-D4: gate engages in the fleet's actual range (2-19 m)
+        float jetFade = (1.0 - smoothstep(9.0, 17.0, camDist)) * 0.55
+                      + 0.45;                          // slim translucent column
         vec3 jcol = mix(envMirror * 1.25, envRefr * 0.8, fres * 0.45); // glassy column
         jcol += uLightTint * glint * 0.9 + uLightTint * sparkle;       // strong glints
         float aerate = 0.35 + 0.65 * grain;                            // crawling breakup

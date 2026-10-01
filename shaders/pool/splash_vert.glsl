@@ -76,7 +76,14 @@ void main() {
     // radius wobble is part of the ring shape now (not just spike height):
     // the crown bulges asymmetrically as it tears, like real high-speed
     // footage — this is the "not CGI" geometry cue.
-    float rMul = (1.0 + uSpike * 0.35 * spikes * hp) * radiusWobble(aAngleH.x, uTime + uPhase, uPhase);
+    // BUILD-D4 STEEPNESS: the rim is pulled INWARD with height (1 - 0.34*hp)
+    // so the sheet leans UP — crown walls nearly vertical, tips curling
+    // inward over the cavity, exactly like high-speed footage of a steep
+    // Worthington crown. The old constant-radius sheet read as a widening
+    // cone/dome from the low camera.
+    float rMul = (1.0 + uSpike * 0.30 * spikes * hp)
+               * radiusWobble(aAngleH.x, uTime + uPhase, uPhase)
+               * (1.0 - 0.34 * hp);   // inward taper: the sheet points UP
 
     vec3 pos = uCenter + vec3(cos(ang) * uRadius * rMul,
                               uHeight * hp * hMul,

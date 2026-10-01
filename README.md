@@ -26,11 +26,11 @@ The TideBench ocean scene — long cloud banks with sunward silver linings, two 
 
 ![ElectroBench TideBench scene](docs/screenshots/ps14_dusk_t36.png)
 
-The PoolBench pool room — an infinite white-and-red checkerboard sky mirrored on open water, lit only by a hidden light, with two waves of teapots raining down in scattered positions, splashing on impact and bobbing to rest:
+The PoolBench pool room — an infinite white-and-red checkerboard sky mirrored on open water, lit only by a hidden light, with two waves of teapots raining down in scattered positions, splashing on impact, then sinking to the basin floor where they stay:
 
 ![ElectroBench PoolBench scene](docs/screenshots/pool_teapot.png)
 
-**In motion** — 8 seconds of the first teapot wave, captured headless frame-by-frame (0.5 s between frames): GPU-animated Worthington splash crowns erupt, tear into crawling fingers, ballistic droplet streaks, and expanding ripple rings propagating outward while the mirrored checkerboard shatters across the surface. Each pot's reflection is a flat 2D black ghost smear anchored at its waterline, wobbling and breaking apart with every ring — the way real reflections die on disturbed water:
+**In motion** — the full 18-second run (both teapot waves), captured headless frame-by-frame (1 s between frames): steep GPU-animated Worthington splash crowns erupt upward, tear into crawling fingers late in their life, throw near-vertical droplet streaks, and expand ripple rings outward while the mirrored checkerboard shatters across the surface. Each pot's reflection is a flat 2D black ghost smear anchored at its waterline, wobbling and breaking apart with every ring — the way real reflections die on disturbed water:
 
 ![PoolBench in motion: teapot splash crowns, droplet streaks and ripple rings propagating across the checkerboard-mirrored water](docs/screenshots/pool_splash.gif)
 
@@ -137,18 +137,21 @@ What it renders :
   level while they fall: the drops come down INTO frame, it never chases or
   rises after the fleet. Each pot has scattered positions, sizes and drop heights
   on a staggered timeline, with real-ish physics: gravity and tumble in the air, a splash that
-  fully absorbs the plunge (cavity drag below the surface + a float-line clamp — pots can never
-  pop back out), buoyancy + drag underwater, then a damped bob to rest while it slowly rights
-  itself. Falling pots carry air drag, a drift arc and a two-axis tumble; impact rights them on
-  both axes. `R` re-drops the whole fleet
-- **Splash FX**: a GPU-animated **Worthington crown** — a translucent POOL-WATER film (under a
-  metre tall, reflection-led blue: grazing views show the bright surface sheen, never a white
-  dome or checker tiles) with a foam collar at the water line, that erupts
-  around the impact and tears into **crawling fingers** (the tear pattern migrates up the sheet)
-  as
-  it disintegrates — plus ballistic **droplet streaks** stretched along their velocity (wave-two
-  impacts throw double ejecta with torn sheet fragments), expanding **ripple rings** with residual foam-trail halos that disturb the reflection, and a slender delayed central **Rayleigh jet** — its punch scaled by the impact — that
-  fires on the cavity's inertial collapse and falls back with its own ring — the crown's light sweep follows the actual reflected-ray azimuth. The pots wear an energy-corrected GGX ceramic glaze with animated underwater caustics, refraction-offset submerged shading, and a wet waterline. All CPU cost is a
+  fully absorbs the plunge (quadratic cavity drag below the surface), then heavy underwater drag
+  as the pot sinks to the basin floor and **stays where it fell** — no buoyancy, no bob, no
+  righting; it keeps the orientation it landed in. Falling pots carry air drag, a drift arc and a
+  two-axis tumble, and the whole simulation runs on a fixed 1/120 s substep so trajectories are
+  frame-rate independent. `R` re-drops the whole fleet
+- **Splash FX**: a GPU-animated **Worthington crown** — a STEEP translucent POOL-WATER sheet
+  (the walls point almost straight up: the radius stays at the pot's footprint while the height
+  ramps to ~2 m, and the rim tapers inward) with a foam collar at the water line, that erupts
+  around the impact and tears into **crawling fingers** only in the last third of its life (the
+  sheet holds together while it climbs) — plus near-vertical ballistic **droplet streaks**
+  stretched along their velocity (wave-two impacts throw double ejecta with torn sheet
+  fragments), expanding **ripple rings** with residual foam-trail halos that disturb the
+  reflection, and a slender delayed central **Rayleigh jet** — its punch scaled by the impact —
+  that fires on the cavity's inertial collapse and falls back with its own ring — the crown's
+  light sweep follows the actual reflected-ray azimuth. The pots wear an energy-corrected GGX ceramic glaze with animated underwater caustics, refraction-offset submerged shading, and a wet waterline. All CPU cost is a
   handful of uniforms; the geometry animates in the vertex shader
 
 Run the pool scene on its own with :
