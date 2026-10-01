@@ -22,6 +22,9 @@
 #define MAX_HULLS 18   // MUST match kFleetCount in src/pool.cxx: the scene
                        // uploads all 18 hull slots and 18 live-splash slots
                        // in one glUniform4fv each (BUILD-D7 waterline pass).
+#define MAX_BUBBLES 48 // MUST match MAX_BUBBLES in src/pool.cxx: the scene
+                       // uploads all 48 subsurface bubble slots in one
+                       // glUniform4fv (BUILD-D8 bubble plumes).
 
 in vec3 vWorld;
 in vec3 vNormal;
@@ -40,6 +43,10 @@ uniform vec4  uHulls[MAX_HULLS]; // BUILD-D7: xy = hull centre (world),
 uniform vec4  uSplashes[MAX_HULLS]; // BUILD-D7: xy = impact centre,
                                     // z = crown radius, w = live splash
                                     // strength 0..1 (crown/jet life)
+uniform vec4  uBubbles[MAX_BUBBLES]; // BUILD-D8: xy = bubble xz, z = depth
+                                     // below the surface (m, >0 = alive),
+                                     // w = bubble radius (m)
+uniform int   uBubbleCount;          // alive plume slots (idle frames loop 0x)
 
 out vec4 fragColor;
 
@@ -238,6 +245,33 @@ void main() {
     float subsurface = pow(max(dot(V, -normalize(uLightDir)), 0.0), 3.0) * bump * 0.20;
     body += uLightTint * subsurface * 0.10;
 
+    // --- BUILD-D8 SUBSURFACE BUBBLE PLUMES ---------------------------------
+    // The impact cavity entrains air; a plume of bubbles rises under each
+    // impact point for a couple of seconds. Each bubble is painted at its
+    // PARALLAX-CORRECTED apparent surface position: the eye ray meets the
+    // surface early of the point directly above the bubble, so the specks
+    // slide correctly with the low grazing camera instead of being stamped
+    // at their true xz like decals.
+    float bubbleSpeck = 0.0;
+    float hEye = max(uEyePos.y, 0.25);
+    for (int i = 0; i < MAX_BUBBLES; i++) {
+        if (i >= uBubbleCount) break;   // idle frames loop zero iterations
+        vec4 bb = uBubbles[i];
+        if (bb.z <= 0.002 || bb.w <= 0.001) continue;   // dead/empty slot
+        float k = hEye / (hEye + bb.z);
+        vec2 ap = uEyePos.xz + (bb.xy - uEyePos.xz) * k;
+        float d2 = length(vWorld.xz - ap);
+        // cheap polynomial falloffs (no exp in the loop: llvmpipe and the
+        // user's low-end GPU both thank us); the optical radius blooms well
+        // past the geometric bubble — entrained air scatters through a
+        // cloudlet, not a hard sphere
+        float r = max(bb.w, 0.015) * 3.2;
+        float vis = 1.0 / (1.0 + bb.z * 0.35);          // deeper = dimmer
+        float core = 1.0 - d2 * d2 / (r * r);
+        bubbleSpeck += max(core, 0.0) * vis;
+    }
+    bubbleSpeck = clamp(bubbleSpeck, 0.0, 1.0);
+
     // Fresnel-correct mirror: real water reflects ~2% face-on and ~100% at
     // grazing angles (Schlick off F0 = 0.02). Tying the tile sheen to the ACTUAL
     // Fresnel makes the pool go dark-blue overhead and mirror-like in the
@@ -251,6 +285,12 @@ void main() {
                                                  // far water and painted a black
                                                  // band across the horizon
     vec3 col = mix(body, refl, clamp(mirror, 0.0, 1.0));
+    // BUILD-D8: the plume must survive the Fresnel mix — entrained air
+    // scatters light from INSIDE the volume and returns it at every view
+    // angle, so the whitening rides on top of the mirror like the D7 foam
+    // does. Without this term the grazing mirror (up to 0.88) swallows the
+    // body tint and the plume is invisible exactly where splashes read best.
+    col = mix(col, vec3(0.72, 0.85, 0.90), bubbleSpeck * 0.75);
     // BUILD-D7: the fleet's reflections are real now — per-hull darkened
     // mirror smears applied on top of the Fresnel mix (the old analytic
     // ghost rode in the same place), plus the contact foam collars and the

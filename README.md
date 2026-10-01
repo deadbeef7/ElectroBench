@@ -154,7 +154,11 @@ What it renders :
   that fires on the cavity's inertial collapse and falls back with its own ring — the crown's
   light sweep follows the actual reflected-ray azimuth, the surface around a live crown shows its
   bright churn, the collapsed cavity boils out micro-rings for a couple of seconds after each
-  splash, and fast landing droplets throw tiny secondary ejecta back up. The pots wear an energy-corrected GGX ceramic glaze with animated underwater caustics, refraction-offset submerged shading, and a wet waterline. All CPU cost is a
+  splash, and fast landing droplets throw tiny secondary ejecta back up. Under each impact
+  point the entrained cavity breathes out a **subsurface bubble plume** — a few dozen
+  wobbling specks that rise from staggered depths at buoyancy speeds, thin out over a couple
+  of seconds and pop into micro-rings at the surface, each painted at its parallax-corrected
+  apparent position so the plume slides correctly with the low grazing camera. The pots wear an energy-corrected GGX ceramic glaze with animated underwater caustics, refraction-offset submerged shading, and a wet waterline. All CPU cost is a
   handful of uniforms; the geometry animates in the vertex shader
 
 Run the pool scene on its own with :

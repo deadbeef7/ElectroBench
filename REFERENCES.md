@@ -54,6 +54,25 @@ Realism takeaways applied:
 - A live crown drags bright churn across the surface around its own base;
   the churn fades with the crown's life rather than switching off.
 
+## Pool room (scene 3) — BUILD-D8 subsurface bubble plumes
+
+Realism takeaways applied:
+
+- A splash does not end at the surface: the collapsing cavity entrains air
+  and a plume of bubbles keeps rising under the impact point for a couple
+  of seconds — the water between splashes must not be empty.
+- Bubbles have to be drawn at their PARALLAX-corrected apparent position
+  (the eye ray meets the surface early of the point directly above the
+  bubble at grazing angles), otherwise the specks stamp like decals and
+  slide wrongly with the low camera.
+- A plume must dissipate: staggered start depths and rise rates thin the
+  plume naturally, and every bubble pops back into a micro-ring at the
+  surface — visual energy is bookkept, never left dangling.
+- One timebase for everything: plume wobble, pot spawn waves and the
+  screenshot/bench harness all ride the fixed-substep sim clock. On a
+  slow renderer wall time and sim time diverge and any straggler on the
+  wall clock breaks determinism.
+
 ## Notes on staging
 
 - Reference images are informational. No image is downloaded at runtime; do not add an image fetch to the binary without explicitly wiring it through Convex/actions and the user's Keys/API keys.

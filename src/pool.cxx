@@ -75,6 +75,10 @@ unsigned lodepng_decode_file(unsigned char **out, unsigned *w, unsigned *h,
 #define MAX_RINGS 54             // must match water_frag.glsl; split into
                                  // private per-pot windows (54/18 = 3 each)
                                  // per-pot windows below
+#define MAX_BUBBLES 48           // must match water_frag.glsl: subsurface
+                                 // bubble plume slots (BUILD-D8); the scene
+                                 // uploads all 48 in one glUniform4fv plus a
+                                 // live count so idle frames loop zero times
 
 static const int kWaterResolution = 220;  // grid verts per side (display grid;
                                           // the lighting is analytic per pixel)
@@ -665,6 +669,15 @@ static Ring gRings[MAX_RINGS];
 static int gRingUsed[kFleetCount] = {};
 static Ring *RingWindow(int pot) { return &gRings[pot * kRingsPerPot]; }
 
+// BUILD-D8 SUBSURFACE BUBBLES: the impact cavity entrains air; a plume of
+// bubbles rises under each impact point for a couple of seconds, wobbling,
+// then pops at the surface into a micro-ring. depth = metres BELOW the
+// surface (positive down); the water shader paints each bubble at its
+// PARALLAX-CORRECTED apparent position so the specks slide correctly under
+// the low grazing camera.
+struct Bubble { float x, z, depth, radius, rise, phase; int owner; };
+static std::vector<Bubble> gBubbles;
+
 // The Worthington crown: a STEEP water sheet (BUILD-D4). The sheet is
 // nearly vertical — crown walls point UP, not outward — the radius stays
 // close to the pot's footprint (r ≈ 1.2x pot radius, growth capped hard)
@@ -806,6 +819,24 @@ static void SpawnSplash(int pot, float x, float z, float impactSpeed, float scal
   jet.height = 0.0f;
   jet.radius = (0.09f + 0.05f * s) * scale;
   jet.life = 0.0f;
+
+  // ---- BUILD-D8: the cavity entrains air — a bubble plume rises under
+  // the impact point. Bubbles start at staggered depths with different
+  // rise rates so the plume thins out naturally over ~2 s.
+  int bn = 10 + (int)(6.0f * s);
+  for (int i = 0; i < bn && (int)gBubbles.size() < MAX_BUBBLES; i++) {
+    float ba = (float)((i * 149 + pot * 73) % 360) * 0.0174532925f;
+    float brr = (0.08f + 0.30f * ((i * 41 + pot * 17) % 10) / 10.0f) * scale;
+    Bubble b;
+    b.owner = pot;
+    b.x = x + std::cos(ba) * brr;
+    b.z = z + std::sin(ba) * brr;
+    b.depth = 0.5f + 0.9f * ((i * 29 + pot * 11) % 10) / 10.0f;
+    b.radius = (0.028f + 0.030f * ((i * 13 + pot * 5) % 7) / 7.0f) * scale;
+    b.rise = 0.45f + 0.50f * ((i * 61 + pot * 7) % 10) / 10.0f;
+    b.phase = (float)((i * 97 + pot * 31) % 628) * 0.01f;
+    gBubbles.push_back(b);
+  }
 }
 
 static void ResetFleet() {
@@ -821,6 +852,7 @@ static void ResetFleet() {
     for (int j = 0; j < kRingsPerPot; j++) win[j] = Ring{};
   }
   gDroplets.clear();
+  gBubbles.clear();
 }
 
 static double gStartTime = 0.0;  // set in RunPoolScene; UpdatePhysics reads it.
@@ -832,6 +864,14 @@ static double gStartTime = 0.0;  // set in RunPoolScene; UpdatePhysics reads it.
 // frame rate, deterministic screenshots); ring bookkeeping stays per-frame.
 static const float kPhysicsStep = 1.0f / 120.0f;
 static double gPhysicsAccum = 0.0;
+// BUILD-D8 harness fix: screenshot gates and the bench window used to run on
+// the raw wall clock while the SIM advances by the CLAMPED frame dt — on a
+// 1 FPS software renderer sim time crawls ~10x slower than wall time, so
+// "--shot-times 15" captured a pool that had only simulated ~1.5 s (the
+// D4/D5-era "fewer than 36 frames / empty-looking late frames" mystery).
+// gSimTime tracks the physics timebase; --shot-times now mean SIM seconds
+// (identical to wall seconds at 60 FPS, deterministic at any frame rate).
+static double gSimTime = 0.0;
 
 static void UpdatePhysicsStep(double now, float dt) {
   (void)now;
@@ -898,6 +938,23 @@ static void UpdatePhysicsStep(double now, float dt) {
                                  [](const Droplet &d) { return d.life <= 0.0f; }),
                   gDroplets.end());
 
+  // --- BUILD-D8: subsurface bubbles rise, wobble, pop into micro-rings ---
+  // Wobble phase rides gSimTime (SIM seconds): identical plume shape at any
+  // frame rate, and no float-precision loss from the huge uptime clock.
+  for (Bubble &b : gBubbles) {
+    b.depth -= b.rise * dt;
+    b.x += std::sin(b.phase + (float)gSimTime * 2.6f) * 0.06f * dt;
+    b.z += std::cos(b.phase * 1.3f + (float)gSimTime * 3.1f) * 0.06f * dt;
+    if (b.depth <= 0.035f) {
+      // the bubble breaks the surface: a tiny residual ripple
+      SpawnRing(b.owner, b.x, b.z, 0.10f);
+      b.depth = -1.0f;   // dead
+    }
+  }
+  gBubbles.erase(std::remove_if(gBubbles.begin(), gBubbles.end(),
+                                [](const Bubble &b) { return b.depth < 0.0f; }),
+                 gBubbles.end());
+
   for (int i = 0; i < kFleetCount; i++) {
     CrownSplash &crown = gCrowns[i];
     JetColumn &jet = gJets[i];
@@ -945,7 +1002,13 @@ static void UpdatePhysicsStep(double now, float dt) {
     // --- pot ---
     TeapotPhysics &p = gPots[i];
     if (!p.active) {
-      if (now - gStartTime >= p.spawnAt) {
+      // BUILD-D8 harness fix: the spawn gate used the WALL clock while the
+      // sim advances by clamped frame dt — on a slow renderer the fleet's
+      // two waves fell behind the sim-timebase (screenshot gate, bubble
+      // plumes and physics all run on gSimTime). Pots now spawn on the
+      // same SIM schedule as everything else: --shot-times and the wave
+      // choreography stay in lockstep at any frame rate.
+      if (gSimTime >= p.spawnAt) {
         p.active = true;
         float sc = kFleetScale[i];
         p.pos = {kFleetPos[i][0], kFleetDrop[i], kFleetPos[i][1]};
@@ -1056,6 +1119,7 @@ static void UpdatePhysicsStep(double now, float dt) {
 // Each substep now gets a monotonic timestamp ending exactly at `now`.
 static void UpdatePhysics(double now, double frameDt) {
   if (frameDt > 0.1) frameDt = 0.1;
+  gSimTime += frameDt;
   gPhysicsAccum += frameDt;
   while (gPhysicsAccum >= (double)kPhysicsStep) {
     gPhysicsAccum -= (double)kPhysicsStep;
@@ -1190,7 +1254,7 @@ static void RenderHUD() {
   // look changed massively across commits — stale-build screenshots must be
   // detectable at a glance)
   char line1[128];
-  std::snprintf(line1, sizeof(line1), "FPS: %d   build D7", gFps);
+  std::snprintf(line1, sizeof(line1), "FPS: %d   build D8", gFps);
   RenderText(16.0f, 16.0f, line1);
 }
 
@@ -1296,6 +1360,27 @@ static void DrawWater(const Mat4 &view, const Vec3 &eye, double timeSec) {
   }
   glUniform4fv(gWaterProg.loc("uHulls"), kFleetCount, hullData);
   glUniform4fv(gWaterProg.loc("uSplashes"), kFleetCount, splashData);
+  // BUILD-D8: subsurface bubble plumes — xy = bubble xz, z = depth below
+  // the surface (m), w = radius (m). Dead/empty slots carry depth 0 and
+  // the shader skips them.
+  static GLfloat bubbleData[MAX_BUBBLES * 4];
+  for (int i = 0; i < MAX_BUBBLES; i++) {
+    if (i < (int)gBubbles.size()) {
+      const Bubble &b = gBubbles[i];
+      bubbleData[i * 4 + 0] = b.x;
+      bubbleData[i * 4 + 1] = b.z;
+      bubbleData[i * 4 + 2] = b.depth;
+      bubbleData[i * 4 + 3] = b.radius;
+    } else {
+      bubbleData[i * 4 + 0] = 0.0f;
+      bubbleData[i * 4 + 1] = 0.0f;
+      bubbleData[i * 4 + 2] = 0.0f;
+      bubbleData[i * 4 + 3] = 0.0f;
+    }
+  }
+  glUniform4fv(gWaterProg.loc("uBubbles"), MAX_BUBBLES, bubbleData);
+  glUniform1i(gWaterProg.loc("uBubbleCount"),
+              (int)std::fmin((float)gBubbles.size(), (float)MAX_BUBBLES));
   glDrawElements(GL_TRIANGLES, gWaterMesh.indexCount, GL_UNSIGNED_INT, nullptr);
   glBindVertexArray(0);
 }
@@ -1586,7 +1671,8 @@ static void RenderScene() {
   float t = (float)(now - gStartTime);
   UpdatePhysics(now, dt);
 
-  if (gAutoCam) UpdateAutoCamera(t);
+  if (gAutoCam) UpdateAutoCamera((float)gSimTime);  // SIM time: framing stays
+                                                    // deterministic at any FPS
   Vec3 eye = gAutoCam ? gCamPos : OrbitCamPos();
 
   Mat4 view;
@@ -1625,7 +1711,7 @@ static void RenderScene() {
   RenderHUD();
 
   if (gScreenshotPath && gNextShot < gShotTimes.size() &&
-      now - gStartTime >= (double)gShotTimes[gNextShot]) {
+      gSimTime >= (double)gShotTimes[gNextShot]) {   // SIM seconds (D8 harness fix)
     WriteScreenshotPPM(gScreenshotPath);   // %d targets advance per shot
     gNextShot++;
     if (gNextShot >= gShotTimes.size()) {
@@ -1648,7 +1734,11 @@ static void RenderScene() {
     std::snprintf(title, sizeof(title), "%s - FPS : %d", NAME, gFps);
     SDL_SetWindowTitle(gWindow, title);
   }
-  if ((now - gStartTime) * 1000.0 >= (double)BENCH_MILLISECONDS) {
+  // BUILD-D8 harness fix: in screenshot mode the shot list IS the run length —
+  // never cut the window at 45 wall-seconds while the sim is still crawling
+  // (llvmpipe used to strand the last shots; the user's real GPU is unaffected).
+  if (gShotTimes.empty() &&
+      (now - gStartTime) * 1000.0 >= (double)BENCH_MILLISECONDS) {
     double elapsed = now - gStartTime;
     double fps = (double)gFrame / elapsed;
     double score = fps * fps * 2.0;
@@ -1934,6 +2024,8 @@ int RunPoolScene(bool *gaveUpOut) {
 
   gStartTime = NowSeconds();
   gFpsTimer = gStartTime;
+  gSimTime = 0.0;      // D8 harness fix: screenshot times are SIM seconds
+  gPhysicsAccum = 0.0;
 
   SDL_Event event;
   while (!gQuit && !gFusedDone) {
