@@ -9,7 +9,6 @@ It ships **one** executable that contains **all three** scenes — no second bin
 | **ElectroBench** (the OG) | OpenGL 2.1 / GLSL 1.2, fixed-function pipeline | **110 UZIs** on a shadow-mapped concrete floor, lit by a warm sun |
 | **TideBench** (scene 2) | OpenGL 3.3 core, pixel-shader workloads | An ocean under volumetric clouds (3DMark2001 SE "Nature" recreation) |
 | **PoolBench** (scene 3) | OpenGL 3.3 core, analytic shaders | A white-and-red checkerboard-sky pool room with a hidden light and two waves of falling, splashing teapots (18 total) |
-| **RainBench** (scene 4) | OpenGL 3.3 core, analytic shaders | The same pool room under steady rain — an endless storm of drops that pock the surface with ripple rings and bubble plumes |
 
 
 
@@ -183,38 +182,6 @@ Headless visual-test flags (used to verify the render output in CI-like environm
 
 Any `--screenshot` path containing `%d` becomes a **frame sequence**: each `--shot-times` entry writes the next numbered frame (`frames/f-%03d.ppm` → `f-000.ppm`, `f-001.ppm`, …), so a timed burst assembles straight into an animation — that is exactly how the GIF above was made (16 shots, 0.5 s apart, stitched with ImageMagick).
 
-# Scene 4 — RainBench
-
-RainBench is **scene 4 of the same binary** and shares the pool room's water stack: the drops
-are the same ballistic streak particles, their landings feed the same ripple-ring and
-subsurface-bubble systems. What changes is the weather — the hidden light backs off behind an
-overcast sky, the teapot fleet stays docked, and a deterministic storm (55 drops a second over
-a 16 m disc, identical pattern at any frame rate) keeps the surface alive: faint
-rain rings chase each other across the water, the mirror shatters into dancing highlights,
-and roughly every third drop air-hammers a couple of micro-bubbles that wobble up and pop.
-
-![RainBench in motion: rain streaks falling onto the pool, rain rings spreading and micro-bubble plumes rising](docs/screenshots/rain_room.gif)
-
-Run the rain scene on its own with :
-
-```sh
-make
-./build/ElectroBench --rain-only          # Linux / macOS
-./build/ElectroBench.exe --rain-only      # Windows (MSYS2)
-```
-
-Controls are the same as the pool room: `F` toggles the automatic camera, long-click + move
-orbits, mouse wheel zooms, `ESC` quits (`R` has nothing to re-drop — the rain never stops).
-
-Headless visual-test flags (used to verify the render output in CI-like environments):
-
-```sh
-./build/ElectroBench --scene-only --width 960 --screenshot /tmp/shot.ppm --shot-times 6,20,38
-./build/ElectroBench --pool-only --width 960 --screenshot /tmp/shot.ppm --shot-times 2,3.2,5,12
-./build/ElectroBench --rain-only --width 960 --screenshot /tmp/shot.ppm --shot-times 1,2,3,4
-./build/ElectroBench --og-only --screenshot /tmp/shot.ppm --shot-time 3
-```
-
 # How the score is calculated ?
 
 All scenes use the same formula, computed from the **average FPS over the whole run**:
@@ -240,17 +207,16 @@ Benchmark Results - Time : 45.0s, Average FPS : 12.4, Score : 308
 
 # One executable, three scenes
 
-`build/ElectroBench` is the **only** binary, and it contains all four scenes. It runs the OG 60-second gun scene
+`build/ElectroBench` is the **only** binary, and it contains all three scenes. It runs the OG 60-second gun scene
 first, then probes an OpenGL 3.3 core context:
 
-- **found** — TideBench runs as scene 2, PoolBench as scene 3, RainBench as scene 4, on the same session, and the final
+- **found** — TideBench runs as scene 2, then PoolBench as scene 3, on the same session, and the final
   results screen shows **per-scene scores and the average of the scenes that ran**
-- **not found** (GL 2.1-only drivers, old iGPUs) — the GL 3.3 scenes skip themselves cleanly and the
+- **not found** (GL 2.1-only drivers, old iGPUs) — both GL 3.3 scenes skip themselves cleanly and the
   OG result stands, so the binary still runs on the ancient hardware it targets
 
 Scene selection flags: `--og-only` runs just the gun scene even on GL 3.3-capable devices,
-`--scene-only` runs just the ocean scene, `--pool-only` runs just the pool-room scene,
-`--rain-only` runs just the rain scene (scene 4).
+`--scene-only` runs just the ocean scene, `--pool-only` runs just the pool-room scene.
 
 # Windows (MSYS2)
 
