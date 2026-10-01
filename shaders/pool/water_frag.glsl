@@ -37,6 +37,11 @@ uniform vec3 uTileA;
 uniform vec3 uTileB;
 uniform float uTime;
 uniform vec4  uRings[MAX_RINGS]; // xy = centre (world), z = radius, w = strength 0..1
+// SCENE 4 (RAIN ROOM): rain rings live in their OWN block so a storm can
+// never evict a fleet splash's rings. Same layout: xy = centre (world),
+// z = radius, w = strength 0..1.
+#define MAX_RAIN_RINGS 96        // must match src/pool.cxx
+uniform vec4  uRainRings[MAX_RAIN_RINGS];
 uniform vec4  uHulls[MAX_HULLS]; // BUILD-D7: xy = hull centre (world),
                                  // z = hull bounding radius, w = parked
                                  // strength 0..1 (fades in as the pot settles)
@@ -144,6 +149,25 @@ void main() {
         // the mid-pool — halved gain, narrower spread.
         float halo = exp(-band * band / (width * width * 8.0));
         foam += halo * r.w * r.w * 0.10;
+    }
+
+    // --- SCENE 4: rain rings — same accumulation, leaner gains ------------
+    // A storm stacks dozens of faint rings per frame; each one contributes
+    // less than a fleet ring so the surface reads as rain-pocked water
+    // (dancing highlights + broken mirror) instead of cotton-wool fog.
+    for (int i = 0; i < MAX_RAIN_RINGS; i++) {
+        vec4 r = uRainRings[i];
+        if (r.w <= 0.001) continue;   // dead slot
+        float d = length(vWorld.xz - r.xy);
+        float band = d - r.z;
+        float width = 0.20 + r.z * 0.030;
+        float ring = exp(-band * band / (width * width));
+        bump += ring * r.w * 0.30;    // slightly flatter bump than fleet rings
+        foam  += ring * r.w * 0.85;
+        float crest = exp(-band * band / (width * width * 0.9));
+        foamCrest += crest * r.w * 0.26;
+        float halo = exp(-band * band / (width * width * 8.0));
+        foam += halo * r.w * r.w * 0.07;
     }
 
     // --- BUILD-D7 PER-POT CONTACT & LIVE-SPLASH WATERLINE ------------------

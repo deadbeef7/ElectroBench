@@ -73,6 +73,31 @@ Realism takeaways applied:
   slow renderer wall time and sim time diverge and any straggler on the
   wall clock breaks determinism.
 
+## Pool room (scene 4) — RAIN pass
+
+Realism takeaways applied:
+
+- Rain is a PARTICLE WEATHER, not a screen overlay: the drops are the same
+  ballistic streak sprites as splash ejecta, so they fall through the same
+  physics and land IN the water sim, raising real rings.
+- Rain rings live in their own uniform block — a storm stacks ~55
+  landings a second and would evict every fleet splash ring if they
+  shared slots; each storm ring also contributes less than a fleet ring
+  (fainter, flatter bump) or dozens of them fuse into cotton-wool fog.
+- Rain air-enters the water: roughly every third drop seeds a couple of
+  micro-bubbles into the plume system, which rise and pop like any other
+  bubble. Rain keeps the surface alive between big splashes.
+- Weather changes LIGHT: the hidden light backs off behind an overcast
+  sky (dimmed light tint across every shader), which both sells the storm
+  and makes the bright streaks/rings pop against the dimmed surface.
+- Any event stream can overflow its buffers: rain landings feed a
+  dedicated ring block with weakest-slot reuse, and a per-event seed
+  keeps the storm identical at any frame rate (deterministic captures).
+- Latent-bug lesson: bubbles in a shared pop path must not carry a
+  sentinel owner (-1) into a pot-indexed ring window — rain bubbles pop
+  into the rain block instead, or the fleet's window bookkeeping is
+  written out of bounds.
+
 ## Notes on staging
 
 - Reference images are informational. No image is downloaded at runtime; do not add an image fetch to the binary without explicitly wiring it through Convex/actions and the user's Keys/API keys.

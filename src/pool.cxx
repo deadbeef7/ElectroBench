@@ -75,6 +75,9 @@ unsigned lodepng_decode_file(unsigned char **out, unsigned *w, unsigned *h,
 #define MAX_RINGS 54             // must match water_frag.glsl; split into
                                  // private per-pot windows (54/18 = 3 each)
                                  // per-pot windows below
+#define MAX_RAIN_RINGS 96        // must match water_frag.glsl: rain rings live
+                                 // in their OWN uniform block so a rainstorm
+                                 // can never evict a fleet splash's rings
 #define MAX_BUBBLES 48           // must match water_frag.glsl: subsurface
                                  // bubble plume slots (BUILD-D8); the scene
                                  // uploads all 48 in one glUniform4fv plus a
@@ -92,6 +95,14 @@ static const float kDomeRadius = 800.0f;  // inside the far plane
 static const float kTileA[3] = {2.30f, 2.30f, 2.26f}; // hot white tile (linear)
 static const float kTileB[3] = {1.50f, 0.008f, 0.010f}; // deep pure red tile
 static const float kLightTint[3] = {0.86f, 0.95f, 1.05f};// cool pool-room glow
+// SCENE 4 (RAIN ROOM) mode flag: lives here so the light-tint helper below
+// can read it (declared before every user).
+static bool gRainMode = false;
+// SCENE 4: the hidden light backs off under an overcast sky — the room
+// reads as a storm over the pool, and the rain streaks/rings pop against
+// the dimmed surface.
+static const float kRainTint[3] = {0.55f, 0.63f, 0.74f};
+static const float *LightTintNow() { return gRainMode ? kRainTint : kLightTint; }
 
 // hidden light: direction TOWARD the light, high and behind the default
 // camera so the water specular path lands between camera and teapot
@@ -669,6 +680,44 @@ static Ring gRings[MAX_RINGS];
 static int gRingUsed[kFleetCount] = {};
 static Ring *RingWindow(int pot) { return &gRings[pot * kRingsPerPot]; }
 
+// ---- SCENE 4 (RAIN ROOM): the pool under steady rain -----------------------
+// Rain reuses EVERY piece of the splash stack — drops are Droplet particles
+// (streak sprites), each landing raises a ring and throws a couple of
+// micro-bubbles — but keeps its own ring block (the fleet's 18 windows are
+// far too small for a storm) and a deterministically-seeded spawner. The
+// teapot fleet and its waves stay OFF in this mode: the rain IS the show.
+// (gRainMode itself is declared up with the light-tint constants.)
+static const int kRainMaxDrops = 260;      // airborne drop cap (streak sprites)
+static const float kRainArea = 16.0f;      // half-extent of the rain field (m)
+static const float kRainRate = 55.0f;      // drops per sim-second
+static float gRainAccum = 0.0f;            // fractional-drop carry (rate != int)
+// xorshift RNG: identical rain pattern for a given seed at any frame rate
+// (deterministic screenshots), and cheap enough to call per drop.
+static unsigned int gRainSeed = 0x9E3779B9u;
+static float RainRand() {
+  gRainSeed ^= gRainSeed << 13;
+  gRainSeed ^= gRainSeed >> 17;
+  gRainSeed ^= gRainSeed << 5;
+  return (float)(gRainSeed & 0x00FFFFFFu) / (float)0x01000000u;
+}
+static int gRainRingUsed = 0;
+static Ring gRainRings[MAX_RAIN_RINGS];
+
+// A rain landing: ring in the rain block. Small radius-invariant strength
+// (rain rings are fainter than fleet splashes — a droplet is not a teapot).
+static void SpawnRainRing(float x, float z, float strength) {
+  Ring r{x, z, 0.12f, strength};
+  if (gRainRingUsed < MAX_RAIN_RINGS) {
+    gRainRings[gRainRingUsed++] = r;
+  } else {
+    // overwrite the weakest: the freshest rings always survive a storm
+    int weakest = 0;
+    for (int i = 1; i < MAX_RAIN_RINGS; i++)
+      if (gRainRings[i].strength < gRainRings[weakest].strength) weakest = i;
+    gRainRings[weakest] = r;
+  }
+}
+
 // BUILD-D8 SUBSURFACE BUBBLES: the impact cavity entrains air; a plume of
 // bubbles rises under each impact point for a couple of seconds, wobbling,
 // then pops at the surface into a micro-ring. depth = metres BELOW the
@@ -723,6 +772,22 @@ struct Droplet {
   int owner;      // fleet pot that spawned it (owns the micro-ring window)
 };
 static std::vector<Droplet> gDroplets;
+
+// SCENE 4: rain drops are regular Droplet particles so the GPU streak
+// shader draws them for free; a landing spawns the ring (and, sometimes,
+// micro-bubbles). Deterministic per seed, so screenshots are reproducible.
+static void SpawnRainDrop() {
+  Droplet d;
+  d.owner = -1;                        // rain: no fleet window, no ejecta kids
+  float a = RainRand() * 6.2831853f;
+  float rr = 1.6f + 14.2f * std::sqrt(RainRand());  // uniform over the disc
+  d.pos = {std::cos(a) * rr, 5.2f + RainRand() * 2.2f, std::sin(a) * rr};
+  d.vel = {-0.7f + 1.4f * RainRand(), -7.6f - 2.6f * RainRand(),
+           -0.7f + 1.4f * RainRand()};
+  d.radius = 0.016f + 0.018f * RainRand();
+  d.maxLife = d.life = 1.4f;
+  gDroplets.push_back(d);
+}
 
 static TeapotPhysics gPots[kFleetCount];
 
@@ -853,6 +918,8 @@ static void ResetFleet() {
   }
   gDroplets.clear();
   gBubbles.clear();
+  gRainRingUsed = 0;
+  gRainAccum = 0.0f;
 }
 
 static double gStartTime = 0.0;  // set in RunPoolScene; UpdatePhysics reads it.
@@ -888,6 +955,15 @@ static void UpdatePhysicsStep(double now, float dt) {
       if (win[j].strength > 0.02f) win[w++] = win[j];
     gRingUsed[i] = w;
   }
+  // --- SCENE 4: rain rings expand and fade in their own block ---
+  for (int j = 0; j < gRainRingUsed; j++) {
+    gRainRings[j].radius += (0.9f + 1.4f * gRainRings[j].strength) * dt;
+    gRainRings[j].strength -= 0.75f * dt;   // rain rings die fast: small drops
+  }
+  int rw = 0;
+  for (int j = 0; j < gRainRingUsed; j++)
+    if (gRainRings[j].strength > 0.02f) gRainRings[rw++] = gRainRings[j];
+  gRainRingUsed = rw;
 
   // --- droplets: STEEP ballistic strands with air drag (BUILD-D4) ---
   // drag bleeds the small lateral component fast (the spray falls back
@@ -904,15 +980,33 @@ static void UpdatePhysicsStep(double now, float dt) {
     d.pos = Vec3Add(d.pos, Vec3Scale(d.vel, dt));
     d.life -= dt;
     if (d.pos.y < kWaterLevel && d.vel.y < 0.0f) {
-      // landing droplet raises a micro-ring in its owner's window
-      if (d.radius > 0.03f)
+      if (d.owner < 0) {
+        // SCENE 4: a rain landing — ring in the RAIN block (never the
+        // fleet's), plus a couple of micro-bubbles fed into the D8 plume
+        // system roughly every third drop: rain air-hammers the surface
+        // the same way a splash cavity does, just much smaller.
+        SpawnRainRing(d.pos.x, d.pos.z,
+                      0.20f + 0.25f * std::fmin(-d.vel.y / 9.0f, 1.0f));
+        if ((gRainSeed & 3u) == 0u && (int)gBubbles.size() < MAX_BUBBLES) {
+          Bubble b;
+          b.owner = -1;
+          b.x = d.pos.x + (RainRand() - 0.5f) * 0.10f;
+          b.z = d.pos.z + (RainRand() - 0.5f) * 0.10f;
+          b.depth = 0.18f + 0.30f * RainRand();
+          b.radius = 0.016f + 0.014f * RainRand();
+          b.rise = 0.55f + 0.45f * RainRand();
+          b.phase = RainRand() * 6.2831853f;
+          gBubbles.push_back(b);
+        }
+      } else if (d.radius > 0.03f)
         SpawnRing(d.owner, d.pos.x, d.pos.z,
                   0.14f + 0.3f * std::fmin(-d.vel.y / 6.0f, 1.0f));
       // BUILD-D7 SECONDARY EJECTA: a fast droplet throws a couple of tiny
       // kids back up (real rain-on-water behaviour). Collected out-of-loop
       // (no push_back during iteration) and hard-capped so a droplet storm
       // can never avalanche.
-      if (d.radius > 0.03f && gDroplets.size() + pending.size() < 3200 &&
+      if (d.owner >= 0 && d.radius > 0.03f &&
+          gDroplets.size() + pending.size() < 3200 &&
           ((d.owner * 7 + (int)(d.pos.x * 13.0f)) % 3) == 0) {
         for (int k = 0; k < 2; k++) {
           Droplet s;
@@ -938,6 +1032,16 @@ static void UpdatePhysicsStep(double now, float dt) {
                                  [](const Droplet &d) { return d.life <= 0.0f; }),
                   gDroplets.end());
 
+  // --- SCENE 4: steady rain — spawn + land against the SIM clock ----------
+  if (gRainMode) {
+    gRainAccum += kRainRate * dt;
+    while (gRainAccum >= 1.0f && (int)gDroplets.size() < kRainMaxDrops) {
+      gRainAccum -= 1.0f;
+      SpawnRainDrop();
+    }
+    if (gRainAccum >= 1.0f) gRainAccum = 0.0f;  // at cap: shed the backlog
+  }
+
   // --- BUILD-D8: subsurface bubbles rise, wobble, pop into micro-rings ---
   // Wobble phase rides gSimTime (SIM seconds): identical plume shape at any
   // frame rate, and no float-precision loss from the huge uptime clock.
@@ -946,8 +1050,14 @@ static void UpdatePhysicsStep(double now, float dt) {
     b.x += std::sin(b.phase + (float)gSimTime * 2.6f) * 0.06f * dt;
     b.z += std::cos(b.phase * 1.3f + (float)gSimTime * 3.1f) * 0.06f * dt;
     if (b.depth <= 0.035f) {
-      // the bubble breaks the surface: a tiny residual ripple
-      SpawnRing(b.owner, b.x, b.z, 0.10f);
+      // the bubble breaks the surface: a tiny residual ripple. Rain bubbles
+      // (owner < 0) pop into the RAIN ring block — the fleet windows index
+      // by pot and a -1 pot would write out of bounds (this was the Scene-4
+      // segfault: RingWindow(-1) = gRingUsed[-1]).
+      if (b.owner < 0)
+        SpawnRainRing(b.x, b.z, 0.10f);
+      else
+        SpawnRing(b.owner, b.x, b.z, 0.10f);
       b.depth = -1.0f;   // dead
     }
   }
@@ -955,6 +1065,9 @@ static void UpdatePhysicsStep(double now, float dt) {
                                 [](const Bubble &b) { return b.depth < 0.0f; }),
                  gBubbles.end());
 
+  // SCENE 4: in rain mode the teapot fleet stays docked — no pots, crowns
+  // or jets; the storm drives the whole scene.
+  if (!gRainMode)
   for (int i = 0; i < kFleetCount; i++) {
     CrownSplash &crown = gCrowns[i];
     JetColumn &jet = gJets[i];
@@ -1148,8 +1261,9 @@ static bool gResultsShown = false;
 static double gResultsElapsed = 0.0, gResultsFps = 0.0, gResultsScore = 0.0;
 static double gResultsShownAt = 0.0;
 static const double kResultsScreenSeconds = 4.0;
-static const char *gSceneName = "Pool Room";
+static const char *gSceneName = "Pool Room";   // "Rain Room" in SCENE 4 mode
 double gFusedPoolScore = 0.0;   // read by main.cxx for the combined screen
+double gFusedRainScore = 0.0;   // SCENE 4's final score (same module)
 static bool gFusedDone = false;
 static bool gStandaloneScene = false;
 static int gFrame = 0, gFps = 0, gFrameAccum = 0;
@@ -1254,7 +1368,8 @@ static void RenderHUD() {
   // look changed massively across commits — stale-build screenshots must be
   // detectable at a glance)
   char line1[128];
-  std::snprintf(line1, sizeof(line1), "FPS: %d   build D8", gFps);
+  std::snprintf(line1, sizeof(line1), "FPS: %d   build D8%s", gFps,
+                gRainMode ? "  scene 4: rain" : "");
   RenderText(16.0f, 16.0f, line1);
 }
 
@@ -1300,7 +1415,8 @@ static void DrawSky(const Mat4 &view, const Vec3 &eye, double timeSec) {
   glUniform3f(gSkyProg.loc("uCenter"), eye.x, eye.y, eye.z);
   glUniform1f(gSkyProg.loc("uRadius"), kDomeRadius);
   glUniform3f(gSkyProg.loc("uLightDir"), kLightDir[0], kLightDir[1], kLightDir[2]);
-  glUniform3f(gSkyProg.loc("uLightTint"), kLightTint[0], kLightTint[1], kLightTint[2]);
+  const float *ltSky = LightTintNow();
+  glUniform3f(gSkyProg.loc("uLightTint"), ltSky[0], ltSky[1], ltSky[2]);
   glUniform1f(gSkyProg.loc("uTime"), (float)timeSec);
   glDrawElements(GL_TRIANGLES, gDomeMesh.indexCount, GL_UNSIGNED_INT, nullptr);
   glBindVertexArray(0);
@@ -1321,13 +1437,17 @@ static void DrawWater(const Mat4 &view, const Vec3 &eye, double timeSec) {
   glUniformMatrix4fv(gWaterProg.loc("uModel"), 1, GL_FALSE, model.data());
   glUniform3f(gWaterProg.loc("uEyePos"), eye.x, eye.y, eye.z);
   glUniform3f(gWaterProg.loc("uLightDir"), kLightDir[0], kLightDir[1], kLightDir[2]);
-  glUniform3f(gWaterProg.loc("uLightTint"), kLightTint[0], kLightTint[1], kLightTint[2]);
+  const float *ltWater = LightTintNow();
+  glUniform3f(gWaterProg.loc("uLightTint"), ltWater[0], ltWater[1], ltWater[2]);
   glUniform3f(gWaterProg.loc("uTileA"), kTileA[0], kTileA[1], kTileA[2]);
   glUniform3f(gWaterProg.loc("uTileB"), kTileB[0], kTileB[1], kTileB[2]);
   glUniform1f(gWaterProg.loc("uTime"), (float)timeSec);
   // gRings is exactly MAX_RINGS x (x, z, radius, strength) — upload it flat.
   // Unused slots carry strength 0 and the shader skips them.
   glUniform4fv(gWaterProg.loc("uRings"), MAX_RINGS, &gRings[0].x);
+  // SCENE 4: the rain ring block rides alongside the fleet's — in rain mode
+  // this carries the storm, in fleet mode it is all zeros.
+  glUniform4fv(gWaterProg.loc("uRainRings"), MAX_RAIN_RINGS, &gRainRings[0].x);
   // BUILD-D7: stream the ACTUAL hulls and live splashes so the water can
   // paint real contact foam + anchored reflections (see water_frag.glsl).
   // The old analytic ghost darkened grazing water without knowing where any
@@ -1419,7 +1539,8 @@ static void DrawTeapot(const Mat4 &view, const Vec3 &eye, const TeapotPhysics &p
   glUniformMatrix4fv(gTeapotProg.loc("uModel"), 1, GL_FALSE, model.data());
   glUniform3f(gTeapotProg.loc("uEyePos"), eye.x, eye.y, eye.z);
   glUniform3f(gTeapotProg.loc("uLightDir"), kLightDir[0], kLightDir[1], kLightDir[2]);
-  glUniform3f(gTeapotProg.loc("uLightTint"), kLightTint[0], kLightTint[1], kLightTint[2]);
+  const float *ltTeapot = LightTintNow();
+  glUniform3f(gTeapotProg.loc("uLightTint"), ltTeapot[0], ltTeapot[1], ltTeapot[2]);
   glUniform1f(gTeapotProg.loc("uWetness"), wetness);
   glUniform1f(gTeapotProg.loc("uWaterLine"), kWaterLevel);
   glUniform3f(gTeapotProg.loc("uWaterBody"), 0.030f, 0.180f, 0.320f);
@@ -1459,7 +1580,8 @@ static void DrawCrowns(const Mat4 &view, double now) {
   glUniform3f(gSplashProg.loc("uCamPos"), gCamPos.x, gCamPos.y, gCamPos.z);
   glUniform3f(gSplashProg.loc("uEyePos"), gCamPos.x, gCamPos.y, gCamPos.z);
   glUniform3f(gSplashProg.loc("uLightDir"), kLightDir[0], kLightDir[1], kLightDir[2]);
-  glUniform3f(gSplashProg.loc("uLightTint"), kLightTint[0], kLightTint[1], kLightTint[2]);
+  const float *ltSplash = LightTintNow();
+  glUniform3f(gSplashProg.loc("uLightTint"), ltSplash[0], ltSplash[1], ltSplash[2]);
   // splash films are POOL WATER now: bright surface blue / deep body blue
   glUniform3f(gSplashProg.loc("uWaterA"), 0.30f, 0.62f, 0.86f);
   glUniform3f(gSplashProg.loc("uWaterB"), 0.030f, 0.180f, 0.320f);
@@ -1589,7 +1711,8 @@ static void DrawJets(const Mat4 &view, const Vec3 &eye) {
   glBindBuffer(GL_ARRAY_BUFFER, gJetVbo);
   glBufferData(GL_ARRAY_BUFFER, jbuf.size() * sizeof(float), jbuf.data(), GL_STREAM_DRAW);
   glUniformMatrix4fv(gDropletProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
-  glUniform3f(gDropletProg.loc("uLightTint"), kLightTint[0], kLightTint[1], kLightTint[2]);
+  glUniform3f(gDropletProg.loc("uLightTint"), LightTintNow()[0], LightTintNow()[1],
+             LightTintNow()[2]);
   glUniform3f(gDropletProg.loc("uWaterA"), 0.30f, 0.62f, 0.86f);
   glUniform3f(gDropletProg.loc("uWaterB"), 0.030f, 0.180f, 0.320f);
   glEnable(GL_BLEND);
@@ -1630,7 +1753,8 @@ static void DrawDroplets(const Mat4 &view, const Vec3 &eye) {
   glBindBuffer(GL_ARRAY_BUFFER, gDropletVbo);
   glBufferData(GL_ARRAY_BUFFER, buf.size() * sizeof(float), buf.data(), GL_STREAM_DRAW);
   glUniformMatrix4fv(gDropletProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
-  glUniform3f(gDropletProg.loc("uLightTint"), kLightTint[0], kLightTint[1], kLightTint[2]);
+  glUniform3f(gDropletProg.loc("uLightTint"), LightTintNow()[0], LightTintNow()[1],
+             LightTintNow()[2]);
   glUniform3f(gDropletProg.loc("uSkyA"), kTileA[0], kTileA[1], kTileA[2]);
   glUniform3f(gDropletProg.loc("uSkyB"), kTileB[0], kTileB[1], kTileB[2]);
   glEnable(GL_BLEND);
@@ -1746,6 +1870,7 @@ static void RenderScene() {
                 elapsed, fps, score);
     std::fflush(stdout);
     gFusedPoolScore = score;
+    if (gRainMode) gFusedRainScore = score;   // SCENE 4 reports under its own name
     gResultsElapsed = elapsed;
     gResultsFps = fps;
     gResultsScore = score;
@@ -1829,6 +1954,9 @@ int PoolSceneParseArgs(int argc, char **argv) {
       }
     } else if (!std::strcmp(argv[i], "--width") && i + 1 < argc) {
       gWindowWidthOverride = std::atoi(argv[++i]);
+    } else if (!std::strcmp(argv[i], "--rain-only")) {
+      // SCENE 4: the pool room under steady rain (no teapot fleet)
+      gRainMode = true;
     }
   }
   return EXIT_SUCCESS;
@@ -1971,7 +2099,11 @@ static void Setup() {
 }
 
 // ------------------------------------------------------ scene entry point
-int RunPoolScene(bool *gaveUpOut) {
+// Shared GL session used by both modes: scene 3 (pool fleet) and scene 4
+// (rain room). Everything after the GL context exists is identical; only the
+// mode flag and the printed banner differ.
+static int RunPoolSession(bool *gaveUpOut, bool rainMode) {
+  gRainMode = rainMode;
   if (gaveUpOut) *gaveUpOut = false;
 
   if (SDL_Init(SDL_INIT_VIDEO) < 0) {
@@ -2021,6 +2153,9 @@ int RunPoolScene(bool *gaveUpOut) {
 
   Setup();
   ResetFleet();
+  // SCENE 4 identity (results screen): derived from the mode, not sticky,
+  // so back-to-back sessions in one process always label correctly.
+  gSceneName = gRainMode ? "Rain Room" : "Pool Room";
 
   gStartTime = NowSeconds();
   gFpsTimer = gStartTime;
@@ -2054,3 +2189,9 @@ int RunPoolScene(bool *gaveUpOut) {
   if (gQuit) return 2;
   return 0;
 }
+
+int RunPoolScene(bool *gaveUpOut) { return RunPoolSession(gaveUpOut, false); }
+
+// SCENE 4 entry (main.cxx): the rain room. Same GL session, same water,
+// no fleet — the rain spawner is the whole show.
+int RunRainScene(bool *gaveUpOut) { return RunPoolSession(gaveUpOut, true); }
