@@ -26,7 +26,7 @@ The TideBench ocean scene — long cloud banks with sunward silver linings, two 
 
 ![ElectroBench TideBench scene](docs/screenshots/ps14_dusk_t36.png)
 
-The PoolBench pool room — an infinite white-and-red checkerboard sky mirrored on open water, lit only by a hidden light, with two waves of teapots raining down in scattered positions, splashing on impact, then sinking to the basin floor where they stay:
+The PoolBench pool room — an infinite white-and-red checkerboard sky mirrored on open water, lit only by a hidden light, with two waves of teapots raining down in scattered positions, splashing on impact, then parking right where they fell (no bobbing, no righting — they stay put):
 
 ![ElectroBench PoolBench scene](docs/screenshots/pool_teapot.png)
 
@@ -138,10 +138,10 @@ What it renders :
   rises after the fleet. Each pot has scattered positions, sizes and drop heights
   on a staggered timeline, with real-ish physics: gravity and tumble in the air, a splash that
   fully absorbs the plunge (quadratic cavity drag below the surface), then heavy underwater drag
-  as the pot sinks to the basin floor and **stays where it fell** — no buoyancy, no bob, no
-  righting; it keeps the orientation it landed in. Falling pots carry air drag, a drift arc and a
-  two-axis tumble, and the whole simulation runs on a fixed 1/120 s substep so trajectories are
-  frame-rate independent. `R` re-drops the whole fleet
+  as the pot settles a few centimetres and **parks at the fall point** — no buoyancy, no bob, no
+  righting; it keeps the orientation it landed in and stays there. Falling pots carry air drag, a
+  drift arc and a two-axis tumble, and the whole simulation runs on a fixed 1/120 s substep so
+  trajectories are frame-rate independent. `R` re-drops the whole fleet
 - **Splash FX**: a GPU-animated **Worthington crown** — a STEEP translucent POOL-WATER sheet
   (the walls point almost straight up: the radius stays at the pot's footprint while the height
   ramps to ~2 m, and the rim tapers inward) with a foam collar at the water line, that erupts

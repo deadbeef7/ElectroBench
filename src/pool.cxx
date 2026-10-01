@@ -603,11 +603,11 @@ static void BuildDomeMesh() {
 }
 
 // ------------------------------------------------------------ physics state
-// The teapot: dropped from the sky, splashes, then SINKS to the basin floor
-// and stays there (BUILD-D4: no buoyancy recovery — a ceramic pot does not
-// bob back to the surface; it rests where it fell, in the orientation it
-// landed in). Semi-implicit Euler driven by the fixed 1/120 s substepper
-// below — deterministic renders at any frame rate.
+// The teapot: dropped from the sky, splashes, then PARKS at the fall point
+// just under the waterline (BUILD-D5: no buoyancy recovery, no bob, no
+// righting — it stays in the position it landed in, hull visible above the
+// surface, and never moves again). Semi-implicit Euler driven by the fixed
+// 1/120 s substepper below — deterministic renders at any frame rate.
 struct TeapotPhysics {
   Vec3 pos{0.0f, 8.0f, 0.0f};
   Vec3 vel{0.0f, 0.0f, 0.0f};
@@ -717,11 +717,12 @@ static const float kWaterLevel = 0.0f;
 static const float kBounce = 0.0f;      // no rebound: the cavity tears the
                                         // plunge away on entry
 static const float kDragWater = 2.6f;   // /s velocity damping in water
-static const float kFloorY = -3.4f;     // pool basin floor: deep enough that
-                                        // every pot fully submerges when it
-                                        // rests there (tallest hull ~2.5 m).
-                                        // D4 removed the buoyancy spring:
-                                        // pots sink to this depth and STAY.
+// BUILD-D5 PARK-AT-IMPACT: the user's actual ask — "pots shouldn't recover
+// from the fall, they stay in the same position when they fell". A pot that
+// lands stops dead a little way below its entry point (restY below) and is
+// parked there FOREVER: no buoyancy spring, no bobbing, no righting. The
+// hull stays visible above the waterline (the D4 sink-to-floor version
+// vanished under the opaque water and left the pool looking empty).
 
 static void SpawnRing(int pot, float x, float z, float strength) {
   Ring *win = RingWindow(pot);
@@ -970,19 +971,18 @@ static void UpdatePhysicsStep(double now, float dt) {
         p.yawVel *= 0.25f;
         p.pitchVel *= 0.25f;
       }
-      // BUILD-D4 — SINK: no buoyancy spring, no float-line, no bob. The pot
-      // keeps falling under water with heavy drag and rests on the basin
-      // floor where it landed, keeping the orientation it fell in. This is
-      // what the user asked for: teapots stay where they fell.
-      float depth = kWaterLevel - p.pos.y;
-      (void)depth;
-      // heavy water drag kills the plunge over ~1 m of depth
+      // BUILD-D5 — PARK, DON'T RECOVER: the plunge dies on entry (kBounce
+      // = 0 above), then heavy water drag lets the pot glide the last few
+      // centimetres down to its rest line and STOP. No buoyancy, no bob, no
+      // righting: it keeps the orientation it landed in and never moves
+      // again. The hull stays visibly parked at the fall position.
+      // heavy water drag kills the plunge over a few cm of depth
       p.vel.y += -0.55f * std::fabs(p.vel.y) * p.vel.y * dt;
       p.vel.y *= 1.0f - std::fmin(4.5f * dt, 0.9f);
       // lateral drag: the cavity grabs the pot
       p.vel.x *= 1.0f - std::fmin(kDragWater * dt, 0.9f);
       p.vel.z *= 1.0f - std::fmin(kDragWater * dt, 0.9f);
-      // slow residual yaw/pitch drift while sinking, then rest (no spring:
+      // slow residual yaw/pitch drift while settling, then rest (no spring:
       // no righting torque — the pot KEEPS its landed orientation)
       p.yawVel *= 1.0f - std::fmin(1.6f * dt, 0.9f);
       p.yaw += p.yawVel * dt;
@@ -995,11 +995,14 @@ static void UpdatePhysicsStep(double now, float dt) {
     }
 
     p.pos = Vec3Add(p.pos, Vec3Scale(p.vel, dt));
-    if (p.pos.y < kFloorY + 0.05f) {
-      // basin floor: the mesh is base-normalized (its lowest vertex sits at
-      // pos.y), so resting at kFloorY parks the hull ON the floor — at the
-      // exact x/z where it fell, in the orientation it landed in, forever.
-      p.pos.y = kFloorY + 0.05f;
+    // rest line: a little deeper than the entry plane, so the pot visibly
+    // settles INTO the water but keeps most of its hull above the surface
+    // (mesh is base-normalized: its lowest vertex sits at pos.y, hull top
+    // reaches ~+0.6x its scale above the waterline when parked)
+    float restY = kWaterLevel - 0.45f * p.radius;
+    if (p.pos.y < restY) {
+      // parked: freeze at the fall position forever (BUILD-D5)
+      p.pos.y = restY;
       if (p.vel.y < 0.0f) p.vel.y = 0.0f;
       p.vel.x = 0.0f;
       p.vel.z = 0.0f;
@@ -1148,7 +1151,7 @@ static void RenderHUD() {
   // look changed massively across commits — stale-build screenshots must be
   // detectable at a glance)
   char line1[128];
-  std::snprintf(line1, sizeof(line1), "FPS: %d   build D4", gFps);
+  std::snprintf(line1, sizeof(line1), "FPS: %d   build D5", gFps);
   RenderText(16.0f, 16.0f, line1);
 }
 
