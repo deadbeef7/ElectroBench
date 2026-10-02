@@ -2,10 +2,14 @@
 // SCENE 4 (POWER LINES) object vertex shader: world position, normal,
 // per-vertex colour. The CPU builds poles/wires/ground with normalised
 // cylinder frames and per-vertex material colours.
+// Explicit attribute locations (0/1/2, matching DrawGrid's VAO pointers):
+// AMD/NVIDIA do NOT assign locations in declaration order the way Mesa
+// does — without a layout the object pass renders NOTHING (sky/HUD only),
+// exactly the "no poles, no nothing" report from the user's AMD box.
 
-in vec3 aPos;
-in vec3 aNormal;
-in vec3 aColor;
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec3 aNormal;
+layout(location = 2) in vec3 aColor;
 
 uniform mat4 uViewProj;
 uniform mat4 uModel;
