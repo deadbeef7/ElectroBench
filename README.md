@@ -45,11 +45,11 @@ The PoolBench pool room — an infinite white-and-red checkerboard sky mirrored 
 
 The LainBench power-line corridor — an amber dusk under a real atmosphere (Rayleigh sky, a tight limb-darkened sun disc sitting on the haze band, wind-blown cumulus with sunward silver linings). The camera aims at the **top** of the pole, because that is the subject: concrete shafts, three tiers of pin insulators, transformers and cut-outs, a **dense web of thin slack telecom cable** strung between the same two poles at a dozen heights, coils of spare cable hung off the brackets, and cell masts standing behind the line. Below it, cast concrete kerbs and a damp road mirroring the sunset:
 
-![ElectroBench LainBench scene: steel utility poles and catenary wires against an amber dusk sky](docs/screenshots/lain_lines.png)
+![ElectroBench LainBench scene: concrete and galvanised utility poles with a catenary cable web and an open lattice cell mast against an amber dusk sky](docs/screenshots/lain_lines.png)
 
 **In motion** — the auto-dolly walking the corridor (four positions down the run): the cable web sweeping overhead pole after pole, slack coils swinging past, guy wires pulling into their anchor blocks, and the telecom bundles peeling off toward the eaves:
 
-![LainBench in motion: steel poles, guy wires and catenary spans over the dolly camera](docs/screenshots/lain_lines.gif)
+![LainBench in motion: concrete poles, guy wires and catenary spans over the dolly camera](docs/screenshots/lain_lines.gif)
 
 # How to build ?
 
