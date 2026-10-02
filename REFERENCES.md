@@ -85,6 +85,34 @@ Realism takeaways applied:
 - A low amber sun, a drifting white cloud deck and warm gravel bounce give the scene one coherent
   light story, and a filmic knee keeps the bright sky rolling off instead of clipping flat.
 
+## Power Lines (scene 4) — BUILD-P7 realism pass
+
+- Backlit air forward-scatters: haze toward the sun is brighter than haze away from it, and it
+  thins with altitude. A single constant fog colour is one of the loudest "this is CG" tells in a
+  shot with the sun in frame — but it has to stay weak, or the whole mid-distance turns into one
+  featureless cream sheet.
+- Ambient is a hemisphere, not a constant: at dusk an up-facing surface sees the bright sky dome
+  and a wall facing the ground sees only warm bounce. Flat ambient is why everything looks painted
+  with the same bucket.
+- Contact darkening near the ground is the cheap stand-in for ambient occlusion; without it, boxes
+  sit ON the plane instead of IN it.
+- One material id per vertex beats guessing from the normal: bark grain, siding courses, pantile
+  courses, tarmac aggregate and wheel-path polish, damp dirt patches — each surface needs its own
+  story.
+- A road is one contiguous quad with its paint on a separate level. Build P6 tiled it out of
+  pieces whose extents did not meet, and a 35 cm strip of bare bright gravel ran the whole length
+  of the corridor — at the camera's grazing angle that read as a pale diagonal band lying across
+  the road.
+- Shadows should multiply the surface, not stamp over it: alpha-blended so the painted lines
+  darken too, with a decaying alpha ramp along the strip for a penumbra.
+- A wire that stops in mid air reads as broken no matter how good the sag curve is. Every
+  conductor belongs on an insulator bell (at the exact height of the glaze, not 5 cm above it),
+  every drop on an eave bracket or a termination ferrule.
+- The cloud deck projection dir.xz/dir.y explodes as dir.y approaches zero; clamping it is what
+  stops distant cumulus smearing into horizontal streaks along the horizon.
+- Draw the sky LAST, depth-tested, so its expensive fbm only runs on the pixels the world did not
+  cover. On a pre-SSE CPU that pays for a much richer object shader.
+
 ## Notes on staging
 
 - Reference images are informational. No image is downloaded at runtime; do not add an image fetch to the binary without explicitly wiring it through Convex/actions and the user's Keys/API keys.

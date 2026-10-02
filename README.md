@@ -9,7 +9,7 @@ It ships **one** executable that contains **all four** scenes — no second bina
 | **ElectroBench** (the OG) | OpenGL 2.1 / GLSL 1.2, fixed-function pipeline | **110 UZIs** on a shadow-mapped concrete floor, lit by a warm sun |
 | **TideBench** (scene 2) | OpenGL 3.3 core, pixel-shader workloads | An ocean under volumetric clouds (3DMark2001 SE "Nature" recreation) |
 | **PoolBench** (scene 3) | OpenGL 3.3 core, analytic shaders | A white-and-red checkerboard-sky pool room with a hidden light and two waves of falling, splashing teapots (18 total) |
-| **PowerBench** (scene 4) | OpenGL 3.3 core, analytic shaders | A Lain-style power-line corridor at amber dusk: 21 creosote utility poles, a wall of sagging catenary wires tied insulator-top to insulator-top, long dusk shadows, drifting white clouds |
+| **PowerBench** (scene 4) | OpenGL 3.3 core, analytic shaders | A Lain-style power-line corridor at amber dusk: 21 creosote utility poles, a wall of sagging catenary wires tied insulator-top to insulator-top and down to house eave brackets, alpha-blended swinging shadows, an asphalt road between the pole lines, suburban houses and a far treeline, drifting white clouds |
 
 
 
@@ -203,16 +203,28 @@ What it renders :
 - **Catenary wires** — three conductors per crossarm plus a pole-top wire per span, real sag
   curves (parabola + cosh tail) swept as 4-sided tubes, every span tied insulator-top to
   insulator-top, with crossing spans between the two lines and service drops down to junctions
+- **No wire ends in mid air**: every conductor lands on an insulator bell at the exact height of
+  the glaze, every telecom drop runs to an eave bracket on a house (or ends in a real termination
+  ferrule), and the service drops tie the pole spool to those same brackets
 - A **dusk sky** rendered directly at full screen resolution: amber-to-cream gradient, a low veiled
   sun disc sitting on the haze band (the dolly walks straight toward it, so poles and wires cross
   it as silhouettes), two layers of drifting value-noise clouds, and horizon ray crossbars
-- A **straight asphalt road with worn centre dashes running BETWEEN the two pole lines** (the
-  auto camera drives down its middle; poles line both shoulders), gabled **suburban silhouette
-  houses** on both flanks that the service drops land on, and a patchy warm gravel field
+- A **straight asphalt road with worn centre dashes and edge lines running BETWEEN the two pole
+  lines** (the auto camera drives down its middle; poles line both shoulders), two burnished
+  wheel paths, gravel shoulders, gabled **suburban houses** on both flanks with plinths, overhanging
+  eaves, framed windows and entry canopies, and a far treeline closing the horizon
+- **Per-material surface shading** (one material id per vertex drives it): creosote bark grain on
+  the trunks, siding courses and rain-dirt on the house walls, pantile courses on the roofs,
+  aggregate speckle and wheel-path polish on the tarmac, damp patches and dry grass on the verges
+- **Hemisphere lighting** — a surface facing the bright dusk sky is much lighter than one facing
+  the dark ground, and everything standing on the ground picks up a contact gradient, so nothing
+  floats
 - A **moving sun**: it crawls in azimuth and sinks over the run, and every ground shadow is
-  re-streamed per frame, so the whole street's shadows swing with the sunset. Two-scale **aerial
-  haze** sinks the far corridor into the sky colour without erasing it, wires carry grazing rim
-  glints, and a filmic knee keeps the amber rolling off instead of clipping
+  re-streamed per frame, so the whole street's shadows swing with the sunset. The shadows are
+  **alpha-blended**, so they multiply whatever is under them — the painted dashes darken too —
+  and fade into a penumbra instead of ending in a hard edge. **Aerial haze** thins with altitude
+  and brightens toward the sun (backlit air forward-scatters), wires carry grazing rim glints, and
+  a filmic knee keeps the amber rolling off instead of clipping
 - An **automatic camera** that dollies along line A from pole to pole (wrapping at the end of the
   line) with the wire bundle sliding overhead
 

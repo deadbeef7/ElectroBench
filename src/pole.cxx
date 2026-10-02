@@ -268,10 +268,33 @@ static Vec3 OrbitCamPos() {
 }
 
 // ------------------------------------------------------------------- the grid
-// Per-vertex colour geometry: position(3) + normal(3) + colour(3).
-struct ObjVertex { float x, y, z, nx, ny, nz, r, g, b; };
+// Per-vertex colour geometry: position(3) + normal(3) + colour(3) +
+// material(1) + alpha(1).
+//
+// BUILD-P7: the material id is what lets ONE fragment shader give asphalt,
+// creosote bark, siding and pantile their own surface detail instead of
+// painting every surface with the same flat ramp. Alpha is only used by the
+// streamed ground shadows (the pass is alpha-blended and multiplies what is
+// already in the framebuffer); it stays 1.0 everywhere else.
+struct ObjVertex { float x, y, z, nx, ny, nz, r, g, b, mat, alpha; };
 static std::vector<ObjVertex> gVerts;
 static std::vector<unsigned int> gIdx;
+
+// material ids — MUST match the kMat* constants in
+// shaders/pole/object_frag.glsl.
+static const float kMatPaint = 0.0f;      // generic, no detail
+static const float kMatWood = 1.0f;
+static const float kMatGround = 2.0f;
+static const float kMatRoad = 3.0f;
+static const float kMatLine = 4.0f;       // road paint
+static const float kMatCable = 5.0f;
+static const float kMatCeramic = 6.0f;
+static const float kMatMetal = 7.0f;
+static const float kMatWall = 8.0f;
+static const float kMatRoof = 9.0f;
+static const float kMatGlass = 10.0f;
+static const float kMatLeaf = 11.0f;
+static const float kMatShadow = 12.0f;
 
 static const Vec3 kWoodDark{0.165f, 0.115f, 0.085f};   // creosote pole
 static const Vec3 kWoodOld{0.230f, 0.180f, 0.140f};   // weathered crossarm
@@ -281,14 +304,28 @@ static const Vec3 kCableOld{0.085f, 0.075f, 0.070f};
 static const Vec3 kMetal{0.190f, 0.195f, 0.200f};    // transformer can
 static const Vec3 kGravel{0.520f, 0.420f, 0.310f};   // warm dirt road
 
-static void PushVert(const Vec3 &p, const Vec3 &n, const Vec3 &c) {
-  gVerts.push_back({p.x, p.y, p.z, n.x, n.y, n.z, c.x, c.y, c.z});
+// BUILD-P7 ROAD GEOMETRY. The road was rebuilt because build P6 laid it out
+// as three coplanar strips with a 0.35 m HOLE down the left side (the body
+// started 0.35 m inboard of where the edge strip ended), which showed up on
+// the user's box as a pale diagonal band of bare gravel running the length
+// of the road. The heights below are the anti-z-fight ladder: ground 0,
+// road kRoadY, paint kPaintY, shadows kShadowY, each with centimetre-scale
+// separation that survives the 0.1..900 m depth range at 100 m out.
+static const float kRoadX = 2.6f;       // road centre (matches uRoadX)
+static const float kRoadHalf = 2.7f;    // 5.4 m carriageway
+static const float kRoadY = 0.030f;
+static const float kPaintY = 0.050f;
+static const float kShadowY = 0.075f;
+
+static void PushVert(const Vec3 &p, const Vec3 &n, const Vec3 &c,
+                     float mat = kMatPaint, float alpha = 1.0f) {
+  gVerts.push_back({p.x, p.y, p.z, n.x, n.y, n.z, c.x, c.y, c.z, mat, alpha});
 }
 
 // Cylinder between two points (solid, capped): the pole trunk, insulators,
 // the transformer can, stray posts.
 static void AddCylinder(const Vec3 &base, const Vec3 &top, float rBase, float rTop,
-                        int segs, const Vec3 &color) {
+                        int segs, const Vec3 &color, float mat = kMatPaint) {
   Vec3 axis = Vec3Norm(Vec3Sub(top, base));
   Vec3 helper = std::abs(axis.y) > 0.9f ? Vec3{1, 0, 0} : Vec3{0, 1, 0};
   Vec3 s = Vec3Norm(Vec3Cross(axis, helper));
@@ -298,8 +335,8 @@ static void AddCylinder(const Vec3 &base, const Vec3 &top, float rBase, float rT
     float a = (float)i / segs * 6.2831853f;
     Vec3 dir = Vec3Add(Vec3Scale(s, std::cos(a)), Vec3Scale(u, std::sin(a)));
     Vec3 n = dir;
-    PushVert(Vec3Add(base, Vec3Scale(dir, rBase)), n, color);
-    PushVert(Vec3Add(top, Vec3Scale(dir, rTop)), n, color);
+    PushVert(Vec3Add(base, Vec3Scale(dir, rBase)), n, color, mat);
+    PushVert(Vec3Add(top, Vec3Scale(dir, rTop)), n, color, mat);
   }
   for (int i = 0; i < segs; i++) {
     unsigned int a = start + (unsigned int)i * 2;
@@ -312,11 +349,11 @@ static void AddCylinder(const Vec3 &base, const Vec3 &top, float rBase, float rT
     Vec3 n = cap ? axis : Vec3Scale(axis, -1.0f);
     float r = cap ? rTop : rBase;
     unsigned int ci = (unsigned int)gVerts.size();
-    PushVert(c, n, color);
+    PushVert(c, n, color, mat);
     for (int i = 0; i <= segs; i++) {
       float a = (float)i / segs * 6.2831853f;
       Vec3 dir = Vec3Add(Vec3Scale(s, std::cos(a)), Vec3Scale(u, std::sin(a)));
-      PushVert(Vec3Add(c, Vec3Scale(dir, r)), n, color);
+      PushVert(Vec3Add(c, Vec3Scale(dir, r)), n, color, mat);
     }
     for (int i = 0; i < segs; i++) {
       unsigned int a = ci + 1 + (unsigned int)i;
@@ -327,31 +364,73 @@ static void AddCylinder(const Vec3 &base, const Vec3 &top, float rBase, float rT
 }
 
 static void AddWire(const Vec3 &a, const Vec3 &b, float sag, float radius,
-                    int samples, const Vec3 &color);
+                    int samples, const Vec3 &color, float mat = kMatCable);
+
+// BUILD-P7: the drop wires need somewhere REAL to land. AddHouse registers a
+// service anchor (an eave bracket) here; AddTelecomBundle runs a drop to the
+// nearest reachable anchor instead of leaving it hanging in mid air, which is
+// what made build P6 read as "the wires are cut".
+static std::vector<Vec3> gDropAnchors;
 
 // BUILD-P4 TELECOM BUNDLE: a communication cable sags between its two pole
 // brackets, and a bundle of thin DROP WIRES peels off along the span — the
 // drippy ''telephone lines going everywhere'' of every Japanese street.
 // Deterministic (hash of the span index) like everything else in the bench.
+//
+// BUILD-P7 NO CUT ENDS: a drop either runs to a house eave anchor (with the
+// bracket that carries it) or ends in a real termination fitting — the small
+// dark boot + ceramic that a real drop wire is capped with. A bare tube end
+// floating in the air is the exact artefact the user screenshotted.
 static void AddTelecomBundle(const Vec3 &a, const Vec3 &b, int seed,
                              float radius, int samples, const Vec3 &color) {
-  AddWire(a, b, 0.55f + 0.10f * ((seed * 7) % 3), radius, samples, color);
+  AddWire(a, b, 0.55f + 0.10f * ((seed * 7) % 3), radius, samples, color,
+          kMatCable);
   int drops = 4 + (seed % 3);                    // 4-6 drop wires per span
   for (int i = 0; i < drops; i++) {
     float t = 0.18f + 0.62f * (float)((seed * 13 + i * 29) % 100) / 100.0f;
     float drop = 0.35f + 0.55f * (float)((seed * 17 + i * 41) % 100) / 100.0f;
     Vec3 p{a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t - drop,
            a.z + (b.z - a.z) * t};
-    Vec3 q{p.x, p.y - 1.15f - 0.9f * (float)((seed * 23 + i * 13) % 100) / 100.0f,
-           p.z};
-    AddWire(p, q, 0.08f, radius * 0.55f, 5, color);
+    // the clamp where the drop peels off the bundle (a small metal ferrule
+    // ON the cable — not a rod hanging in the air)
+    Vec3 peel{a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t,
+              a.z + (b.z - a.z) * t};
+    AddCylinder(peel, Vec3Add(peel, Vec3{0, 0.09f, 0}), 0.036f, 0.036f, 6,
+                kMetal, kMatMetal);
+    // nearest house anchor this drop can plausibly reach. The scan starts at
+    // a per-drop offset so five drops in one span fan out to five different
+    // brackets instead of all bunching on the same eave.
+    int best = -1;
+    float bestD = 1e9f;
+    const size_t n = gDropAnchors.size();
+    for (size_t kk = 0; kk < n; kk++) {
+      const Vec3 &q = gDropAnchors[(kk + (size_t)seed * 3 + (size_t)i) % n];
+      float dxz = std::sqrt((q.x - p.x) * (q.x - p.x) + (q.z - p.z) * (q.z - p.z));
+      if (dxz > 11.0f || q.y > p.y - 1.6f) continue;   // too far / uphill
+      if (dxz < bestD) { bestD = dxz; best = (int)((kk + (size_t)seed * 3 +
+                                                   (size_t)i) % n); }
+    }
+    if (best >= 0) {
+      const Vec3 &q = gDropAnchors[best];
+      AddWire(p, q, 0.16f + 0.10f * (float)(i % 2), radius * 0.55f, 9, color,
+              kMatCable);
+    } else {
+      // service tail: short, and capped with a real fitting
+      float len = 1.05f + 0.85f * (float)((seed * 23 + i * 13) % 100) / 100.0f;
+      Vec3 q{p.x, p.y - len, p.z};
+      AddWire(p, q, 0.08f, radius * 0.55f, 5, color, kMatCable);
+      AddCylinder(q, Vec3Add(q, Vec3{0, -0.11f, 0}), 0.030f, 0.022f, 6,
+                  kCableOld, kMatMetal);
+      AddCylinder(Vec3Add(q, Vec3{0, -0.01f, 0}), Vec3Add(q, Vec3{0, 0.06f, 0}),
+                  0.026f, 0.026f, 6, kCeramic, kMatCeramic);
+    }
   }
 }
 
 // A sagging wire between two attachment points: a real catenary sampled as a
 // swept tube (the Lain look is ALL about the droop of these cables).
 static void AddWire(const Vec3 &a, const Vec3 &b, float sag, float radius,
-                    int samples, const Vec3 &color) {
+                    int samples, const Vec3 &color, float mat) {
   Vec3 delta = Vec3Sub(b, a);
   float len = Vec3Len(delta);
   if (len < 1e-3f) return;
@@ -384,7 +463,7 @@ static void AddWire(const Vec3 &a, const Vec3 &b, float sag, float radius,
     for (int k = 0; k < 4; k++) {
       float a2 = (float)k * 1.5707963f;
       Vec3 n = Vec3Add(Vec3Scale(s2, std::cos(a2)), Vec3Scale(u2, std::sin(a2)));
-      PushVert(Vec3Add(centres[i], Vec3Scale(n, radius)), n, color);
+      PushVert(Vec3Add(centres[i], Vec3Scale(n, radius)), n, color, mat);
     }
   }
   for (int i = 0; i < samples; i++) {
@@ -402,7 +481,8 @@ static void AddWire(const Vec3 &a, const Vec3 &b, float sag, float radius,
 }
 
 // Box via 6 quads (crossarms, transformer fins).
-static void AddBox(const Vec3 &center, const Vec3 &half, const Vec3 &color) {
+static void AddBox(const Vec3 &center, const Vec3 &half, const Vec3 &color,
+                   float mat = kMatPaint) {
   static const int quads[6][4] = {
       {0, 1, 3, 2}, {4, 6, 7, 5}, {0, 4, 5, 1},
       {2, 3, 7, 6}, {0, 2, 6, 4}, {1, 5, 7, 3}};
@@ -416,7 +496,7 @@ static void AddBox(const Vec3 &center, const Vec3 &half, const Vec3 &color) {
         c[m++] = {center.x + half.x * dx, center.y + half.y * dy, center.z + half.z * dz};
   for (int q = 0; q < 6; q++) {
     unsigned int s = (unsigned int)gVerts.size();
-    for (int k = 0; k < 4; k++) PushVert(c[quads[q][k]], norms[q], color);
+    for (int k = 0; k < 4; k++) PushVert(c[quads[q][k]], norms[q], color, mat);
     gIdx.push_back(s); gIdx.push_back(s + 1); gIdx.push_back(s + 2);
     gIdx.push_back(s); gIdx.push_back(s + 2); gIdx.push_back(s + 3);
   }
@@ -438,9 +518,11 @@ static Vec3 PoleAxisAt(const PoleSpec &p, float h) {
   return {p.x + p.leanX * f, h, p.z + p.leanZ * f};
 }
 static Vec3 ArmInsulatorTop(const PoleSpec &p, float off) {
-  // crossarm at height-0.55; its insulator stacks top out 0.35 above it
-  Vec3 a = PoleAxisAt(p, p.height - 0.20f);
-  return {a.x + off, p.height - 0.20f, a.z};
+  // crossarm at height-0.55, insulator stack on top of it ends at +0.30 —
+  // BUILD-P7: the old height-0.20 attachment floated 5 cm ABOVE the glaze,
+  // which read (correctly) as a wire stopping short of its insulator
+  Vec3 a = PoleAxisAt(p, p.height - 0.25f);
+  return {a.x + off, p.height - 0.25f, a.z};
 }
 static Vec3 PoleTopInsulatorTop(const PoleSpec &p) {
   Vec3 a = PoleAxisAt(p, p.height + 0.24f);
@@ -451,116 +533,249 @@ static std::vector<PoleSpec> gLineA, gLineB;  // kept for per-frame shadows
 static void AddPole(const PoleSpec &p) {
   Vec3 base = PoleAxisAt(p, kGroundY);
   Vec3 top = PoleAxisAt(p, p.height);
-  AddCylinder(base, top, 0.17f, 0.115f, 10, kWoodDark);
+  AddCylinder(base, top, 0.17f, 0.115f, 10, kWoodDark, kMatWood);
   // dirt collar kicked up around the base (every real pole sits in one)
   AddCylinder({base.x, kGroundY - 0.02f, base.z}, {base.x, 0.10f, base.z},
-              0.52f, 0.34f, 8, {0.30f, 0.24f, 0.18f});
+              0.52f, 0.34f, 8, {0.30f, 0.24f, 0.18f}, kMatGround);
 
   // main crossarm near the top + a smaller one below, with diagonal braces
   float armY = p.height - 0.55f;
   Vec3 armC = PoleAxisAt(p, armY);
-  AddBox({armC.x, armY, armC.z}, {1.25f, 0.055f, 0.075f}, kWoodOld);
+  AddBox({armC.x, armY, armC.z}, {1.25f, 0.055f, 0.075f}, kWoodOld, kMatWood);
   Vec3 arm2C = PoleAxisAt(p, armY - 0.62f);
-  AddBox({arm2C.x, armY - 0.62f, arm2C.z}, {0.85f, 0.05f, 0.07f}, kWoodOld);
+  AddBox({arm2C.x, armY - 0.62f, arm2C.z}, {0.85f, 0.05f, 0.07f}, kWoodOld,
+         kMatWood);
   Vec3 brT = PoleAxisAt(p, armY - 0.05f);
   Vec3 brB = PoleAxisAt(p, armY - 0.57f);
   AddCylinder({brT.x - 0.34f, brT.y, brT.z + 0.03f},
               {brB.x - 0.94f, brB.y, brB.z + 0.03f}, 0.030f, 0.030f, 6,
-              kWoodDark);
+              kWoodDark, kMatWood);
   AddCylinder({brT.x + 0.34f, brT.y, brT.z + 0.03f},
               {brB.x + 0.94f, brB.y, brB.z + 0.03f}, 0.030f, 0.030f, 6,
-              kWoodDark);
+              kWoodDark, kMatWood);
 
   // ceramic insulators: three on the main arm, one atop the pole
   for (float off : {-1.05f, 0.0f, 1.05f}) {
     Vec3 ib{armC.x + off, armY + 0.05f, armC.z};
-    AddCylinder(ib, Vec3Add(ib, Vec3{0, 0.24f, 0}), 0.052f, 0.062f, 8, kCeramic);
+    AddCylinder(ib, Vec3Add(ib, Vec3{0, 0.24f, 0}), 0.052f, 0.062f, 8, kCeramic,
+                kMatCeramic);
     AddCylinder(Vec3Add(ib, Vec3{0, 0.24f, 0}), Vec3Add(ib, Vec3{0, 0.30f, 0}),
-                0.062f, 0.040f, 8, kCeramic);
+                0.062f, 0.040f, 8, kCeramic, kMatCeramic);
   }
-  AddCylinder(top, Vec3Add(top, Vec3{0, 0.18f, 0}), 0.05f, 0.058f, 8, kCeramic);
+  AddCylinder(top, Vec3Add(top, Vec3{0, 0.18f, 0}), 0.05f, 0.058f, 8, kCeramic,
+              kMatCeramic);
   AddCylinder(Vec3Add(top, Vec3{0, 0.18f, 0}), Vec3Add(top, Vec3{0, 0.24f, 0}),
-              0.058f, 0.038f, 8, kCeramic);
+              0.058f, 0.038f, 8, kCeramic, kMatCeramic);
 
-  // earth wire: a bare cable clipped down the trunk, grounded at the collar
-  AddWire({base.x + 0.115f, 0.12f, base.z}, {top.x + 0.085f, 4.0f, top.z},
-          0.05f, 0.014f, 6, kMetal);
+  // earth wire: a bare cable clipped down the trunk, grounded at the collar.
+  // BUILD-P7: it follows the LEANING axis hop by hop instead of running as
+  // one straight line from the base to a fixed point, which used to drift off
+  // the trunk surface on the leaning poles.
+  {
+    Vec3 prev = PoleAxisAt(p, 0.12f);
+    for (float h = 1.0f; h <= 4.01f; h += 1.0f) {
+      float f = h / p.height;
+      Vec3 cur = PoleAxisAt(p, h);
+      float r = 0.17f + (0.115f - 0.17f) * f;
+      prev.x += 0.13f;                       // stand off the bark
+      cur.x += r * 0.92f;
+      AddWire(prev, cur, 0.02f, 0.013f, 3, kMetal, kMatCable);
+      prev = PoleAxisAt(p, h);
+    }
+  }
 
   if (p.serviceSpool) {
     // secondary service spool on the other flank (double-attachment poles)
     AddCylinder({p.x - 0.24f, 5.4f, p.z}, {p.x - 0.34f, 5.4f, p.z}, 0.05f,
-                0.05f, 6, kMetal);
+                0.05f, 6, kMetal, kMatMetal);
   }
 
   // BUILD-P4 TELECOM ARM: a second, lower crossarm carrying the phone/cable
   // bundles (Japanese poles stack a communications arm under the power arm).
   float telY = armY - 1.30f;
   Vec3 telC = PoleAxisAt(p, telY);
-  AddBox({telC.x, telY, telC.z}, {0.95f, 0.05f, 0.06f}, kWoodOld);
+  AddBox({telC.x, telY, telC.z}, {0.95f, 0.05f, 0.06f}, kWoodOld, kMatWood);
   for (float off : {-0.70f, 0.0f, 0.70f})
     AddCylinder({telC.x + off, telY + 0.05f, telC.z},
-                {telC.x + off, telY + 0.15f, telC.z}, 0.038f, 0.032f, 6, kMetal);
+                {telC.x + off, telY + 0.15f, telC.z}, 0.038f, 0.032f, 6, kMetal,
+                kMatMetal);
 
   // a couple of CableTV-style cylindrical boxes bolted to the trunk (some
   // poles, deterministic)
   if (((int(p.z * 7.0f)) % 3) == 0)
     AddCylinder({base.x + 0.20f, 3.9f, base.z}, {base.x + 0.20f, 4.5f, base.z},
-                0.11f, 0.11f, 8, kMetal);
+                0.11f, 0.11f, 8, kMetal, kMatMetal);
 
   if (p.transformer) {
     // the can: grey cylinder + cooling fins, bolted below the crossarm
     Vec3 tc{armC.x + 0.62f, armY - 1.35f, armC.z};
     AddCylinder(Vec3Add(tc, Vec3{-0.1f, -0.55f, 0}),
-                Vec3Add(tc, Vec3{0.1f, 0.55f, 0}), 0.34f, 0.34f, 10, kMetal);
-    AddBox({tc.x, tc.y + 0.30f, tc.z}, {0.40f, 0.16f, 0.16f}, kMetal);
-    AddBox({tc.x, tc.y - 0.34f, tc.z}, {0.10f, 0.22f, 0.10f}, kMetal);
+                Vec3Add(tc, Vec3{0.1f, 0.55f, 0}), 0.34f, 0.34f, 10, kMetal,
+                kMatMetal);
+    AddBox({tc.x, tc.y + 0.30f, tc.z}, {0.40f, 0.16f, 0.16f}, kMetal, kMatMetal);
+    AddBox({tc.x, tc.y - 0.34f, tc.z}, {0.10f, 0.22f, 0.10f}, kMetal, kMatMetal);
     // two ceramic bushings on the can's crown + their drop leads
     for (float bz : {-0.12f, 0.12f}) {
       Vec3 bt{tc.x, tc.y + 0.46f, tc.z + bz};
       AddCylinder(bt, Vec3Add(bt, Vec3{0, 0.16f, 0}), 0.045f, 0.038f, 6,
-                  kCeramic);
+                  kCeramic, kMatCeramic);
       AddWire(Vec3Add(bt, Vec3{0, 0.18f, 0}), {tc.x, armY - 0.30f, tc.z + bz},
-              0.08f, 0.011f, 5, kCable);
+              0.08f, 0.011f, 5, kCable, kMatCable);
     }
   }
 }
 
-// BUILD-P6: suburban silhouette houses on both flanks — gabled roof boxes
-// with dark window holes, the depth cue that kills the "empty flat world"
-// look. Deterministic sizes/positions; drawn cheap (one box + one prism).
-static void AddHouse(float x, float z, float w, float d, float h, float yaw) {
-  // body: a simple box (axis-aligned; yaw only skews the roof ridge)
-  AddBox({x, h * 0.5f, z}, {w * 0.5f, h * 0.5f, d * 0.5f},
-         {0.34f, 0.26f, 0.20f});
-  // gabled roof: two long slabs meeting at a ridge along the x axis
-  Vec3 ridge{0.36f, 0.24f, 0.17f};
-  AddCylinder({x - w * 0.5f, h, z}, {x + w * 0.5f, h, z}, 0.02f, 0.02f, 4,
-              ridge);                                     // ridge beam
-  AddBox({x, h + 0.22f, z - d * 0.28f}, {w * 0.55f, 0.05f, d * 0.34f}, ridge);
-  AddBox({x, h + 0.22f, z + d * 0.28f}, {w * 0.55f, 0.05f, d * 0.34f}, ridge);
-  // dark windows on the street-facing flank
-  Vec3 win{0.045f, 0.04f, 0.05f};
-  AddBox({x - w * 0.22f, h * 0.55f, z + (yaw >= 0.0f ? d * 0.5f : -d * 0.5f)},
-         {0.28f, 0.22f, 0.02f}, win);
-  AddBox({x + w * 0.18f, h * 0.55f, z + (yaw >= 0.0f ? d * 0.5f : -d * 0.5f)},
-         {0.28f, 0.22f, 0.02f}, win);
+// BUILD-P7: a single free quad. The object pass runs with culling OFF (the
+// generators do not share one winding convention) and the fragment shader
+// resolves the normal toward the eye, so winding does not matter here —
+// which makes sloped roof planes a two-line job instead of a matrix helper.
+static void AddQuad(const Vec3 &p0, const Vec3 &p1, const Vec3 &p2,
+                    const Vec3 &p3, const Vec3 &color, float mat) {
+  Vec3 n = Vec3Norm(Vec3Cross(Vec3Sub(p1, p0), Vec3Sub(p3, p0)));
+  unsigned int s = (unsigned int)gVerts.size();
+  PushVert(p0, n, color, mat);
+  PushVert(p1, n, color, mat);
+  PushVert(p2, n, color, mat);
+  PushVert(p3, n, color, mat);
+  gIdx.push_back(s); gIdx.push_back(s + 1); gIdx.push_back(s + 2);
+  gIdx.push_back(s); gIdx.push_back(s + 2); gIdx.push_back(s + 3);
 }
 
-static void BuildSceneGeometry() {
+// BUILD-P6/P7: suburban silhouette houses on both flanks. Build P6 drew plain
+// untextured slabs that read as boxes parked on a flat plane; P7 gives every
+// house a concrete plinth, siding-shaded walls, deep overhanging eaves, a
+// ridge cap, glazed windows with frames and sills and an entry canopy. Each
+// house also registers a SERVICE ANCHOR (an eave bracket on the street side)
+// so the telecom drops terminate on hardware instead of in mid air.
+static const Vec3 kWallTints[5] = {
+    {0.400f, 0.352f, 0.300f}, {0.470f, 0.425f, 0.360f}, {0.330f, 0.300f, 0.278f},
+    {0.520f, 0.470f, 0.386f}, {0.290f, 0.272f, 0.262f}};
+static const Vec3 kRoofTints[3] = {
+    {0.150f, 0.132f, 0.128f}, {0.330f, 0.175f, 0.105f}, {0.190f, 0.180f, 0.175f}};
+
+static void AddHouse(float x, float z, float w, float d, float h, float face) {
+  int pick = (int)std::fmod(std::fabs(std::sin(x * 12.9898f + z * 78.233f)) *
+                                43758.5453f,
+                            5.0f);
+  const Vec3 &wall = kWallTints[pick];
+  const Vec3 &roof = kRoofTints[pick % 3];
+  float streetX = face * w * 0.5f;           // the road-facing wall
+
+  // concrete plinth: the house sits ON something instead of hovering
+  AddBox({x, 0.09f, z}, {w * 0.5f + 0.07f, 0.09f, d * 0.5f + 0.07f},
+         {0.230f, 0.215f, 0.200f}, kMatPaint);
+  // body
+  AddBox({x, 0.10f + h * 0.5f, z}, {w * 0.5f, h * 0.5f, d * 0.5f}, wall,
+         kMatWall);
+
+  // ---- pitched roof: two slanted planes + a thin under-plane for thickness
+  const float ov = 0.42f;                     // eave overhang
+  const float rh = 0.55f + 0.06f * (float)(pick % 3);
+  float yEave = 0.10f + h;
+  float yRidge = yEave + rh;
+  float x0 = x - w * 0.5f - ov, x1 = x + w * 0.5f + ov;
+  float zA = z - d * 0.5f - ov, zB = z + d * 0.5f + ov;
+  Vec3 r0{x0, yRidge, z}, r1{x1, yRidge, z};
+  Vec3 eA{x0, yEave, zA}, eB{x1, yEave, zA};
+  Vec3 eC{x1, yEave, zB}, eD{x0, yEave, zB};
+  AddQuad(r0, r1, eB, eA, roof, kMatRoof);
+  AddQuad(r1, r0, eD, eC, roof, kMatRoof);
+  AddQuad(eA, eB, eC, eD, Vec3Add(roof, Vec3{0, 0.10f, 0}), kMatRoof);
+  // ridge cap
+  AddCylinder({x0, yRidge + 0.02f, z}, {x1, yRidge + 0.02f, z}, 0.055f, 0.055f,
+              5, Vec3Add(roof, Vec3{0.05f, 0.03f, 0.02f}), kMatRoof);
+
+  // ---- windows: frame + sill + glazing on the street flank and the gable
+  const Vec3 frame{0.320f, 0.300f, 0.270f};
+  const Vec3 glass{0.060f, 0.075f, 0.095f};
+  for (int i = 0; i < 3; i++) {
+    float wx = x + streetX + face * 0.03f;
+    float wz = z + (float)(i - 1) * (d * 0.30f);
+    float wy = 0.10f + h * 0.60f;
+    AddBox({wx + face * 0.02f, wy, wz}, {0.05f, 0.26f, 0.34f}, frame, kMatPaint);
+    AddBox({wx + face * 0.06f, wy, wz}, {0.02f, 0.21f, 0.29f}, glass, kMatGlass);
+    AddBox({wx + face * 0.09f, wy - 0.28f, wz}, {0.07f, 0.035f, 0.40f}, frame,
+           kMatPaint);
+  }
+  AddBox({x - w * 0.5f + 0.03f * face, 0.10f + h * 0.55f, z + d * 0.22f},
+         {0.03f, 0.20f, 0.28f}, frame, kMatPaint);
+  AddBox({x - w * 0.5f + 0.06f * face, 0.10f + h * 0.55f, z + d * 0.22f},
+         {0.02f, 0.16f, 0.24f}, glass, kMatGlass);
+
+  // ---- entry canopy over the front door (every other house)
+  if (pick % 2 == 0) {
+    Vec3 deck{0.290f, 0.270f, 0.240f};
+    AddBox({x + streetX + face * 0.55f, 2.32f, z - d * 0.18f},
+           {0.55f, 0.05f, 0.62f}, deck, kMatRoof);
+    AddCylinder({x + streetX + face * 1.02f, 0.0f, z - d * 0.18f},
+                {x + streetX + face * 1.02f, 2.30f, z - d * 0.18f}, 0.055f,
+                0.045f, 6, deck, kMatPaint);
+    AddBox({x + streetX + face * 0.02f, 1.20f, z - d * 0.18f},
+           {0.04f, 0.55f, 0.34f}, frame, kMatPaint);
+  }
+
+  // ---- SERVICE ANCHOR: the eave bracket the telecom drops land on
+  Vec3 anchor{x + streetX + face * 0.16f, 0.10f + h * 0.78f, z + d * 0.30f};
+  AddBox({anchor.x - face * 0.04f, anchor.y, anchor.z}, {0.07f, 0.045f, 0.045f},
+         kMetal, kMatMetal);
+  AddCylinder({anchor.x, anchor.y + 0.04f, anchor.z},
+              {anchor.x, anchor.y + 0.17f, anchor.z}, 0.030f, 0.026f, 6,
+              kCeramic, kMatCeramic);
+  gDropAnchors.push_back({anchor.x, anchor.y + 0.17f, anchor.z});
+}
+
+// BUILD-P7: the far treeline. An empty plane running to a bare horizon is the
+// other half of "looks unrealistic" — real suburbs have a ragged band of
+// cedar and bamboo closing the view. Cheap silhouette boxes, deterministic,
+// sitting well inside the far plane so they never clip.
+static void AddTreeline() {
+  const int kCount = 74;
+  for (int i = 0; i < kCount; i++) {
+    // deterministic ring, jittered radius, taller in the middle band
+    float a = (float)i * 2.3999632f;                       // golden-angle
+    float rad = 205.0f + 95.0f * (float)((i * 7) % 5) / 5.0f;
+    float cx = std::sin(a) * rad * 1.25f;
+    float cz = 90.0f + std::cos(a) * rad;
+    float th = 9.0f + 9.0f * (float)((i * 13) % 7) / 7.0f;
+    float wd = 2.6f + 1.8f * (float)((i * 5) % 4) / 4.0f;
+    // cedar green, warmed toward olive near the haze
+    float g = 0.55f + 0.45f * (float)((i * 11) % 5) / 5.0f;
+    Vec3 leaf{0.088f * g + 0.045f, 0.130f * g + 0.050f, 0.070f * g + 0.035f};
+    AddBox({cx, th * 0.5f, cz}, {wd, th * 0.5f, wd * 0.9f}, leaf, kMatLeaf);
+    AddBox({cx + wd * 0.5f, th * 0.34f, cz - wd * 0.4f},
+           {wd * 0.8f, th * 0.34f, wd * 0.7f}, leaf, kMatLeaf);
+    // trunk
+    AddCylinder({cx, 0.0f, cz}, {cx, th * 0.30f, cz}, 0.24f, 0.18f, 5,
+                {0.100f, 0.082f, 0.070f}, kMatWood);
+  }
+  // a low ridge of hills behind the trees, so the skyline is not a hard line
+  for (int i = 0; i < 26; i++) {
+    float a = (float)i * 0.2417f + 0.3f;
+    float rad = 330.0f + 40.0f * (float)((i * 3) % 4);
+    float cx = std::sin(a) * rad * 1.5f;
+    float cz = 90.0f + std::cos(a) * rad;
+    float hh = 26.0f + 16.0f * (float)((i * 9) % 5) / 5.0f;
+    AddBox({cx, hh * 0.30f, cz}, {hh * 1.7f, hh * 0.30f, hh * 1.2f},
+           {0.215f, 0.185f, 0.175f}, kMatLeaf);
+  }
+}static void BuildSceneGeometry() {
   gVerts.clear();
   gIdx.clear();
   gLineA.clear();
   gLineB.clear();
+  gDropAnchors.clear();
 
   // ---- ground: a big warm gravel plane (single quad, cheap as dirt).
-  // BUILD-P6: much longer along +z so the corridor never shows its edge.
+  // BUILD-P7: stretched to +-430 m / z -300..880 so the corridor never shows
+  // its edge and the treeline has ground to stand on. Corners stay inside the
+  // 900 m far plane from the furthest camera position (z = 165 m).
   {
     unsigned int s = (unsigned int)gVerts.size();
     Vec3 n{0, 1, 0};
-    PushVert({-70, kGroundY, -60}, n, kGravel);
-    PushVert({70, kGroundY, -60}, n, kGravel);
-    PushVert({70, kGroundY, 220}, n, kGravel);
-    PushVert({-70, kGroundY, 220}, n, kGravel);
+    PushVert({-430, kGroundY, -300}, n, kGravel, kMatGround);
+    PushVert({430, kGroundY, -300}, n, kGravel, kMatGround);
+    PushVert({430, kGroundY, 880}, n, kGravel, kMatGround);
+    PushVert({-430, kGroundY, 880}, n, kGravel, kMatGround);
     gIdx.push_back(s); gIdx.push_back(s + 1); gIdx.push_back(s + 2);
     gIdx.push_back(s); gIdx.push_back(s + 2); gIdx.push_back(s + 3);
   }
@@ -620,10 +835,28 @@ static void BuildSceneGeometry() {
             0.024f, 16, kCable);
   }
 
+  // ---- BUILD-P6/P7: THE SUBURB, built BEFORE the telecom tangle so the drop
+  // wires have real eave brackets to land on. Houses on both flanks (they
+  // give the corridor its depth) and a far treeline so the horizon is not a
+  // bare line between dirt and sky.
+  for (int i = 0; i < 8; i++) {
+    float z = -4.0f + 19.0f * i + 3.0f * ((i * 7) % 3);
+    AddHouse(-11.5f - 2.0f * (i % 3), z, 4.6f + 1.4f * ((i * 3) % 3),
+             5.2f + 1.2f * ((i * 5) % 3), 3.2f + 0.9f * ((i * 7) % 3), 1.0f);
+  }
+  for (int i = 0; i < 6; i++) {
+    float z = 8.0f + 21.0f * i + 2.5f * ((i * 5) % 3);
+    AddHouse(15.0f + 2.5f * (i % 3), z, 4.8f + 1.5f * ((i * 3) % 3),
+             5.4f + 1.1f * ((i * 7) % 3), 3.1f + 1.0f * ((i * 5) % 3), -1.0f);
+  }
+  AddTreeline();
+
   // ---- BUILD-P4: THE TELECOM TANGLE. Two bundles per span on line A (one
   // per bracket pair) plus one on line B, and cross-line telecom spans
   // B->A — this is what makes a Japanese pole street read as a Japanese
-  // pole street: tons and tons of sagging phone wire everywhere.
+  // pole street: tons and tons of sagging phone wire everywhere. Every drop
+  // now terminates on a house bracket or a real fitting (see
+  // AddTelecomBundle).
   for (int i = 0; i + 1 < (int)lineA.size(); i++) {
     const PoleSpec &p = lineA[i];
     const PoleSpec &q = lineA[i + 1];
@@ -649,84 +882,89 @@ static void BuildSceneGeometry() {
                      0.018f, 14, kCable);
   }
 
-  // ---- a service drop: from double-attachment poles down to a small
-  // junction. BUILD-P2 FIX: the drop ties to the real service spool height,
-  // not to a point floating off the pole flank.
+  // ---- service drops: from the pole service spool down to the NEAREST house
+  // bracket. BUILD-P7: build P6 dropped these onto two hard-coded wall points
+  // that were over a metre clear of the actual house wall, which is why the
+  // left of frame was full of wires stopping in thin air. Now the destination
+  // is whatever eave bracket the house itself registered.
   for (int side = 0; side < 2; side++) {
     const PoleSpec &p = lineA[side == 0 ? 3 : 9];
-    // BUILD-P6: the drops land on REAL HOUSE WALLS on the left flank (the
-    // houses below), not on floating points over the road — every wire in
-    // the scene terminates on hardware.
-    float hz = p.z + 6.0f;
-    Vec3 wallA{-8.05f, 3.35f, hz};            // right wall of the left house
-    Vec3 wallB{-8.05f, 2.90f, hz + 0.55f};
-    AddWire(PoleAxisAt(p, 5.4f), wallA, 0.55f, 0.020f, 10, kCableOld);
-    AddWire(ArmInsulatorTop(p, 1.05f), wallB, 0.50f, 0.020f, 10, kCableOld);
-    // service mast on the house wall where the drops land
-    AddCylinder({wallA.x - 0.02f, wallA.y - 0.25f, wallA.z},
-                {wallA.x - 0.02f, wallA.y + 0.55f, wallA.z}, 0.05f, 0.05f, 6,
-                kMetal);
+    int best = -1;
+    float bestD = 1e9f;
+    for (size_t k = 0; k < gDropAnchors.size(); k++) {
+      const Vec3 &q = gDropAnchors[k];
+      float d = std::sqrt((q.x - p.x) * (q.x - p.x) + (q.z - p.z) * (q.z - p.z));
+      if (d < bestD && d > 3.0f) { bestD = d; best = (int)k; }
+    }
+    if (best >= 0) {
+      const Vec3 &a = gDropAnchors[best];
+      AddWire(PoleAxisAt(p, 5.4f), a, 0.55f, 0.020f, 12, kCableOld, kMatCable);
+      AddWire(ArmInsulatorTop(p, 1.05f), a, 0.48f, 0.020f, 12, kCableOld,
+              kMatCable);
+    }
     // junction cans stay mounted on the pole wall
     AddCylinder({PoleAxisAt(p, 3.05f).x - 0.30f, 3.05f, p.z},
                 {PoleAxisAt(p, 2.45f).x - 0.30f, 2.45f, p.z},
-                0.09f, 0.09f, 8, kMetal);
+                0.09f, 0.09f, 8, kMetal, kMatMetal);
     AddBox({PoleAxisAt(p, 3.10f).x - 0.30f, 3.10f, p.z}, {0.16f, 0.10f, 0.12f},
-           kMetal);
+           kMetal, kMatMetal);
   }
 
-  // ---- BUILD-P6: THE SUBURB. Silhouette houses on both flanks — gabled
-  // roofs, dark windows — the depth cue that kills the "empty flat world"
-  // look and gives the service drops something real to land on.
-  for (int i = 0; i < 8; i++) {
-    float z = -4.0f + 19.0f * i + 3.0f * ((i * 7) % 3);
-    AddHouse(-11.5f - 2.0f * (i % 3), z, 4.6f + 1.4f * ((i * 3) % 3),
-             5.2f + 1.2f * ((i * 5) % 3), 3.2f + 0.9f * ((i * 7) % 3), -1.0f);
-  }
-  for (int i = 0; i < 6; i++) {
-    float z = 8.0f + 21.0f * i + 2.5f * ((i * 5) % 3);
-    AddHouse(15.0f + 2.5f * (i % 3), z, 4.8f + 1.5f * ((i * 3) % 3),
-             5.4f + 1.1f * ((i * 7) % 3), 3.1f + 1.0f * ((i * 5) % 3), 1.0f);
-  }
-
-  // ---- BUILD-P4/P6: THE ROAD. A straight asphalt strip BETWEEN the two
-  // pole lines (lineA x=-3.4 = left shoulder, lineB x=+8.6 = right
-  // shoulder, road centre x=+2.6, 5.4 m wide), worn centre dashes + solid
-  // painted edge lines — the corridor the auto camera drives down the
-  // middle of.
+  // ---- BUILD-P7: THE ROAD, REBUILT. Build P6 laid it out in three pieces
+  // whose x ranges did not tile: the body ran [rx-2.35, rx+2.35] while the
+  // left shoulder ran [rx-3.05, rx-2.70], leaving a 0.35 m strip of BARE
+  // BRIGHT GRAVEL between them for the whole length of the corridor. At the
+  // camera's grazing angle that strip reads as a pale diagonal band lying
+  // across the road — the artifact the user screenshotted. The carriageway is
+  // now ONE contiguous quad, the shoulders live strictly OUTSIDE it, and the
+  // paint sits on its own level above it (see the kRoadY/kPaintY/kShadowY
+  // ladder). Runs from z=-200 to the treeline at z=520.
   {
-    const float rx = 2.6f, halfW = 2.7f;
-    Vec3 road{0.16f, 0.155f, 0.165f};
-    Vec3 edge{0.20f, 0.19f, 0.19f};
-    Vec3 paint{0.62f, 0.58f, 0.50f};
-    unsigned int s = (unsigned int)gVerts.size();
     Vec3 n{0, 1, 0};
-    // worn asphalt body
-    PushVert({rx - halfW + 0.35f, 0.008f, -60.0f}, n, road);
-    PushVert({rx + halfW - 0.35f, 0.008f, -60.0f}, n, road);
-    PushVert({rx + halfW - 0.35f, 0.008f, 200.0f}, n, road);
-    PushVert({rx - halfW + 0.35f, 0.008f, 200.0f}, n, road);
+    const float z0 = -200.0f, z1 = 520.0f;
+    Vec3 road{0.195f, 0.190f, 0.198f};
+    Vec3 edge{0.235f, 0.215f, 0.190f};
+    Vec3 paint{0.520f, 0.480f, 0.420f};
+    unsigned int s = (unsigned int)gVerts.size();
+    PushVert({kRoadX - kRoadHalf, kRoadY, z0}, n, road, kMatRoad);
+    PushVert({kRoadX + kRoadHalf, kRoadY, z0}, n, road, kMatRoad);
+    PushVert({kRoadX + kRoadHalf, kRoadY, z1}, n, road, kMatRoad);
+    PushVert({kRoadX - kRoadHalf, kRoadY, z1}, n, road, kMatRoad);
     gIdx.push_back(s); gIdx.push_back(s + 1); gIdx.push_back(s + 2);
     gIdx.push_back(s); gIdx.push_back(s + 2); gIdx.push_back(s + 3);
-    // gravel-dusted edges either side
+    // gravel shoulders, strictly outside the carriageway — no overlap, so no
+    // coplanar z-fighting either
     for (int e = 0; e < 2; e++) {
-      float xo = e ? halfW - 0.35f : -halfW;
+      float xs = e ? kRoadX + kRoadHalf : kRoadX - kRoadHalf;
+      float xe = e ? xs + 0.90f : xs - 0.90f;
       unsigned int es = (unsigned int)gVerts.size();
-      PushVert({rx + xo, 0.006f, -60.0f}, n, edge);
-      PushVert({rx + xo + (e ? 0.35f : -0.35f), 0.006f, -60.0f}, n, edge);
-      PushVert({rx + xo + (e ? 0.35f : -0.35f), 0.006f, 200.0f}, n, edge);
-      PushVert({rx + xo, 0.006f, 200.0f}, n, edge);
+      PushVert({xs, kRoadY, z0}, n, edge, kMatGround);
+      PushVert({xe, kRoadY, z0}, n, edge, kMatGround);
+      PushVert({xe, kRoadY, z1}, n, edge, kMatGround);
+      PushVert({xs, kRoadY, z1}, n, edge, kMatGround);
       gIdx.push_back(es); gIdx.push_back(es + 1); gIdx.push_back(es + 2);
       gIdx.push_back(es); gIdx.push_back(es + 2); gIdx.push_back(es + 3);
     }
-    // centre dashes: 3 m paint, 5 m gap, the whole length
-    for (float z = -40.0f; z < 160.0f; z += 8.0f) {
+    // centre dashes: 3 m paint, 5 m gap
+    for (float z = -60.0f; z < 400.0f; z += 8.0f) {
       unsigned int ds = (unsigned int)gVerts.size();
-      PushVert({rx - 0.09f, 0.012f, z}, n, paint);
-      PushVert({rx + 0.09f, 0.012f, z}, n, paint);
-      PushVert({rx + 0.09f, 0.012f, z + 3.0f}, n, paint);
-      PushVert({rx - 0.09f, 0.012f, z + 3.0f}, n, paint);
+      PushVert({kRoadX - 0.09f, kPaintY, z}, n, paint, kMatLine);
+      PushVert({kRoadX + 0.09f, kPaintY, z}, n, paint, kMatLine);
+      PushVert({kRoadX + 0.09f, kPaintY, z + 3.0f}, n, paint, kMatLine);
+      PushVert({kRoadX - 0.09f, kPaintY, z + 3.0f}, n, paint, kMatLine);
       gIdx.push_back(ds); gIdx.push_back(ds + 1); gIdx.push_back(ds + 2);
       gIdx.push_back(ds); gIdx.push_back(ds + 2); gIdx.push_back(ds + 3);
+    }
+    // solid edge lines, inset from the carriageway edge
+    for (int e = 0; e < 2; e++) {
+      float xl = e ? kRoadX + kRoadHalf - 0.40f : kRoadX - kRoadHalf + 0.26f;
+      unsigned int es = (unsigned int)gVerts.size();
+      PushVert({xl, kPaintY, z0}, n, paint, kMatLine);
+      PushVert({xl + 0.14f, kPaintY, z0}, n, paint, kMatLine);
+      PushVert({xl + 0.14f, kPaintY, z1}, n, paint, kMatLine);
+      PushVert({xl, kPaintY, z1}, n, paint, kMatLine);
+      gIdx.push_back(es); gIdx.push_back(es + 1); gIdx.push_back(es + 2);
+      gIdx.push_back(es); gIdx.push_back(es + 2); gIdx.push_back(es + 3);
     }
   }
 
@@ -748,6 +986,10 @@ static void BuildSceneGeometry() {
   glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(ObjVertex), (void *)(3 * sizeof(float)));
   glEnableVertexAttribArray(2);
   glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(ObjVertex), (void *)(6 * sizeof(float)));
+  glEnableVertexAttribArray(3);
+  glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(ObjVertex), (void *)(9 * sizeof(float)));
+  glEnableVertexAttribArray(4);
+  glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, sizeof(ObjVertex), (void *)(10 * sizeof(float)));
   glBindVertexArray(0);
   gObjIndexCount = (int)gIdx.size();
 }
@@ -852,7 +1094,7 @@ static void RenderHUD() {
   // build tag: on-screen proof of which scene code the exe runs (stale-build
   // screenshots must be detectable at a glance)
   char line1[128];
-  std::snprintf(line1, sizeof(line1), "FPS: %d   build P6   scene 4: power lines", gFps);
+  std::snprintf(line1, sizeof(line1), "FPS: %d   build P7   scene 4: power lines", gFps);
   RenderText(16.0f, 16.0f, line1);
 }
 
@@ -880,7 +1122,10 @@ static Mat4 gProj;
 static void DrawSky(const Mat4 &view, const Vec3 &eye, double timeSec) {
   Mat4 vp;
   Mat4Multiply(vp, gProj, view);
-  glDisable(GL_DEPTH_TEST);
+  // BUILD-P7: the dome is drawn LAST, depth-tested against a world that is
+  // already in the framebuffer, so the cloud fbm only runs on the pixels the
+  // scene did not cover — roughly half of them. Previously it shaded the
+  // whole frame and was then painted over.
   glDepthMask(GL_FALSE);
   glDisable(GL_CULL_FACE);
   glUseProgram(gSkyProg.handle);
@@ -902,9 +1147,18 @@ static void DrawSky(const Mat4 &view, const Vec3 &eye, double timeSec) {
   glEnable(GL_DEPTH_TEST);
 }
 
-// Per-frame ground shadows: a streamed quad per pole along the CURRENT sun
+// Per-frame ground shadows: a streamed strip per pole along the CURRENT sun
 // ray. Because this rebuilds every frame, the shadows swing as the sun
 // moves — the "alive street" cue.
+//
+// BUILD-P7: shadows are ALPHA-BLENDED (blendFunc ZERO, ONE_MINUS_SRC_ALPHA),
+// so the pass multiplies whatever is already in the framebuffer instead of
+// stamping opaque brown quads over it. That fixes two things at once: the
+// shadow lying across the road now darkens the painted DASHES too (before, a
+// flat opaque bar covered them), and the strip can fade out along its length
+// into a penumbra instead of ending in a hard edge. Five strips with a
+// decaying alpha ramp, all sharing vertices at the strip boundaries, give a
+// continuous gradient for the cost of ten triangles per pole.
 //
 // BUILD-P6.1 CRITICAL DRIVER FIX: the shadows live in their OWN VAO. The
 // first version rebound the shared object VAO's attribute pointers to the
@@ -932,32 +1186,46 @@ static void DrawGroundShadows(const Mat4 &view, const Vec3 &eye, double t,
     glEnableVertexAttribArray(2);
     glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(ObjVertex),
                           (void *)(6 * sizeof(float)));
+    glEnableVertexAttribArray(3);
+    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(ObjVertex),
+                          (void *)(9 * sizeof(float)));
+    glEnableVertexAttribArray(4);
+    glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, sizeof(ObjVertex),
+                          (void *)(10 * sizeof(float)));
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gShadowIbo);
     glBindVertexArray(0);
   }
-  Vec3 sun = Vec3Norm({SunDirNow(t).x, 0.0f, SunDirNow(t).z});
+  Vec3 sunDir = SunDirNow(t);
+  Vec3 sun = Vec3Norm({sunDir.x, 0.0f, sunDir.z});
   Vec3 perp{-sun.z, 0.0f, sun.x};
-  Vec3 sc{0.135f, 0.10f, 0.082f};              // warm dusk shadow
+  const float kAlpha[6] = {0.46f, 0.39f, 0.31f, 0.23f, 0.15f, 0.07f};
+  const int kStrips = 5;
   std::vector<ObjVertex> v;
   std::vector<unsigned int> idx;
-  v.reserve((lineA.size() + lineB.size()) * 4);
-  idx.reserve((lineA.size() + lineB.size()) * 6);
+  v.reserve((lineA.size() + lineB.size()) * kStrips * 4);
+  idx.reserve((lineA.size() + lineB.size()) * kStrips * 6);
   for (const std::vector<PoleSpec> *line : {&lineA, &lineB}) {
     for (const PoleSpec &p : *line) {
-      Vec3 b{p.x, 0.012f, p.z};
       float reach = 16.0f * (1.0f + 0.05f * (float)((int(p.z) % 7)));
-      Vec3 tip = Vec3Add(b, Vec3Scale(sun, -reach));   // AWAY from the sun
-      float w0 = 0.34f, w1 = 1.15f;
-      Vec3 c[4] = {
-          Vec3Add(b, Vec3Scale(perp, w0)),
-          Vec3Add(b, Vec3Scale(perp, -w0)),
-          Vec3Add(tip, Vec3Scale(perp, w1)),
-          Vec3Add(tip, Vec3Scale(perp, -w1))};
-      unsigned int s = (unsigned int)v.size();
-      for (int k = 0; k < 4; k++)
-        v.push_back({c[k].x, 0.012f, c[k].z, 0, 1, 0, sc.x, sc.y, sc.z});
-      idx.push_back(s); idx.push_back(s + 1); idx.push_back(s + 2);
-      idx.push_back(s); idx.push_back(s + 2); idx.push_back(s + 3);
+      Vec3 b{p.x, kShadowY, p.z};
+      for (int k = 0; k < kStrips; k++) {
+        float t0 = (float)k / kStrips, t1 = (float)(k + 1) / kStrips;
+        Vec3 c0 = Vec3Add(b, Vec3Scale(sun, -reach * t0));
+        Vec3 c1 = Vec3Add(b, Vec3Scale(sun, -reach * t1));
+        float w0 = 0.30f + 0.95f * t0, w1 = 0.30f + 0.95f * t1;
+        float a0 = kAlpha[k], a1 = kAlpha[k + 1];
+        unsigned int s = (unsigned int)v.size();
+        v.push_back({c0.x + perp.x * w0, kShadowY, c0.z + perp.z * w0, 0, 1, 0,
+                     0, 0, 0, kMatShadow, a0});
+        v.push_back({c0.x - perp.x * w0, kShadowY, c0.z - perp.z * w0, 0, 1, 0,
+                     0, 0, 0, kMatShadow, a0});
+        v.push_back({c1.x - perp.x * w1, kShadowY, c1.z - perp.z * w1, 0, 1, 0,
+                     0, 0, 0, kMatShadow, a1});
+        v.push_back({c1.x + perp.x * w1, kShadowY, c1.z + perp.z * w1, 0, 1, 0,
+                     0, 0, 0, kMatShadow, a1});
+        idx.push_back(s); idx.push_back(s + 1); idx.push_back(s + 2);
+        idx.push_back(s); idx.push_back(s + 2); idx.push_back(s + 3);
+      }
     }
   }
   // stream the buffers (VAO unbound: buffer bindings here are global)
@@ -979,10 +1247,16 @@ static void DrawGroundShadows(const Mat4 &view, const Vec3 &eye, double t,
   glUniformMatrix4fv(gObjProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
   glUniformMatrix4fv(gObjProg.loc("uModel"), 1, GL_FALSE, model.data());
   glUniform3f(gObjProg.loc("uEyePos"), eye.x, eye.y, eye.z);
-  Vec3 sd = SunDirNow(t);
-  glUniform3f(gObjProg.loc("uSunDir"), sd.x, sd.y, sd.z);
+  glUniform3f(gObjProg.loc("uSunDir"), sunDir.x, sunDir.y, sunDir.z);
   glUniform1f(gObjProg.loc("uTime"), (float)t);
+  glUniform1f(gObjProg.loc("uRoadX"), kRoadX);
+  // dst *= (1 - srcAlpha): a real shadow, not a brown sticker
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_ZERO, GL_ONE_MINUS_SRC_ALPHA);
+  glDepthMask(GL_FALSE);          // shadows must never occlude anything
   glDrawElements(GL_TRIANGLES, (GLsizei)idx.size(), GL_UNSIGNED_INT, nullptr);
+  glDepthMask(GL_TRUE);
+  glDisable(GL_BLEND);
   glEnable(GL_CULL_FACE);
   glBindVertexArray(0);
 }
@@ -1003,8 +1277,13 @@ static void DrawGrid(const Mat4 &view, const Vec3 &eye, double timeSec) {
   glUniformMatrix4fv(gObjProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
   glUniformMatrix4fv(gObjProg.loc("uModel"), 1, GL_FALSE, model.data());
   glUniform3f(gObjProg.loc("uEyePos"), eye.x, eye.y, eye.z);
-  glUniform3f(gObjProg.loc("uSunDir"), kSunDir.x, kSunDir.y, kSunDir.z);
+  // BUILD-P7: DrawGrid was still uploading the FROZEN build-P2 kSunDir while
+  // the sky and the shadows advanced with SunDirNow() — the sun's disc drifted
+  // but the lighting stayed put. One timebase for all three now.
+  Vec3 sd = SunDirNow(timeSec);
+  glUniform3f(gObjProg.loc("uSunDir"), sd.x, sd.y, sd.z);
   glUniform1f(gObjProg.loc("uTime"), (float)timeSec);
+  glUniform1f(gObjProg.loc("uRoadX"), kRoadX);
   glDrawElements(GL_TRIANGLES, gObjIndexCount, GL_UNSIGNED_INT, nullptr);
   glBindVertexArray(0);
   glEnable(GL_CULL_FACE);
@@ -1052,11 +1331,13 @@ static void RenderScene() {
   glViewport(0, 0, gWindowWidth, gWindowHeight);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-  DrawSky(view, eye, gSimTime);
   DrawGrid(view, eye, gSimTime);
   // BUILD-P6: the moving sun re-draws the ground shadows every frame, so
   // they swing with it (lineA/lineB are built once at startup and kept).
+  // BUILD-P7: they are alpha-blended, so they multiply whatever is under
+  // them — road paint included.
   DrawGroundShadows(view, eye, gSimTime, gLineA, gLineB);
+  DrawSky(view, eye, gSimTime);
   RenderHUD();
 
   if (gScreenshotPath && gNextShot < gShotTimes.size() &&
