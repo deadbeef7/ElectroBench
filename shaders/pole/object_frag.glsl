@@ -97,7 +97,7 @@ const vec3  kBetaR = vec3(0.058, 0.135, 0.331);
 const float kBetaM = 0.0125;
 const float kSunI  = 330.0;
 const float kSunPath = 8.0;
-const float kRayGain = 3.20;
+const float kRayGain = 3.95;
 
 vec3 atmosphere(vec3 dir, vec3 sun) {
     float h = dir.y;
@@ -112,7 +112,7 @@ vec3 atmosphere(vec3 dir, vec3 sun) {
               / max(pow(1.0 + gg - 2.0 * g * mu, 1.5), 1e-3);
     vec3 single = kBetaR * phR * kRayGain * Tview * Tsun;
     vec3 mie    = vec3(kBetaM * phM * 0.25) * Tview * Tsun;
-    float multiK = 0.012 + 0.30 * smoothstep(0.45, 1.00, h);
+    float multiK = 0.005 + 0.30 * smoothstep(0.55, 1.00, h);
     vec3 multi  = kBetaR * phR * 0.80 * Tview * multiK;
     return (single + mie + multi) * kSunI;
 }

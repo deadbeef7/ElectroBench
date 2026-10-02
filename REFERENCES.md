@@ -179,6 +179,25 @@ Realism takeaways applied:
   glazing bars over them. Emissive geometry is only believable if the frame behind it still exists —
   the bars and the sill are what stop a lit pane reading as a sticker.
 
+## BUILD-P13: the coil was the hanging cylinders
+
+- **A helix built from coarse segments IS a row of hanging cylinders.** The
+  slack coil from build P12 was swept at five samples per turn with a 17 mm
+  cable radius: every segment was a 38 cm long, 3.4 cm thick stubby tube with a
+  visible joint to the next one, and six of them hung off the side of the pole
+  in a row. On screen that is exactly "4-6 hanging cylinders in the sky" — the
+  detail meant to sell the pole was the artifact. Twelve samples a turn and a
+  11.5 mm cable puts every segment under the size at which the beading is
+  legible, and the silhouette is unchanged. The lesson generalises: any swept
+  feature has a sample density requirement, and "enough to look smooth" has to
+  be measured against the on-screen size of one segment, not chosen by eye.
+- **The sky went decisively amber.** Mean saturation 0.367 -> 0.439; the upper
+  frame is now (0.89, 0.78, 0.22). The Rayleigh single-scatter gain came up, the
+  horizon airlight band got hotter, the cloud crown and belly were warmed so the
+  clouds stop greying the sky out, and the blue-at-altitude ramp now starts at
+  31 degrees instead of 26 — above the frame the camera actually sees, so the
+  visible sky stays orange all the way up while the zenith still goes blue.
+
 ## BUILD-P12: matching a reference photograph (scene 4)
 
 The reference is a street-level worm's-eye shot of a Japanese utility pole. What

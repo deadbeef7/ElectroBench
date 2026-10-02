@@ -699,7 +699,7 @@ static void AddSlackCoil(const PoleSpec &p, float h, float side, int turns,
   float r0 = TrunkRadius(p, h);
   Vec3 a = PoleAxisAt(p, h);
   float cx = a.x + side * (r0 + radius);
-  const int steps = turns * 5;
+  const int steps = turns * 12;
   // the bracket the coil hangs from — the coil is ATTACHED, not floating
   AddCylinder({a.x + side * (r0 - 0.02f), h + pitch * 0.5f, a.z},
               {cx, h + pitch * 0.5f, a.z}, 0.022f, 0.022f, 5, kSteelArm,
@@ -712,13 +712,19 @@ static void AddSlackCoil(const PoleSpec &p, float h, float side, int turns,
     // ellipse, not a circle seen side-on
     Vec3 cur{cx + radius * 0.28f * std::cos(ang), h + pitch * 0.5f - t * pitch,
              a.z + radius * std::sin(ang)};
-    AddWire(prev, cur, 0.0f, 0.017f, 2, kCable, kMatCable);
+    // BUILD-P12 BUG: at five samples per turn and 17 mm radius each segment of
+    // this helix was a 38 cm long, 3.4 cm thick STUBBY TUBE with a visible joint
+    // to the next one — a row of beads hanging off the pole, which read as
+    // exactly the "4-6 hanging cylinders in the sky" the user screenshotted.
+    // Twelve samples a turn and a thinner cable puts every segment under the
+    // size at which the beading is legible, and it is the same silhouette.
+    AddWire(prev, cur, 0.0f, 0.0115f, 2, kCable, kMatCable);
     prev = cur;
   }
   // and the tail, running back up to the shaft: a coil whose cable simply
   // stops is the same "floating cylinder" mistake as an unterminated stub
   AddWire(prev, {a.x + side * (r0 + 0.03f), h + pitch * 0.5f + 0.06f, a.z},
-          0.05f, 0.017f, 4, kCable, kMatCable);
+          0.05f, 0.0115f, 6, kCable, kMatCable);
 }
 
 // BUILD-P12: SLACK LOOP. The big circular bight of service cable left hanging
@@ -737,10 +743,10 @@ static void AddSlackLoop(const PoleSpec &p, float h, float side, float radius) {
     Vec3 cur{a.x + side * (r0 + 0.10f + 0.16f * std::sin(ang)),
              h - radius * (1.0f - std::cos(ang)) * 0.5f,
              a.z + radius * std::sin(ang) * 0.85f};
-    AddWire(prev, cur, 0.0f, 0.016f, 2, kCable, kMatCable);
+    AddWire(prev, cur, 0.0f, 0.0115f, 2, kCable, kMatCable);
     prev = cur;
   }
-  AddWire(prev, a, 0.0f, 0.016f, 2, kCable, kMatCable);
+  AddWire(prev, a, 0.0f, 0.0115f, 2, kCable, kMatCable);
 }
 
 // BUILD-P12: a lattice radio mast. Not decoration: a cell mast standing behind
@@ -1694,7 +1700,7 @@ static void RenderHUD() {
   // build tag: on-screen proof of which scene code the exe runs (stale-build
   // screenshots must be detectable at a glance)
   char line1[128];
-  std::snprintf(line1, sizeof(line1), "FPS: %d   build P12   scene 4: LainBench", gFps);
+  std::snprintf(line1, sizeof(line1), "FPS: %d   build P13   scene 4: LainBench", gFps);
   RenderText(16.0f, 16.0f, line1);
 }
 

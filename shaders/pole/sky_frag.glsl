@@ -75,7 +75,7 @@ const vec3  kBetaR = vec3(0.058, 0.135, 0.331);
 const float kBetaM = 0.0125;
 const float kSunI  = 330.0;       // scaled solar radiance
 const float kSunPath = 8.0;       // sun-path optical depth multiplier
-const float kRayGain = 3.20;      // single-scatter Rayleigh gain
+const float kRayGain = 3.95;      // single-scatter Rayleigh gain
 
 // One analytic atmosphere evaluation. Also used by the object shader (wet road
 // and window reflections mirror the real sky, not a guess at it) — the copy in
@@ -105,7 +105,11 @@ vec3 atmosphere(vec3 dir, vec3 sun) {
     // the way in. Real upper skies are blue purely from second- and
     // third-order scattering, so this is where the blue at altitude comes
     // from, ramped in with height rather than present at the horizon.
-    float multiK = 0.012 + 0.30 * smoothstep(0.45, 1.00, h);
+    // BUILD-P12: the blue at altitude was creeping down into the visible band
+    // and greying the amber out. The ramp now starts higher and much lower in
+    // gain, so the frame the camera actually sees is orange all the way up to
+    // about 25 degrees, and only the unshot zenith goes blue.
+    float multiK = 0.005 + 0.30 * smoothstep(0.55, 1.00, h);
     vec3 multi  = kBetaR * phR * 0.80 * Tview * multiK;
     return (single + mie + multi) * kSunI;
 }
@@ -140,8 +144,10 @@ void main() {
         // It is also the surface the corridor silhouettes against, so its
         // colour and level are the two numbers the whole scene reads from.
         float hz = exp(-max(h, 0.0) * 7.0);
-        sky += (vec3(0.30, 0.145, 0.055)
-              + vec3(0.34, 0.20, 0.085) * pow(max(mu, 0.0), 3.0)) * hz;
+        // hotter and more saturated than the P10 values: this band is what the
+        // whole corridor silhouettes against, and it is the frame's identity
+        sky += (vec3(0.40, 0.140, 0.036)
+              + vec3(0.42, 0.185, 0.058) * pow(max(mu, 0.0), 3.0)) * hz;
     } else {
         // below the horizon the dome is only ever seen past the edge of the
         // ground quad: dark warm ground haze, matched to the aerial
@@ -188,8 +194,8 @@ void main() {
         // The crown is PINK-gold, not white: at this sun elevation the tops are
         // lit by light that has already crossed the whole atmosphere, so a
         // neutral-white cumulus is the same mistake as a neutral-white sky.
-        vec3 crown = vec3(1.25, 1.02, 0.78);
-        vec3 belly = vec3(0.30, 0.155, 0.130);
+        vec3 crown = vec3(1.30, 0.96, 0.62);
+        vec3 belly = vec3(0.34, 0.130, 0.085);
         float lift = pow(clamp(cover, 0.0, 1.0), 0.55);
         cloudCol = mix(belly, crown, lift);
         float silver = pow(max(mu, 0.0), 14.0) * (1.0 - cover) * 1.35;
