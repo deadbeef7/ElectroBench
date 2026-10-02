@@ -62,11 +62,14 @@ void main() {
     // straight toward it, so poles and wires cross the disc as silhouettes.
     // BUILD-P2: core/halo trimmed to pay for the disc (same clip budget as
     // build P1).
+    // BUILD-P6 MOVING SUN: uSunDir now drifts in azimuth and sinks over the
+    // run (the C++ side advances it); disc, bloom and ray crossbars all
+    // follow since everything here keys off uSunDir.
     float sunAmt = max(dot(dir, normalize(uSunDir)), 0.0);
     float disc = smoothstep(0.9996, 0.99985, sunAmt);           // ~1.6° veil
-    sky += vec3(1.0, 0.86, 0.62) * disc * 0.62;
-    sky += vec3(1.0, 0.80, 0.52) * pow(sunAmt, 30.0) * 0.24;   // tight core
-    sky += vec3(1.0, 0.70, 0.38) * pow(sunAmt, 7.0) * 0.06;    // wide halo
+    sky += vec3(1.0, 0.86, 0.62) * disc * 0.44;
+    sky += vec3(1.0, 0.80, 0.52) * pow(sunAmt, 30.0) * 0.20;   // tight core
+    sky += vec3(1.0, 0.70, 0.38) * pow(sunAmt, 7.0) * 0.055;   // wide halo
     // two faint ray crossbars hugging the horizon (dusk diffusion) — gated
     // by height so they never draw full-height streaks through the clouds
     float bar1 = abs(dot(dir.xz, normalize(vec2(0.94, -0.34))));
@@ -106,7 +109,7 @@ void main() {
     // heavy late-afternoon atmosphere the wires silhouette against
     // (BUILD-P2: 0.20 -> 0.14 — the sun disc now supplies the eye-level glare)
     float band = exp(-abs(h) * 26.0);
-    sky += vec3(1.0, 0.88, 0.66) * band * 0.14;
+    sky += vec3(1.0, 0.88, 0.66) * band * 0.10;
 
     // subtle dither: kills gradient banding on smooth drivers
     float dith = vhash(dir.xy * 1913.7 + fract(uTime) * 17.0);

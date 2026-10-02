@@ -206,11 +206,13 @@ What it renders :
 - A **dusk sky** rendered directly at full screen resolution: amber-to-cream gradient, a low veiled
   sun disc sitting on the haze band (the dolly walks straight toward it, so poles and wires cross
   it as silhouettes), two layers of drifting value-noise clouds, and horizon ray crossbars
-- A **straight asphalt road with worn centre dashes** running under the auto camera (it drives
-  the right lane; the pole line stands at the road's left shoulder), a patchy warm gravel field,
-  **long analytic dusk shadows** raking back from every pole, two-scale **aerial haze** that
-  sinks the far corridor into the sky colour without erasing it, grazing rim glints on the
-  wires, and a filmic knee on the whole frame
+- A **straight asphalt road with worn centre dashes running BETWEEN the two pole lines** (the
+  auto camera drives down its middle; poles line both shoulders), gabled **suburban silhouette
+  houses** on both flanks that the service drops land on, and a patchy warm gravel field
+- A **moving sun**: it crawls in azimuth and sinks over the run, and every ground shadow is
+  re-streamed per frame, so the whole street's shadows swing with the sunset. Two-scale **aerial
+  haze** sinks the far corridor into the sky colour without erasing it, wires carry grazing rim
+  glints, and a filmic knee keeps the amber rolling off instead of clipping
 - An **automatic camera** that dollies along line A from pole to pole (wrapping at the end of the
   line) with the wire bundle sliding overhead
 

@@ -182,7 +182,22 @@ static const float kGroundY = 0.0f;
 // dusk sun: LOW and AHEAD of the dolly camera (up the corridor), slightly
 // left — wires cross the sun disc, poles read as silhouettes, long shadows
 // come back toward the viewer. BUILD-P2 hyper-realism pass.
+// BUILD-P6: kSunDir is the T=0 state; SunDirNow() advances azimuth/elevation
+// with the sim clock so the sky, lighting and shadows all move together.
 static const Vec3 kSunDir{-0.30f, 0.20f, 0.93f};
+
+// BUILD-P6 MOVING SUN: the dusk sun crawls azimuthally and sinks over the
+// run (45 s bench = a visible slow sunset). Everything downstream follows:
+// the sky bloom, the object lighting AND the ground shadows. Sinking is
+// clamped so the sun never fully sets inside the bench window.
+static Vec3 SunDirNow(double t) {
+  float az = -0.30f - 0.004f * (float)t;                // ~10 deg over the run
+  float el = 0.20f - 0.0011f * (float)t;                // slow sink (2.7 deg
+                                                        // over the 45 s run)
+  if (el < 0.15f) el = 0.15f;
+  Vec3 s{az, el, 0.93f};
+  return Vec3Norm(s);
+}
 
 // ---------------------------------------------------------------- scene state
 static Program gSkyProg, gObjProg, gHudProg;
@@ -411,36 +426,54 @@ static void AddBox(const Vec3 &center, const Vec3 &half, const Vec3 &color) {
 // an earth wire down the trunk, optional transformer + service spool.
 // BUILD-P2: every wire in the scene ties to a REAL insulator top — these
 // two helpers are the single source of truth for the attachment points.
-struct PoleSpec { float x, z; float height; bool transformer; bool serviceSpool; };
+// BUILD-P6: poles LEAN (leanX/leanZ = total top displacement); every
+// attachment point interpolates the same linear axis, so wires stay tied
+// to slightly crooked poles like real streets.
+struct PoleSpec {
+  float x, z; float height; bool transformer; bool serviceSpool;
+  float leanX, leanZ;
+};
+static Vec3 PoleAxisAt(const PoleSpec &p, float h) {
+  float f = h / p.height;
+  return {p.x + p.leanX * f, h, p.z + p.leanZ * f};
+}
 static Vec3 ArmInsulatorTop(const PoleSpec &p, float off) {
   // crossarm at height-0.55; its insulator stacks top out 0.35 above it
-  return {p.x + off, p.height - 0.20f, p.z};
+  Vec3 a = PoleAxisAt(p, p.height - 0.20f);
+  return {a.x + off, p.height - 0.20f, a.z};
 }
 static Vec3 PoleTopInsulatorTop(const PoleSpec &p) {
-  return {p.x, p.height + 0.24f, p.z};
+  Vec3 a = PoleAxisAt(p, p.height + 0.24f);
+  return {a.x, p.height + 0.24f, a.z};
 }
+
+static std::vector<PoleSpec> gLineA, gLineB;  // kept for per-frame shadows
 static void AddPole(const PoleSpec &p) {
-  Vec3 base{p.x, kGroundY, p.z};
-  Vec3 top{p.x, p.height, p.z};
+  Vec3 base = PoleAxisAt(p, kGroundY);
+  Vec3 top = PoleAxisAt(p, p.height);
   AddCylinder(base, top, 0.17f, 0.115f, 10, kWoodDark);
   // dirt collar kicked up around the base (every real pole sits in one)
-  AddCylinder({p.x, kGroundY - 0.02f, p.z}, {p.x, 0.10f, p.z}, 0.52f, 0.34f, 8,
-              {0.30f, 0.24f, 0.18f});
+  AddCylinder({base.x, kGroundY - 0.02f, base.z}, {base.x, 0.10f, base.z},
+              0.52f, 0.34f, 8, {0.30f, 0.24f, 0.18f});
 
   // main crossarm near the top + a smaller one below, with diagonal braces
   float armY = p.height - 0.55f;
-  AddBox({p.x, armY, p.z}, {1.25f, 0.055f, 0.075f}, kWoodOld);
-  AddBox({p.x, armY - 0.62f, p.z}, {0.85f, 0.05f, 0.07f}, kWoodOld);
-  AddCylinder({p.x - 0.34f, armY - 0.05f, p.z + 0.03f},
-              {p.x - 0.94f, armY - 0.57f, p.z + 0.03f}, 0.030f, 0.030f, 6,
+  Vec3 armC = PoleAxisAt(p, armY);
+  AddBox({armC.x, armY, armC.z}, {1.25f, 0.055f, 0.075f}, kWoodOld);
+  Vec3 arm2C = PoleAxisAt(p, armY - 0.62f);
+  AddBox({arm2C.x, armY - 0.62f, arm2C.z}, {0.85f, 0.05f, 0.07f}, kWoodOld);
+  Vec3 brT = PoleAxisAt(p, armY - 0.05f);
+  Vec3 brB = PoleAxisAt(p, armY - 0.57f);
+  AddCylinder({brT.x - 0.34f, brT.y, brT.z + 0.03f},
+              {brB.x - 0.94f, brB.y, brB.z + 0.03f}, 0.030f, 0.030f, 6,
               kWoodDark);
-  AddCylinder({p.x + 0.34f, armY - 0.05f, p.z + 0.03f},
-              {p.x + 0.94f, armY - 0.57f, p.z + 0.03f}, 0.030f, 0.030f, 6,
+  AddCylinder({brT.x + 0.34f, brT.y, brT.z + 0.03f},
+              {brB.x + 0.94f, brB.y, brB.z + 0.03f}, 0.030f, 0.030f, 6,
               kWoodDark);
 
   // ceramic insulators: three on the main arm, one atop the pole
   for (float off : {-1.05f, 0.0f, 1.05f}) {
-    Vec3 ib{p.x + off, armY + 0.05f, p.z};
+    Vec3 ib{armC.x + off, armY + 0.05f, armC.z};
     AddCylinder(ib, Vec3Add(ib, Vec3{0, 0.24f, 0}), 0.052f, 0.062f, 8, kCeramic);
     AddCylinder(Vec3Add(ib, Vec3{0, 0.24f, 0}), Vec3Add(ib, Vec3{0, 0.30f, 0}),
                 0.062f, 0.040f, 8, kCeramic);
@@ -450,8 +483,8 @@ static void AddPole(const PoleSpec &p) {
               0.058f, 0.038f, 8, kCeramic);
 
   // earth wire: a bare cable clipped down the trunk, grounded at the collar
-  AddWire({p.x + 0.115f, 0.12f, p.z}, {p.x + 0.085f, 4.0f, p.z}, 0.05f, 0.014f,
-          6, kMetal);
+  AddWire({base.x + 0.115f, 0.12f, base.z}, {top.x + 0.085f, 4.0f, top.z},
+          0.05f, 0.014f, 6, kMetal);
 
   if (p.serviceSpool) {
     // secondary service spool on the other flank (double-attachment poles)
@@ -462,20 +495,21 @@ static void AddPole(const PoleSpec &p) {
   // BUILD-P4 TELECOM ARM: a second, lower crossarm carrying the phone/cable
   // bundles (Japanese poles stack a communications arm under the power arm).
   float telY = armY - 1.30f;
-  AddBox({p.x, telY, p.z}, {0.95f, 0.05f, 0.06f}, kWoodOld);
+  Vec3 telC = PoleAxisAt(p, telY);
+  AddBox({telC.x, telY, telC.z}, {0.95f, 0.05f, 0.06f}, kWoodOld);
   for (float off : {-0.70f, 0.0f, 0.70f})
-    AddCylinder({p.x + off, telY + 0.05f, p.z},
-                {p.x + off, telY + 0.15f, p.z}, 0.038f, 0.032f, 6, kMetal);
+    AddCylinder({telC.x + off, telY + 0.05f, telC.z},
+                {telC.x + off, telY + 0.15f, telC.z}, 0.038f, 0.032f, 6, kMetal);
 
   // a couple of CableTV-style cylindrical boxes bolted to the trunk (some
   // poles, deterministic)
   if (((int(p.z * 7.0f)) % 3) == 0)
-    AddCylinder({p.x + 0.20f, 3.9f, p.z}, {p.x + 0.20f, 4.5f, p.z}, 0.11f,
-                0.11f, 8, kMetal);
+    AddCylinder({base.x + 0.20f, 3.9f, base.z}, {base.x + 0.20f, 4.5f, base.z},
+                0.11f, 0.11f, 8, kMetal);
 
   if (p.transformer) {
     // the can: grey cylinder + cooling fins, bolted below the crossarm
-    Vec3 tc{p.x + 0.62f, armY - 1.35f, p.z};
+    Vec3 tc{armC.x + 0.62f, armY - 1.35f, armC.z};
     AddCylinder(Vec3Add(tc, Vec3{-0.1f, -0.55f, 0}),
                 Vec3Add(tc, Vec3{0.1f, 0.55f, 0}), 0.34f, 0.34f, 10, kMetal);
     AddBox({tc.x, tc.y + 0.30f, tc.z}, {0.40f, 0.16f, 0.16f}, kMetal);
@@ -491,30 +525,57 @@ static void AddPole(const PoleSpec &p) {
   }
 }
 
+// BUILD-P6: suburban silhouette houses on both flanks — gabled roof boxes
+// with dark window holes, the depth cue that kills the "empty flat world"
+// look. Deterministic sizes/positions; drawn cheap (one box + one prism).
+static void AddHouse(float x, float z, float w, float d, float h, float yaw) {
+  // body: a simple box (axis-aligned; yaw only skews the roof ridge)
+  AddBox({x, h * 0.5f, z}, {w * 0.5f, h * 0.5f, d * 0.5f},
+         {0.34f, 0.26f, 0.20f});
+  // gabled roof: two long slabs meeting at a ridge along the x axis
+  Vec3 ridge{0.36f, 0.24f, 0.17f};
+  AddCylinder({x - w * 0.5f, h, z}, {x + w * 0.5f, h, z}, 0.02f, 0.02f, 4,
+              ridge);                                     // ridge beam
+  AddBox({x, h + 0.22f, z - d * 0.28f}, {w * 0.55f, 0.05f, d * 0.34f}, ridge);
+  AddBox({x, h + 0.22f, z + d * 0.28f}, {w * 0.55f, 0.05f, d * 0.34f}, ridge);
+  // dark windows on the street-facing flank
+  Vec3 win{0.045f, 0.04f, 0.05f};
+  AddBox({x - w * 0.22f, h * 0.55f, z + (yaw >= 0.0f ? d * 0.5f : -d * 0.5f)},
+         {0.28f, 0.22f, 0.02f}, win);
+  AddBox({x + w * 0.18f, h * 0.55f, z + (yaw >= 0.0f ? d * 0.5f : -d * 0.5f)},
+         {0.28f, 0.22f, 0.02f}, win);
+}
+
 static void BuildSceneGeometry() {
   gVerts.clear();
   gIdx.clear();
+  gLineA.clear();
+  gLineB.clear();
 
-  // ---- ground: a big warm gravel plane (single quad, cheap as dirt) ----
+  // ---- ground: a big warm gravel plane (single quad, cheap as dirt).
+  // BUILD-P6: much longer along +z so the corridor never shows its edge.
   {
     unsigned int s = (unsigned int)gVerts.size();
     Vec3 n{0, 1, 0};
-    PushVert({-70, kGroundY, -50}, n, kGravel);
-    PushVert({70, kGroundY, -50}, n, kGravel);
-    PushVert({70, kGroundY, 110}, n, kGravel);
-    PushVert({-70, kGroundY, 110}, n, kGravel);
+    PushVert({-70, kGroundY, -60}, n, kGravel);
+    PushVert({70, kGroundY, -60}, n, kGravel);
+    PushVert({70, kGroundY, 220}, n, kGravel);
+    PushVert({-70, kGroundY, 220}, n, kGravel);
     gIdx.push_back(s); gIdx.push_back(s + 1); gIdx.push_back(s + 2);
     gIdx.push_back(s); gIdx.push_back(s + 2); gIdx.push_back(s + 3);
   }
 
   // ---- the main pole line the camera walks beside (BUILD-P2: 15 poles,
   // tighter 12.4 m spacing — real suburban distribution is 10-14 m spans,
-  // and the long vanishing corridor IS the Lain look) ----
+  // and the long vanishing corridor IS the Lain look). BUILD-P6: every pole
+  // leans a little (deterministic), like real weathered streets.
   std::vector<PoleSpec> lineA;
   for (int i = 0; i < 15; i++)
-    lineA.push_back({0.0f, 2.0f + 12.4f * i, 8.6f + 0.35f * ((i * 5) % 3),
-                     i == 1 || i == 6 || i == 11, i == 3 || i == 9});
+    lineA.push_back({-3.4f, 2.0f + 12.4f * i, 8.6f + 0.35f * ((i * 5) % 3),
+                     i == 1 || i == 6 || i == 11, i == 3 || i == 9,
+                     0.10f * ((i * 7) % 3 - 1), 0.08f * ((i * 5) % 3 - 1)});
   for (const PoleSpec &p : lineA) AddPole(p);
+  gLineA = lineA;
 
   // wires along line A: 3 crossarm conductors + the pole-top wire. BUILD-P2
   // FIX: every span ties INSULATOR TOP to INSULATOR TOP (ArmInsulatorTop /
@@ -538,8 +599,10 @@ static void BuildSceneGeometry() {
   // "wires hanging out" glitch).
   std::vector<PoleSpec> lineB;
   for (int i = 0; i < 6; i++)
-    lineB.push_back({-8.0f, 6.0f + 15.5f * i, 7.6f, false, i == 1});
+    lineB.push_back({8.6f, 6.0f + 15.5f * i, 7.6f, false, i == 1,
+                     0.09f * ((i * 11) % 3 - 1), 0.07f * ((i * 3) % 3 - 1)});
   for (const PoleSpec &p : lineB) AddPole(p);
+  gLineB = lineB;
   for (int i = 0; i + 1 < (int)lineB.size(); i++) {
     const PoleSpec &p = lineB[i];
     const PoleSpec &q = lineB[i + 1];
@@ -591,22 +654,45 @@ static void BuildSceneGeometry() {
   // not to a point floating off the pole flank.
   for (int side = 0; side < 2; side++) {
     const PoleSpec &p = lineA[side == 0 ? 3 : 9];
-    AddWire({p.x - 0.34f, 5.4f, p.z}, {4.6f, 3.1f, p.z + 3.2f}, 0.55f, 0.020f,
-            10, kCableOld);
-    AddWire(ArmInsulatorTop(p, 1.05f), {4.1f, 3.1f, p.z + 3.4f}, 0.50f, 0.020f,
-            10, kCableOld);
-    // junction boxes hang on the pole wall (mounted), NOT floating in the
-    // field — the unmounted cans read as a floating T-bar from the road.
-    AddCylinder({p.x - 0.30f, 3.05f, p.z}, {p.x - 0.30f, 2.45f, p.z},
+    // BUILD-P6: the drops land on REAL HOUSE WALLS on the left flank (the
+    // houses below), not on floating points over the road — every wire in
+    // the scene terminates on hardware.
+    float hz = p.z + 6.0f;
+    Vec3 wallA{-8.05f, 3.35f, hz};            // right wall of the left house
+    Vec3 wallB{-8.05f, 2.90f, hz + 0.55f};
+    AddWire(PoleAxisAt(p, 5.4f), wallA, 0.55f, 0.020f, 10, kCableOld);
+    AddWire(ArmInsulatorTop(p, 1.05f), wallB, 0.50f, 0.020f, 10, kCableOld);
+    // service mast on the house wall where the drops land
+    AddCylinder({wallA.x - 0.02f, wallA.y - 0.25f, wallA.z},
+                {wallA.x - 0.02f, wallA.y + 0.55f, wallA.z}, 0.05f, 0.05f, 6,
+                kMetal);
+    // junction cans stay mounted on the pole wall
+    AddCylinder({PoleAxisAt(p, 3.05f).x - 0.30f, 3.05f, p.z},
+                {PoleAxisAt(p, 2.45f).x - 0.30f, 2.45f, p.z},
                 0.09f, 0.09f, 8, kMetal);
-    AddBox({p.x - 0.30f, 3.10f, p.z}, {0.16f, 0.10f, 0.12f}, kMetal);
+    AddBox({PoleAxisAt(p, 3.10f).x - 0.30f, 3.10f, p.z}, {0.16f, 0.10f, 0.12f},
+           kMetal);
   }
 
-  // ---- BUILD-P4/P5: THE ROAD. A straight asphalt strip parallel to the
-  // poles, CENTRED UNDER THE AUTO CAMERA (road centre x = +2.6 m, 5.4 m
-  // wide): the camera drives the right lane, the pole line stands at the
-  // road's left shoulder, and the wires cross the frame overhead — the
-  // classic Japanese-street composition. Worn painted centre dashes.
+  // ---- BUILD-P6: THE SUBURB. Silhouette houses on both flanks — gabled
+  // roofs, dark windows — the depth cue that kills the "empty flat world"
+  // look and gives the service drops something real to land on.
+  for (int i = 0; i < 8; i++) {
+    float z = -4.0f + 19.0f * i + 3.0f * ((i * 7) % 3);
+    AddHouse(-11.5f - 2.0f * (i % 3), z, 4.6f + 1.4f * ((i * 3) % 3),
+             5.2f + 1.2f * ((i * 5) % 3), 3.2f + 0.9f * ((i * 7) % 3), -1.0f);
+  }
+  for (int i = 0; i < 6; i++) {
+    float z = 8.0f + 21.0f * i + 2.5f * ((i * 5) % 3);
+    AddHouse(15.0f + 2.5f * (i % 3), z, 4.8f + 1.5f * ((i * 3) % 3),
+             5.4f + 1.1f * ((i * 7) % 3), 3.1f + 1.0f * ((i * 5) % 3), 1.0f);
+  }
+
+  // ---- BUILD-P4/P6: THE ROAD. A straight asphalt strip BETWEEN the two
+  // pole lines (lineA x=-3.4 = left shoulder, lineB x=+8.6 = right
+  // shoulder, road centre x=+2.6, 5.4 m wide), worn centre dashes + solid
+  // painted edge lines — the corridor the auto camera drives down the
+  // middle of.
   {
     const float rx = 2.6f, halfW = 2.7f;
     Vec3 road{0.16f, 0.155f, 0.165f};
@@ -644,30 +730,8 @@ static void BuildSceneGeometry() {
     }
   }
 
-  // ---- BUILD-P2: long dusk shadows. The low sun rakes up the corridor, so
-  // every pole lies down as a long tapered silhouette. Analytic: a quad from
-  // the base extending along the sun ray to 16 m, darkest at the foot,
-  // feathering to nothing — drawn dark and slightly warm (dusk bounce).
-  for (const PoleSpec &p : lineA) {
-    Vec3 sun = Vec3Norm({kSunDir.x, 0.0f, kSunDir.z});
-    Vec3 perp{-sun.z, 0.0f, sun.x};
-    float reach = 16.0f * (1.0f + 0.05f * (float)((int(p.z) % 7)));  // varied
-    Vec3 b{p.x, 0.012f, p.z};
-    Vec3 tip = Vec3Add(b, Vec3Scale(sun, -reach));  // AWAY from the sun
-    float w0 = 0.34f, w1 = 1.15f;                    // widening penumbra
-    Vec3 c0 = Vec3Add(b, Vec3Scale(perp, w0));
-    Vec3 c1 = Vec3Add(b, Vec3Scale(perp, -w0));
-    Vec3 c2 = Vec3Add(tip, Vec3Scale(perp, w1));
-    Vec3 c3 = Vec3Add(tip, Vec3Scale(perp, -w1));
-    Vec3 sc{0.135f, 0.10f, 0.082f};                  // warm dusk shadow
-    unsigned int ss = (unsigned int)gVerts.size();
-    PushVert(c0, {0, 1, 0}, sc);
-    PushVert(c1, {0, 1, 0}, sc);
-    PushVert(c2, {0, 1, 0}, sc);
-    PushVert(c3, {0, 1, 0}, sc);
-    gIdx.push_back(ss); gIdx.push_back(ss + 1); gIdx.push_back(ss + 2);
-    gIdx.push_back(ss); gIdx.push_back(ss + 2); gIdx.push_back(ss + 3);
-  }
+  // BUILD-P2/P6: long dusk shadows are PER-FRAME now (the sun moves — see
+  // DrawGroundShadows), so nothing shadow-shaped is baked here anymore.
 
   // upload
   glGenVertexArrays(1, &gObjVao);
@@ -788,7 +852,7 @@ static void RenderHUD() {
   // build tag: on-screen proof of which scene code the exe runs (stale-build
   // screenshots must be detectable at a glance)
   char line1[128];
-  std::snprintf(line1, sizeof(line1), "FPS: %d   build P5   scene 4: power lines", gFps);
+  std::snprintf(line1, sizeof(line1), "FPS: %d   build P6   scene 4: power lines", gFps);
   RenderText(16.0f, 16.0f, line1);
 }
 
@@ -828,13 +892,91 @@ static void DrawSky(const Mat4 &view, const Vec3 &eye, double timeSec) {
   m[12] = eye.x; m[13] = eye.y; m[14] = eye.z;
   glUniformMatrix4fv(gSkyProg.loc("uModel"), 1, GL_FALSE, m.data());
   glUniform3f(gSkyProg.loc("uEyePos"), eye.x, eye.y, eye.z);
-  glUniform3f(gSkyProg.loc("uSunDir"), kSunDir.x, kSunDir.y, kSunDir.z);
+  Vec3 sd = SunDirNow(timeSec);   // BUILD-P6: the sky follows the moving sun
+  glUniform3f(gSkyProg.loc("uSunDir"), sd.x, sd.y, sd.z);
   glUniform1f(gSkyProg.loc("uTime"), (float)timeSec);
   glDrawElements(GL_TRIANGLES, gSkyIndexCount, GL_UNSIGNED_INT, nullptr);
   glBindVertexArray(0);
   glEnable(GL_CULL_FACE);
   glDepthMask(GL_TRUE);
   glEnable(GL_DEPTH_TEST);
+}
+
+// Per-frame ground shadows: a streamed quad per pole along the CURRENT sun
+// ray. Because this rebuilds every frame, the shadows swing as the sun
+// moves — the "alive street" cue. Drawn right after the static geometry
+// with the same program (positions/normals/colours, same vertex layout).
+static GLuint gShadowVbo = 0;
+static void DrawGroundShadows(const Mat4 &view, const Vec3 &eye, double t,
+                              const std::vector<PoleSpec> &lineA,
+                              const std::vector<PoleSpec> &lineB) {
+  if (!gShadowVbo) glGenBuffers(1, &gShadowVbo);
+  Vec3 sun = Vec3Norm({SunDirNow(t).x, 0.0f, SunDirNow(t).z});
+  Vec3 perp{-sun.z, 0.0f, sun.x};
+  Vec3 sc{0.135f, 0.10f, 0.082f};              // warm dusk shadow
+  std::vector<ObjVertex> v;
+  v.reserve((lineA.size() + lineB.size()) * 4);
+  for (const std::vector<PoleSpec> *line : {&lineA, &lineB}) {
+    for (const PoleSpec &p : *line) {
+      Vec3 b = PoleAxisAt(p, 0.0f);
+      b.x = p.x; b.z = p.z;
+      float reach = 16.0f * (1.0f + 0.05f * (float)((int(p.z) % 7)));
+      Vec3 tip = Vec3Add(b, Vec3Scale(sun, -reach));   // AWAY from the sun
+      float w0 = 0.34f, w1 = 1.15f;
+      Vec3 c[4] = {
+          Vec3Add(b, Vec3Scale(perp, w0)),
+          Vec3Add(b, Vec3Scale(perp, -w0)),
+          Vec3Add(tip, Vec3Scale(perp, w1)),
+          Vec3Add(tip, Vec3Scale(perp, -w1))};
+      unsigned int s = (unsigned int)v.size();
+      for (int k = 0; k < 4; k++)
+        v.push_back({c[k].x, 0.012f, c[k].z, 0, 1, 0, sc.x, sc.y, sc.z});
+      (void)s;
+    }
+  }
+  glBindBuffer(GL_ARRAY_BUFFER, gShadowVbo);
+  glBufferData(GL_ARRAY_BUFFER, v.size() * sizeof(ObjVertex), v.data(),
+               GL_STREAM_DRAW);
+  Mat4 vp;
+  Mat4Multiply(vp, gProj, view);
+  Mat4 model;
+  Mat4Identity(model);
+  glUseProgram(gObjProg.handle);
+  glBindVertexArray(gObjVao);
+  glBindBuffer(GL_ARRAY_BUFFER, gShadowVbo);
+  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(ObjVertex), (void *)0);
+  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(ObjVertex),
+                        (void *)(3 * sizeof(float)));
+  glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(ObjVertex),
+                        (void *)(6 * sizeof(float)));
+  glDisable(GL_CULL_FACE);
+  glUniformMatrix4fv(gObjProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
+  glUniformMatrix4fv(gObjProg.loc("uModel"), 1, GL_FALSE, model.data());
+  glUniform3f(gObjProg.loc("uEyePos"), eye.x, eye.y, eye.z);
+  Vec3 sd = SunDirNow(t);
+  glUniform3f(gObjProg.loc("uSunDir"), sd.x, sd.y, sd.z);
+  glUniform1f(gObjProg.loc("uTime"), (float)t);
+  // the shadow quads are flat fans; indices come from the shared element
+  // buffer layout of 4-vert quads — build a tiny index buffer once
+  static std::vector<unsigned int> sIdx;
+  static GLuint sIdxBuf = 0;
+  if (sIdx.size() != v.size() / 4 * 6) {
+    sIdx.clear();
+    for (unsigned int q = 0; q + 3 < v.size(); q += 4) {
+      sIdx.push_back(q); sIdx.push_back(q + 1); sIdx.push_back(q + 2);
+      sIdx.push_back(q); sIdx.push_back(q + 2); sIdx.push_back(q + 3);
+    }
+    if (!sIdxBuf) glGenBuffers(1, &sIdxBuf);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, sIdxBuf);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sIdx.size() * sizeof(unsigned int),
+                 sIdx.data(), GL_STREAM_DRAW);
+  } else {
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, sIdxBuf);
+  }
+  glDrawElements(GL_TRIANGLES, (GLsizei)sIdx.size(), GL_UNSIGNED_INT, nullptr);
+  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gObjIbo);   // restore shared layout
+  glEnable(GL_CULL_FACE);
+  glBindVertexArray(0);
 }
 
 static void DrawGrid(const Mat4 &view, const Vec3 &eye, double timeSec) {
@@ -904,6 +1046,9 @@ static void RenderScene() {
 
   DrawSky(view, eye, gSimTime);
   DrawGrid(view, eye, gSimTime);
+  // BUILD-P6: the moving sun re-draws the ground shadows every frame, so
+  // they swing with it (lineA/lineB are built once at startup and kept).
+  DrawGroundShadows(view, eye, gSimTime, gLineA, gLineB);
   RenderHUD();
 
   if (gScreenshotPath && gNextShot < gShotTimes.size() &&
