@@ -753,40 +753,98 @@ static void AddSlackLoop(const PoleSpec &p, float h, float side, float radius) {
 // the pole line is one of the few things that puts the corridor at a real
 // scale, and its open truss silhouette is legible at 80 m where a solid box
 // would be a smear. Four legs plus zigzag bracing, 24 m.
+//
+// BUILD-P14: this mast WAS the "4-6 hanging cylinders in the sky".
+//
+// A flood fill of the flat-sky debug render, seeded from the bottom of the
+// frame, proves the point: in this scene NOTHING is detached. Every silhouette
+// either reaches the ground or runs off the top edge of the frame. So the
+// complaint was never about a floating object -- it was about a real object
+// drawn so thinly that its parts stopped reading as a structure.
+//
+// At 50 m the old truss braced with 26 mm members: about 0.6 px, and after 4x
+// MSAA it simply vanished. What survived on screen was the four 0.17 m legs
+// plus the whip strokes -- six vertical tubes tapering against the sky,
+// hanging in it. The legs were WIDER on screen than the members that make a
+// mast a mast, so the only thing the eye could assemble was a row of
+// cylinders. Thicker legs would have made it worse.
+//
+// Three changes, all of them about legibility at corridor distance:
+//   1. every member is fat enough to clear a pixel at 60 m -- legs 125 mm,
+//      diagonals 70 mm, belts 58 mm, all well over double the old gauge;
+//   2. the bracing steps every 1.9 m, which at 60-90 m is ~12 px between
+//      levels: fat enough that no member falls below a pixel and vanishes,
+//      sparse enough that sky still shows through the truss. Gauging and
+//      spacing pull in opposite directions and both matter -- thickening
+//      alone just welds the mast into a solid wedge, which is the same
+//      silhouette with a worse story;
+//   3. vertical panel antennas on the upper third -- the single feature that
+//      makes a cell mast unmistakable, and the thing that stops the
+//      silhouette from being four sticks with a fork on top.
 static void AddLatticeMast(float x, float z, float height) {
   const Vec3 steel{0.290f, 0.292f, 0.300f};
+  const Vec3 radome{0.760f, 0.765f, 0.775f};
   const float halfBase = 1.55f, halfTop = 0.42f;
+  // the leg taper, shared by the bracing and the panels so the whole assembly
+  // follows one profile instead of each part guessing its own width
+  auto halfAt = [=](float h) {
+    return halfBase + (halfTop - halfBase) * (h / height);
+  };
   for (int c = 0; c < 4; c++) {
     float sx = (c == 0 || c == 3) ? -1.0f : 1.0f;
     float sz = (c < 2) ? -1.0f : 1.0f;
     AddCylinder({x + sx * halfBase, 0.0f, z + sz * halfBase},
-                {x + sx * halfTop, height, z + sz * halfTop}, 0.085f, 0.055f,
+                {x + sx * halfTop, height, z + sz * halfTop}, 0.125f, 0.085f,
                 4, steel, kMatSteel);
   }
-  for (float h = 1.6f; h < height - 0.4f; h += 1.9f) {
-    float t0 = h / height, t1 = (h + 1.9f) / height;
-    float hb0 = halfBase + (halfTop - halfBase) * t0;
-    float hb1 = halfBase + (halfTop - halfBase) * t1;
+  const float kStep = 1.9f;
+  for (float h = 1.9f; h < height - 0.5f; h += kStep) {
+    float hb0 = halfAt(h), hb1 = halfAt(h + kStep);
     for (int s = 0; s < 4; s++) {
       float a0x = (s == 0 || s == 3) ? -hb0 : hb0;
       float a0z = (s < 2) ? -hb0 : hb0;
       int n = (s + 1) & 3;
       float a1x = (n == 0 || n == 3) ? -hb1 : hb1;
       float a1z = (n < 2) ? -hb1 : hb1;
-      AddCylinder({x + a0x, h, z + a0z}, {x + a1x, h + 1.9f, z + a1z}, 0.032f,
-                  0.032f, 3, steel, kMatSteel);
+      AddCylinder({x + a0x, h, z + a0z}, {x + a1x, h + kStep, z + a1z},
+                  0.070f, 0.070f, 3, steel, kMatSteel);
       // the horizontal belt at each level closes the truss
-      AddCylinder({x + a0x, h, z + a0z}, {x - a0x, h, z + a0z}, 0.026f, 0.026f,
+      AddCylinder({x + a0x, h, z + a0z}, {x - a0x, h, z + a0z}, 0.058f, 0.058f,
                   3, steel, kMatSteel);
-      AddCylinder({x + a0x, h, z + a0z}, {x + a0x, h, z - a0z}, 0.026f, 0.026f,
+      AddCylinder({x + a0x, h, z + a0z}, {x + a0x, h, z - a0z}, 0.058f, 0.058f,
                   3, steel, kMatSteel);
     }
   }
-  // the whip antennas on top
+  // BUILD-P14: the panel antennas. Two on each of the two broad faces, hung
+  // off the truss on short stand-offs, running from just under the shoulder
+  // to just under the top. These are what the eye recognises as "cell site",
+  // and they give the mast a solid core so the truss reads as a structure
+  // with panels on it rather than as four empty legs.
+  {
+    const float pBot = height * 0.46f, pTop = height * 0.88f;
+    const float pLen = (pTop - pBot) * 0.5f, pMid = (pBot + pTop) * 0.5f;
+    for (int face = 0; face < 2; face++) {
+      float fz = face ? 1.0f : -1.0f;
+      for (int k = 0; k < 2; k++) {
+        float px = x + (k ? 0.70f : -0.70f);
+        // the stand-off: a short bracket tying the panel back to the truss,
+        // otherwise the panel is a slab floating beside the mast, which is
+        // the same class of bug as a hanging cylinder
+        AddCylinder({px, pMid, z + fz * halfAt(pMid)},
+                    {px, pMid, z + fz * (halfAt(pMid) + 0.34f)}, 0.055f,
+                    0.055f, 3, steel, kMatSteel);
+        AddBox({px, pMid, z + fz * (halfAt(pMid) + 0.46f)},
+               {0.21f, pLen, 0.16f}, radome, kMatPaint);
+      }
+    }
+  }
+  // the whip antennas on top: short, and clustered so they read as one
+  // fixture rather than three more free-floating verticals
   for (int i = 0; i < 3; i++) {
-    float ax = x + (i - 1) * 0.5f;
-    AddCylinder({ax, height, z}, {ax, height + 2.6f - 0.5f * (float)(i & 1), z},
-                0.030f, 0.012f, 4, steel, kMatSteel);
+    float ax = x + (i - 1) * 0.26f;
+    AddCylinder({ax, height - 0.15f, z},
+                {ax, height + 1.55f - 0.35f * (float)(i & 1), z}, 0.052f,
+                0.022f, 4, steel, kMatSteel);
   }
 }
 
@@ -1360,8 +1418,17 @@ static void AddTreeline() {
 
   // ---- BUILD-P12: two cell masts behind the corridor. Pure scale cue, but a
   // street with no tall thin thing in the far distance has no distance.
-  AddLatticeMast(17.5f, 101.0f, 24.0f);
-  AddLatticeMast(-27.0f, 138.0f, 27.5f);
+  //
+  // BUILD-P14: moved out of the corridor. The dolly runs z = 4..121 m along
+  // x = +2, so a mast at (17.5, 101) was 15 m off the lens at one point in
+  // the loop -- a 24 m truss filling the frame, legs smeared past the edge
+  // and bracing too close to resolve, which is the worst possible way to
+  // draw the one object that has to read as a truss. Both now sit ahead of
+  // the dolly's whole range at a similar bearing (|dx| ~ 0.78 * dz, which is
+  // where they were on screen before), so they hold their framing while the
+  // nearest approach relaxes from 15 m to 52 m and 34 m.
+  AddLatticeMast(34.0f, 162.0f, 24.0f);
+  AddLatticeMast(-42.0f, 178.0f, 27.5f);
 
   // ---- a second, closer line: depth + the layered-tangle feel. BUILD-P2:
   // the 17 m offset put line B so far off-axis it read as flat wallpaper;
@@ -1700,7 +1767,7 @@ static void RenderHUD() {
   // build tag: on-screen proof of which scene code the exe runs (stale-build
   // screenshots must be detectable at a glance)
   char line1[128];
-  std::snprintf(line1, sizeof(line1), "FPS: %d   build P13   scene 4: LainBench", gFps);
+  std::snprintf(line1, sizeof(line1), "FPS: %d   build P14   scene 4: LainBench", gFps);
   RenderText(16.0f, 16.0f, line1);
 }
 

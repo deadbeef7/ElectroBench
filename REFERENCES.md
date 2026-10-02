@@ -179,6 +179,40 @@ Realism takeaways applied:
   glazing bars over them. Emissive geometry is only believable if the frame behind it still exists —
   the bars and the sill are what stop a lit pane reading as a sticker.
 
+## BUILD-P14: the hanging cylinders were a lattice mast, drawn too thin
+
+- **"Cylinders in the sky" did not mean a floating object — it meant a real
+  object drawn too thinly to read as a structure.** A flood fill of a flat-sky
+  debug render, seeded from the bottom of the frame, settles it: in scene 4
+  *nothing* is detached. Every silhouette either reaches the ground or runs off
+  the top edge of the frame. The unanchored set is HUD glyphs and the wire web
+  leaving frame. So the artefact had to be found by looking at what was drawn,
+  not at what was disconnected.
+- **The cell mast presented as six vertical tubes.** At 50 m the truss braced
+  with 26 mm members — about 0.6 px — and after 4x MSAA they simply vanished.
+  What survived was the four 85 mm legs plus the whip strokes: six verticals,
+  tapering, against open sky. The legs were *wider on screen than the members
+  that make a mast a mast*, so the only silhouette the eye could assemble was a
+  row of cylinders. The tell was visible in the raw pixel data: at y 160-179 the
+  mast was six separate strokes at x 641, 653, 657, 664, 668, 672.
+- **Gauging and spacing pull against each other.** Members now clear a pixel
+  (legs 125 mm, diagonals 70 mm, belts 58 mm) but the bracing still steps
+  every 1.9 m, which at corridor distance is ~12 px between levels. An
+  intermediate build stepped 1.15 m and welded the truss into a solid tapering
+  wedge — same silhouette class, worse story. Both matter: thickening alone is
+  not the fix.
+- **Panel antennas earn their keep.** Four vertical radomes on stand-offs in
+  the upper third give a cell mast its unmistakable read, and stop the
+  silhouette being four sticks with a fork on top. The stand-offs matter as
+  much as the panels: a panel with nothing tying it back to the truss is a slab
+  floating beside the mast, which is the same class of bug.
+- **The masts were also in the wrong place.** The dolly runs z = 4..121 m at
+  x = +2, so a mast at (17.5, 101) passed within 15 m of the lens — a 24 m
+  truss filling the frame with legs smeared off the edge. Both now sit ahead of
+  the dolly's whole range at the same screen bearing they had before
+  (|dx| ~ 0.78 * dz), so framing is preserved while the nearest approach
+  relaxes from 15 m and 34 m to 52 m and 72 m.
+
 ## BUILD-P13: the coil was the hanging cylinders
 
 - **A helix built from coarse segments IS a row of hanging cylinders.** The
