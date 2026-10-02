@@ -1,14 +1,15 @@
 # ElectroBench
-ElectroBench is a 45+60+45 second long triple scene benchmark specifiacally designed to run on old and modern PCs, don't critise it by it using OpenGL 2.1, and GLSL 1.2, Even office PCs have low scores at it.
+ElectroBench is a 45+60+45+45 second long four-scene benchmark specifiacally designed to run on old and modern PCs, don't critise it by it using OpenGL 2.1, and GLSL 1.2, Even office PCs have low scores at it.
 It uses OpenGL 2.1/3.3, and C++, and uses make for compilation. It is designed to be a replacement for glmark (even though it is great and I used it before).
 
-It ships **one** executable that contains **all three** scenes — no second binary, no child process:
+It ships **one** executable that contains **all four** scenes — no second binary, no child process:
 
 | Scene | Renderer | Contents |
 |---|---|---|
 | **ElectroBench** (the OG) | OpenGL 2.1 / GLSL 1.2, fixed-function pipeline | **110 UZIs** on a shadow-mapped concrete floor, lit by a warm sun |
 | **TideBench** (scene 2) | OpenGL 3.3 core, pixel-shader workloads | An ocean under volumetric clouds (3DMark2001 SE "Nature" recreation) |
 | **PoolBench** (scene 3) | OpenGL 3.3 core, analytic shaders | A white-and-red checkerboard-sky pool room with a hidden light and two waves of falling, splashing teapots (18 total) |
+| **PowerBench** (scene 4) | OpenGL 3.3 core, analytic shaders | A Lain-style power-line corridor at amber dusk: creosote utility poles, a wall of sagging catenary wires, drifting white clouds |
 
 
 
@@ -34,13 +35,17 @@ The PoolBench pool room — an infinite white-and-red checkerboard sky mirrored 
 
 ![PoolBench in motion: teapot splash crowns, droplet streaks and ripple rings propagating across the checkerboard-mirrored water](docs/screenshots/pool_splash.gif)
 
+The PowerBench power-line corridor — an amber dusk under drifting white clouds, two lines of utility poles marching to the horizon, and a wall of sagging wires over the auto-dolly camera (two positions, 7 s apart):
+
+![ElectroBench Power Lines scene: utility poles and catenary wires against an amber dusk sky](docs/screenshots/power_lines.gif)
+
 # How to build ?
 
 Dependencies : `make`, `g++`, SDL2, GLEW, GLU (+ dev headers). On Debian/Ubuntu that is
 `libsdl2-dev libglew-dev libglu1-mesa-dev`; on Windows use MSYS2 (`pacman -S mingw-w64-x86_64-{gcc,SDL2,glew}`); on macOS `brew install sdl2 glew` (you may need `brew install make` for a GNU make).
 
 ```sh
-make            # builds the single ElectroBench binary (all three scenes linked in)
+make            # builds the single ElectroBench binary (all four scenes linked in)
 make run        # builds it and runs it
 ```
 
@@ -177,10 +182,42 @@ Headless visual-test flags (used to verify the render output in CI-like environm
 ```sh
 ./build/ElectroBench --scene-only --width 960 --screenshot /tmp/shot.ppm --shot-times 6,20,38
 ./build/ElectroBench --pool-only --width 960 --screenshot /tmp/shot.ppm --shot-times 2,3.2,5,12
+./build/ElectroBench --pole-only --width 960 --screenshot /tmp/shot.ppm --shot-times 2,9
 ./build/ElectroBench --og-only --screenshot /tmp/shot.ppm --shot-time 3
 ```
 
 Any `--screenshot` path containing `%d` becomes a **frame sequence**: each `--shot-times` entry writes the next numbered frame (`frames/f-%03d.ppm` → `f-000.ppm`, `f-001.ppm`, …), so a timed burst assembles straight into an animation — that is exactly how the GIF above was made (16 shots, 0.5 s apart, stitched with ImageMagick).
+
+# Scene 4 — Power Lines
+
+Power Lines is **scene 4 of the same ElectroBench binary**, also **OpenGL 3.3 core**. The Lain-style
+utility corridor: warm gravel under an amber dusk, two lines of creosote poles marching to the
+horizon, and a wall of wires over your head.
+
+What it renders :
+- **Utility poles** built from pure analytic geometry (no model files): trunk, two crossarms,
+  ceramic insulator bells, and a transformer can on every other pole
+- **Catenary wires** — three conductors per crossarm plus a pole-top wire per span, real sag
+  curves (parabola + cosh tail) swept as 4-sided tubes, with crossing spans between the two lines
+  and a service drop down to a junction box
+- A **dusk sky** rendered directly at full screen resolution: amber-to-cream gradient, a veiled low
+  sun with a tight halo, two layers of drifting value-noise clouds riding a virtual deck, and a
+  warm haze band at the horizon
+- A warm gravel field, **aerial haze** that swallows the far spans into the sky colour, and a
+  filmic knee on the whole frame so the amber rolls off instead of clipping into flat white
+- An **automatic camera** that dollies along line A from pole to pole (wrapping at the end of the
+  line) with the wire bundle sliding overhead
+
+Run the power-lines scene on its own with :
+
+```sh
+make
+./build/ElectroBench --pole-only          # Linux / macOS
+./build/ElectroBench.exe --pole-only      # Windows (MSYS2)
+```
+
+Controls : `F` toggles the automatic dolly camera, long-click + move orbits, mouse wheel zooms,
+`ESC` quits.
 
 # How the score is calculated ?
 
@@ -205,18 +242,20 @@ The same line is also printed to stdout.
 Benchmark Results - Time : 45.0s, Average FPS : 12.4, Score : 308
 ```
 
-# One executable, three scenes
+# One executable, four scenes
 
-`build/ElectroBench` is the **only** binary, and it contains all three scenes. It runs the OG 60-second gun scene
+`build/ElectroBench` is the **only** binary, and it contains all four scenes. It runs the OG 60-second gun scene
 first, then probes an OpenGL 3.3 core context:
 
-- **found** — TideBench runs as scene 2, then PoolBench as scene 3, on the same session, and the final
-  results screen shows **per-scene scores and the average of the scenes that ran**
-- **not found** (GL 2.1-only drivers, old iGPUs) — both GL 3.3 scenes skip themselves cleanly and the
-  OG result stands, so the binary still runs on the ancient hardware it targets
+- **found** — TideBench runs as scene 2, then PoolBench as scene 3, then Power Lines as scene 4, on
+  the same session, and the final results screen shows **per-scene scores and the average of the
+  scenes that ran**
+- **not found** (GL 2.1-only drivers, old iGPUs) — all three GL 3.3 scenes skip themselves cleanly
+  and the OG result stands, so the binary still runs on the ancient hardware it targets
 
 Scene selection flags: `--og-only` runs just the gun scene even on GL 3.3-capable devices,
-`--scene-only` runs just the ocean scene, `--pool-only` runs just the pool-room scene.
+`--scene-only` runs just the ocean scene, `--pool-only` runs just the pool-room scene,
+`--pole-only` runs just the power-line scene.
 
 # Windows (MSYS2)
 
@@ -231,6 +270,7 @@ g++ -std=c++17 -O2 -march=x86-64 -mtune=generic \
     src/main.cxx \
     src/tidebench.cxx \
     src/pool.cxx \
+    src/pole.cxx \
     -o build/ElectroBench.exe \
     $(pkg-config --cflags --libs sdl2) \
     -lglew32 \
@@ -238,8 +278,9 @@ g++ -std=c++17 -O2 -march=x86-64 -mtune=generic \
     -lopengl32
 ```
 
-All three scenes are linked into that one binary: `src/tidebench.cxx` and `src/pool.cxx` are scene
-modules (they have no `main()` of their own) that `src/main.cxx` hands the same SDL session to. For
+All four scenes are linked into that one binary: `src/tidebench.cxx`, `src/pool.cxx` and
+`src/pole.cxx` are scene modules (they have no `main()` of their own) that `src/main.cxx` hands the
+same SDL session to. For
 the static build, prefer
 `make STATIC=1`: it passes `-DGLEW_STATIC`, uses `pkg-config --static`, and keeps the static object
 files separate from the normal build. If invoking `g++` directly, use the same define and static
@@ -254,7 +295,7 @@ Notes for the direct g++ build :
 
 Notes :
 - The headless screenshot flags work too — just use a Windows-style path: `./build/ElectroBench.exe --scene-only --width 960 --screenshot shot.ppm --shot-times 6,20,38`
-- Any GPU with drivers from ~2010 onward handles both scenes (the ocean scene needs GL 3.3; the gun scene's GL 2.1 request gets a compatibility context — drivers ignore the profile hint below 3.2, per spec).
+- Any GPU with drivers from ~2010 onward handles all scenes (the GL 3.3 scenes need GL 3.3; the gun scene's GL 2.1 request gets a compatibility context — drivers ignore the profile hint below 3.2, per spec).
 - Run the exe from the repo root or via `build\...` — the asset resolver checks the current directory and then the executable's parent, so `shaders/` and `assets/UZI.obj` are found either way.
 
 # Contributions

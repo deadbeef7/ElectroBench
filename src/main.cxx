@@ -313,13 +313,21 @@ extern double gFusedPoolScore;            // scene 3's final score
 int  PoolSceneParseArgs(int argc, char **argv);  // scene 3's CLI flags
 void PoolSceneSetScreenshot(const char *path);   // share --screenshot
 void PoolSceneSetStandalone(bool standalone);    // --pool-only
+// SCENE 4: the power-lines scene (orange sky, poles + wire tangle).
+int RunPoleScene(bool *gaveUpOut);        // scene 4 entry (GL 3.3 power lines)
+extern double gFusedPoleScore;            // scene 4's final score
+int  PoleSceneParseArgs(int argc, char **argv);  // scene 4's CLI flags
+void PoleSceneSetScreenshot(const char *path);   // share --screenshot
+void PoleSceneSetStandalone(bool standalone);    // --pole-only
 void changeSize(int w, int h);            // resize handler (defined below)
 
 static bool   gFusedEnabled = true;  // --og-only forces the single OG scene
 static bool   gSceneOnly = false;    // --scene-only runs the ocean scene alone
 static bool   gPoolOnly = false;     // --pool-only runs the pool scene alone
+static bool   gPoleOnly = false;     // --pole-only runs scene 4 (power lines) alone
 static bool   gFusedTideRan = false;
 static bool   gFusedPoolRan = false;
+static bool   gFusedPoleRan = false;
 static double gFusedOgScore = 0.0;
 
 // Results screen: clear the window and show the final score big and centred.
@@ -350,13 +358,15 @@ static void RenderResults() {
   glClearColor(0.012f, 0.012f, 0.022f, 1.0f);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-  char big[96], timeLine[128], hint[96], scene1[96], scene2[96], scene3[96];
-  int scenesRan = 1 + (gFusedTideRan ? 1 : 0) + (gFusedPoolRan ? 1 : 0);
+  char big[96], timeLine[128], hint[96], scene1[96], scene2[96], scene3[96], scene4[96];
+  int scenesRan = 1 + (gFusedTideRan ? 1 : 0) + (gFusedPoolRan ? 1 : 0) +
+                  (gFusedPoleRan ? 1 : 0);
   if (gFusedEnabled && scenesRan > 1) {
     // fused run: average of the scenes that ran, per-scene scores below
     double sum = gFusedOgScore;
     if (gFusedTideRan) sum += gFusedTideScore;
     if (gFusedPoolRan) sum += gFusedPoolScore;
+    if (gFusedPoleRan) sum += gFusedPoleScore;
     snprintf(big, sizeof(big), "AVERAGE SCORE : %.0f", sum / scenesRan);
   } else {
     snprintf(big, sizeof(big), "SCORE : %.0f", gResultsScore);
@@ -393,6 +403,13 @@ static void RenderResults() {
       snprintf(scoreTxt, sizeof(scoreTxt), "%.0f", gFusedPoolScore);
       strncat(scene3, scoreTxt, sizeof(scene3) - strlen(scene3) - 1);
     }
+    snprintf(scene4, sizeof(scene4), "Power Lines (scene 4): %s",
+             gFusedPoleRan ? "" : "skipped (needs GL 3.3)");
+    if (gFusedPoleRan) {
+      char scoreTxt[24];
+      snprintf(scoreTxt, sizeof(scoreTxt), "%.0f", gFusedPoleScore);
+      strncat(scene4, scoreTxt, sizeof(scene4) - strlen(scene4) - 1);
+    }
     glColor4f(0.60f, 0.78f, 0.88f, 1.0f);
     HudText(cx - HudTextWidth(scene1, 1.0f) * 0.5f,
             cy + kGlyphH * kGlyphScale * 0.5f + 52.0f, scene1);
@@ -400,9 +417,11 @@ static void RenderResults() {
             cy + kGlyphH * kGlyphScale * 0.5f + 68.0f, scene2);
     HudText(cx - HudTextWidth(scene3, 1.0f) * 0.5f,
             cy + kGlyphH * kGlyphScale * 0.5f + 84.0f, scene3);
+    HudText(cx - HudTextWidth(scene4, 1.0f) * 0.5f,
+            cy + kGlyphH * kGlyphScale * 0.5f + 100.0f, scene4);
     glColor4f(0.40f, 0.48f, 0.55f, 1.0f);
     HudText(cx - HudTextWidth(hint, 1.0f) * 0.5f,
-            cy + kGlyphH * kGlyphScale * 0.5f + 112.0f, hint);
+            cy + kGlyphH * kGlyphScale * 0.5f + 128.0f, hint);
   } else {
     glColor4f(0.40f, 0.48f, 0.55f, 1.0f);
     HudText(cx - HudTextWidth(hint, 1.0f) * 0.5f,
@@ -912,6 +931,21 @@ void renderScene() {
       }
       fflush(stdout);
 
+      // ---- scene 4: the GL 3.3 power-lines scene (orange sky + wires) ----
+      printf("Scene 4/4 : Power Lines (GL 3.3)\n");
+      fflush(stdout);
+      bool gaveUpPole = false;
+      int rcPole = RunPoleScene(&gaveUpPole);
+      if (rcPole == 0) {
+        gFusedPoleRan = true;
+      } else if (rcPole == 2) {
+        SDL_Quit();
+        exit(0);
+      } else {
+        printf("Power lines scene skipped: no OpenGL 3.3 core context on this device\n");
+      }
+      fflush(stdout);
+
       // The GL 3.3 scenes tore SDL down either way; bring the window back (a fresh
       // GL 2.1 context is all the immediate-mode results text needs). The font
       // atlas texture lived in the dead context; force a re-upload.
@@ -1164,6 +1198,8 @@ int main(int argc, char **argv) {
       gSceneOnly = true; // run only the GL 3.3 ocean scene
     } else if (arg == "--pool-only") {
       gPoolOnly = true; // run only the GL 3.3 pool-room scene
+    } else if (arg == "--pole-only") {
+      gPoleOnly = true; // run only scene 4: the GL 3.3 power-lines scene
     }
   }
 
@@ -1173,9 +1209,24 @@ int main(int argc, char **argv) {
     return EXIT_FAILURE;
   if (PoolSceneParseArgs(argc, argv) != EXIT_SUCCESS)
     return EXIT_FAILURE;
+  if (PoleSceneParseArgs(argc, argv) != EXIT_SUCCESS)
+    return EXIT_FAILURE;
   if (gShotPath != nullptr) {
     OceanSceneSetScreenshot(gShotPath);
     PoolSceneSetScreenshot(gShotPath);
+    PoleSceneSetScreenshot(gShotPath);
+  }
+
+  if (gPoleOnly) {
+    PoleSceneSetStandalone(true);
+    bool gaveUp = false;
+    int rc = RunPoleScene(&gaveUp);
+    if (rc == 1) {
+      fprintf(stderr, "ElectroBench: no OpenGL 3.3 core context on this device - "
+                      "the power lines scene cannot run here\n");
+      return EXIT_FAILURE;
+    }
+    return 0;
   }
 
   if (gPoolOnly) {

@@ -34,7 +34,7 @@ else
     OBJDIR := $(BUILD)
 endif
 
-OBJS := $(OBJDIR)/main.o $(OBJDIR)/tidebench.o $(OBJDIR)/pool.o
+OBJS := $(OBJDIR)/main.o $(OBJDIR)/tidebench.o $(OBJDIR)/pool.o $(OBJDIR)/pole.o
 
 BIN = $(BUILD)/ElectroBench$(STATIC_SUFFIX)
 
@@ -169,6 +169,9 @@ $(OBJDIR)/tidebench.o: src/tidebench.cxx src/font_atlas.hxx | $(OBJDIR)
 	$(CXX) $(CPPFLAGS) $(PKG_CFLAGS) $(GLEW_CFLAGS) $(CXXFLAGS) -c $< -o $@
 
 $(OBJDIR)/pool.o: src/pool.cxx src/font_atlas.hxx | $(OBJDIR)
+	$(CXX) $(CPPFLAGS) $(PKG_CFLAGS) $(GLEW_CFLAGS) $(CXXFLAGS) -c $< -o $@
+
+$(OBJDIR)/pole.o: src/pole.cxx src/font_atlas.hxx | $(OBJDIR)
 	$(CXX) $(CPPFLAGS) $(PKG_CFLAGS) $(GLEW_CFLAGS) $(CXXFLAGS) -c $< -o $@
 
 $(BIN): $(OBJS) | $(OBJDIR)

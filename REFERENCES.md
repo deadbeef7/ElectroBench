@@ -73,6 +73,18 @@ Realism takeaways applied:
   slow renderer wall time and sim time diverge and any straggler on the
   wall clock breaks determinism.
 
+## Power Lines (scene 4) — Lain-style utility corridor
+
+Realism takeaways applied:
+
+- Utility-pole wire sag is a catenary, not a straight line: every conductor hangs on a parabola
+  (with cosh tails at the ends), and each insulator point on a crossarm carries its own curve, so
+  the wire wall reads as three-dimensional instead of a flat harp.
+- Power lines are seen against the SKY: poles and wires must silhouette against a bright dusk
+  gradient, with aerial haze progressively swallowing the far spans into the horizon colour.
+- A low amber sun, a drifting white cloud deck and warm gravel bounce give the scene one coherent
+  light story, and a filmic knee keeps the bright sky rolling off instead of clipping flat.
+
 ## Notes on staging
 
 - Reference images are informational. No image is downloaded at runtime; do not add an image fetch to the binary without explicitly wiring it through Convex/actions and the user's Keys/API keys.
