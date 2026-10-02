@@ -403,7 +403,7 @@ static void RenderResults() {
       snprintf(scoreTxt, sizeof(scoreTxt), "%.0f", gFusedPoolScore);
       strncat(scene3, scoreTxt, sizeof(scene3) - strlen(scene3) - 1);
     }
-    snprintf(scene4, sizeof(scene4), "Power Lines (scene 4): %s",
+    snprintf(scene4, sizeof(scene4), "LainBench (scene 4): %s",
              gFusedPoleRan ? "" : "skipped (needs GL 3.3)");
     if (gFusedPoleRan) {
       char scoreTxt[24];
@@ -932,7 +932,7 @@ void renderScene() {
       fflush(stdout);
 
       // ---- scene 4: the GL 3.3 power-lines scene (orange sky + wires) ----
-      printf("Scene 4/4 : Power Lines (GL 3.3)\n");
+      printf("Scene 4/4 : LainBench (GL 3.3)\n");
       fflush(stdout);
       bool gaveUpPole = false;
       int rcPole = RunPoleScene(&gaveUpPole);
@@ -942,7 +942,7 @@ void renderScene() {
         SDL_Quit();
         exit(0);
       } else {
-        printf("Power lines scene skipped: no OpenGL 3.3 core context on this device\n");
+        printf("LainBench scene skipped: no OpenGL 3.3 core context on this device\n");
       }
       fflush(stdout);
 
@@ -1223,7 +1223,7 @@ int main(int argc, char **argv) {
     int rc = RunPoleScene(&gaveUp);
     if (rc == 1) {
       fprintf(stderr, "ElectroBench: no OpenGL 3.3 core context on this device - "
-                      "the power lines scene cannot run here\n");
+                      "the LainBench (power lines) scene cannot run here\n");
       return EXIT_FAILURE;
     }
     return 0;

@@ -1,9 +1,10 @@
-// ElectroBench — scene 4 of the single ElectroBench binary: the "power lines"
-// scene. A late-afternoon Japanese suburb memory: orange sky, white drifting
-// clouds, and a tangle of utility poles, crossarms, insulators, transformers
-// and sagging wires receding into the heat haze — the serial-experiments
-// mood, built entirely from analytic geometry (no model files, no textures:
-// every cylinder, catenary and quad is generated on the CPU at startup).
+// ElectroBench — scene 4 of the single ElectroBench binary: "LainBench", the
+// power-lines scene. A late-afternoon Japanese suburb memory: orange sky,
+// white drifting clouds, and a tangle of utility poles, crossarms, insulators,
+// transformers and sagging wires receding into the heat haze — the
+// serial-experiments mood, built entirely from analytic geometry (no model
+// files, no textures: every cylinder, catenary and quad is generated on the CPU
+// at startup).
 //
 // Like src/tidebench.cxx and src/pool.cxx, this translation unit is NOT a
 // program of its own. It exports RunPoleScene(), which main.cxx calls as the
@@ -14,11 +15,13 @@
 //     peach into a hazy cream horizon, a veiled low sun bloom, and two
 //     parallax layers of smooth white cumulus drifting on the wind. No
 //     textures — two octaves of value noise, carved into puffy cells.
-//   * The grid (shaders/pole/object_*.glsl): creosote utility poles on two
-//     receding lines, crossarms with ceramic insulators, a transformer can,
-//     and ~30 catenary wires (real sag: y = midpoint + cosh falloff) built
-//     as swept tubes. One warm wrap-lighting shader for everything, with
-//     aerial perspective sinking the far poles into the haze.
+//   * The grid (shaders/pole/object_*.glsl): GALVANIZED STEEL utility poles on
+//     two receding lines — tapered shafts, step bolts, number plates, guy
+//     wires into buried anchors, angle-iron crossarms with ceramic pin
+//     insulators, cut-out fuses, a finned transformer can — and six tiers of
+//     catenary wire per bay (real sag: y = midpoint + cosh falloff) built as
+//     swept tubes. One wrap-lighting shader for everything, with aerial
+//     perspective sinking the far poles into the haze.
 //   * The camera dollies along the line under the wires (auto mode), or
 //     orbits with the usual mouse/keys.
 //
@@ -176,7 +179,7 @@ static Program LinkProgram(const char *vsPath, const char *fsPath) {
 }
 
 // ------------------------------------------------------------------ constants
-static const char *const gName = "ElectroBench - Power Lines";
+static const char *const gName = "ElectroBench - LainBench";
 static const int WIDTH = 1280, HEIGHT = 720;
 static const float kGroundY = 0.0f;
 // dusk sun: LOW and AHEAD of the dolly camera (up the corridor), slightly
@@ -296,13 +299,24 @@ static const float kMatGlass = 10.0f;
 static const float kMatLeaf = 11.0f;
 static const float kMatShadow = 12.0f;
 static const float kMatGlow = 13.0f;     // emissive: lit signs at dusk
+// BUILD-P9: galvanized steel. The poles stopped being creosote timber and
+// became hot-dip galvanized steel, and that needed its OWN shader branch —
+// zinc is a bright, semi-specular, vertically weathered surface, and running it
+// through the wood or metal branches gave the same flat dark post it had
+// before (the "poles look like plain wooden sticks" complaint). The branch adds
+// zinc spangle, rain-washed streaks, rust blooming at the foot and a much
+// sharper specular than paint.
+static const float kMatSteel = 14.0f;
 
-static const Vec3 kWoodDark{0.165f, 0.115f, 0.085f};   // creosote pole
-static const Vec3 kWoodOld{0.230f, 0.180f, 0.140f};   // weathered crossarm
+static const Vec3 kWoodDark{0.165f, 0.115f, 0.085f};   // creosote (treeline)
+static const Vec3 kWoodOld{0.230f, 0.180f, 0.140f};   // weathered timber
 static const Vec3 kCeramic{0.780f, 0.760f, 0.700f};   // insulator glaze
 static const Vec3 kCable{0.055f, 0.050f, 0.055f};    // rubber wire
 static const Vec3 kCableOld{0.085f, 0.075f, 0.070f};
 static const Vec3 kMetal{0.190f, 0.195f, 0.200f};    // transformer can
+static const Vec3 kSteelGalv{0.345f, 0.356f, 0.368f}; // hot-dip zinc, trunk
+static const Vec3 kSteelArm{0.265f, 0.272f, 0.282f};  // angle iron, brackets
+static const Vec3 kSteelPlate{0.560f, 0.545f, 0.505f};// pole number plate
 static const Vec3 kGravel{0.330f, 0.272f, 0.205f};   // BUILD-P8: dry dirt is
                                                      // ~0.3 albedo, not 0.52
 
@@ -405,7 +419,6 @@ static Vec3 WirePoint(const Vec3 &a, const Vec3 &b, float sag, float t) {
 // nearest reachable anchor instead of leaving it hanging in mid air, which is
 // what made build P6 read as "the wires are cut".
 static std::vector<Vec3> gDropAnchors;
-static void AddBird(const Vec3 &at, float lean);
 
 // BUILD-P4 TELECOM BUNDLE: a communication cable sags between its two pole
 // brackets, and a bundle of thin DROP WIRES peels off along the span — the
@@ -464,16 +477,12 @@ static void AddTelecomBundle(const Vec3 &a, const Vec3 &b, int seed,
                   0.026f, 0.026f, 6, kCeramic, kMatCeramic);
     }
   }
-  // BUILD-P8: birds perched on the bundle, ONCE per bundle. Placed through
-  // WirePoint so a bird always stands on the sagging cable rather than near
-  // it — the body deliberately overlaps the cable by a few millimetres.
-  if ((seed % 3) == 1) {
-    for (int bi = 0; bi < 3; bi++) {
-      float bt = 0.28f + 0.22f * (float)((seed * 11 + bi * 7) % 10) / 10.0f;
-      Vec3 sp = WirePoint(a, b, sag, bt);
-      AddBird(Vec3Add(sp, Vec3{0, radius * 0.55f, 0}), (float)(bi & 1) * 0.4f);
-    }
-  }
+  // BUILD-P9: the perched birds are GONE. At corridor scale every bird body
+  // crossed the bright sky as a hard black blob, and fifty-one of them
+  // scattered across the wire tangle read as dirt on the lens rather than as
+  // birds — they were the single loudest "this is not a real photograph" tell
+  // in the frame. (Their two-cylinder stand-in body was also drawn with
+  // kMatMetal, so it shaded like a grey lump, not a bird.)
 }
 
 // A sagging wire between two attachment points: a real catenary sampled as a
@@ -588,78 +597,209 @@ static Vec3 PoleTopInsulatorTop(const PoleSpec &p) {
   Vec3 a = PoleAxisAt(p, p.height + 0.24f);
   return {a.x, p.height + 0.24f, a.z};
 }
+// BUILD-P9: the SHORTER lower arm finally carries conductors. Build P8 built
+// that arm, hung braces on it and then ran no wires along it at all, so a whole
+// tier of hardware sat under the main arm doing nothing. Same 0.213 m stack, so
+// this is main-arm height minus 0.62 m.
+static Vec3 Arm2InsulatorTop(const PoleSpec &p, float off) {
+  Vec3 a = PoleAxisAt(p, p.height - 0.87f);
+  return {a.x + off, p.height - 0.87f, a.z};
+}
 
 static std::vector<PoleSpec> gLineA, gLineB;  // kept for per-frame shadows
+
+// BUILD-P9: the hardware side of a steel pole. Everything bolted on goes on
+// the ROAD side of the shaft — that is the side a lineworker can reach and the
+// side the camera walks past, so it is derived from the road centre instead of
+// being another per-pole constant to keep in sync.
+static float PoleRoadSide(const PoleSpec &p) { return p.x < kRoadX ? 1.0f : -1.0f; }
+
+// BUILD-P9: ONE pin insulator, 0.213 m from its base pin to the top of the
+// glaze. ArmInsulatorTop / Arm2InsulatorTop both quote that number, so the
+// geometry and the wire attachment cannot drift apart again.
+static void AddInsulator(const Vec3 &ib) {
+  AddCylinder(ib, Vec3Add(ib, Vec3{0, 0.055f, 0}), 0.044f, 0.040f, 6, kMetal,
+              kMatMetal);
+  AddCylinder(Vec3Add(ib, Vec3{0, 0.055f, 0}), Vec3Add(ib, Vec3{0, 0.175f, 0}),
+              0.050f, 0.061f, 8, kCeramic, kMatCeramic);
+  AddCylinder(Vec3Add(ib, Vec3{0, 0.175f, 0}), Vec3Add(ib, Vec3{0, 0.213f, 0}),
+              0.061f, 0.038f, 8, kCeramic, kMatCeramic);
+}
+
+// BUILD-P9: STEP BOLTS — the ladder of alternating studs that lets a lineworker
+// climb the shaft. Cheap, and the strongest "this is a steel distribution pole"
+// tell available, because they break an otherwise unbroken 9 m stick.
+static void AddStepBolts(const PoleSpec &p, float from, float to, float side) {
+  int i = 0;
+  for (float h = from; h <= to + 1e-3f; h += 0.30f, i++) {
+    float s = (i & 1) ? -side : side;
+    Vec3 a = PoleAxisAt(p, h);
+    float r = TrunkRadius(p, h);
+    AddCylinder({a.x + s * (r - 0.02f), h, a.z}, {a.x + s * (r + 0.14f), h, a.z},
+                0.024f, 0.019f, 5, kSteelArm, kMatSteel);
+  }
+}
+
+// BUILD-P9: GUY WIRE + ANCHOR. Every few spans the conductor is too heavy for
+// the pole alone and a steel guy takes the load into a buried block. It is also
+// the only STRAIGHT wire in the scene — every other line is a soft catenary —
+// so it reads as structure rather than decoration, and its anchor blocks break
+// up the empty verge.
+static void AddGuyWire(const PoleSpec &p, float side, float zSign) {
+  float hAtt = p.height - 0.95f;
+  Vec3 att = PoleAxisAt(p, hAtt);
+  float r = TrunkRadius(p, hAtt);
+  att.x += side * (r + 0.11f);
+  // attachment plate bolted flat to the shaft, then the turnbuckle eye
+  AddBox({att.x - side * 0.06f, att.y, att.z}, {0.05f, 0.13f, 0.09f}, kSteelArm,
+         kMatSteel);
+  Vec3 mid{att.x + side * 0.13f, att.y - 0.44f, att.z + zSign * 0.28f};
+  AddCylinder(att, mid, 0.026f, 0.023f, 5, kSteelGalv, kMatSteel);
+  // the anchor: a rod leaning out of a concrete block on the verge
+  Vec3 anc{p.x + side * 0.62f, 0.34f, p.z + zSign * 3.40f};
+  AddWire(mid, anc, 0.03f, 0.015f, 5, kSteelGalv, kMatSteel);
+  AddCylinder({anc.x - side * 0.30f, -0.10f, anc.z}, {anc.x, 0.42f, anc.z},
+              0.042f, 0.032f, 6, kSteelGalv, kMatSteel);
+  AddBox({anc.x - side * 0.13f, 0.14f, anc.z}, {0.36f, 0.14f, 0.36f},
+         {0.230f, 0.222f, 0.208f}, kMatPaint);
+}
+
 static void AddPole(const PoleSpec &p) {
   Vec3 base = PoleAxisAt(p, kGroundY);
   Vec3 top = PoleAxisAt(p, p.height);
-  AddCylinder(base, top, 0.17f, 0.115f, 10, kWoodDark, kMatWood);
-  // dirt collar kicked up around the base (every real pole sits in one)
+  const float side = PoleRoadSide(p);
+  // BUILD-P9: the trunk is hot-dip galvanized STEEL, not creosote timber. The
+  // shaft is the single largest silhouette in frame after the sky, so leaving
+  // it a dark brown cylinder is what made every pole read as a wooden post.
+  AddCylinder(base, top, 0.17f, 0.115f, 10, kSteelGalv, kMatSteel);
+  // welded base flange standing in the ring of dirt kicked up around it
   AddCylinder({base.x, kGroundY - 0.02f, base.z}, {base.x, 0.10f, base.z},
               0.52f, 0.34f, 8, {0.30f, 0.24f, 0.18f}, kMatGround);
+  AddCylinder({base.x, 0.03f, base.z}, {base.x, 0.29f, base.z}, 0.235f, 0.205f,
+              8, kSteelArm, kMatSteel);
 
-  // main crossarm near the top + a smaller one below, with diagonal braces
+  // main crossarm near the top + a shorter one below, both rolled angle iron:
+  // a web plate with a flange top and bottom catches a bright edge from the
+  // sun, which is the whole difference between "steel arm" and "plank".
   float armY = p.height - 0.55f;
   Vec3 armC = PoleAxisAt(p, armY);
-  AddBox({armC.x, armY, armC.z}, {1.25f, 0.055f, 0.075f}, kWoodOld, kMatWood);
-  Vec3 arm2C = PoleAxisAt(p, armY - 0.62f);
-  AddBox({arm2C.x, armY - 0.62f, arm2C.z}, {0.85f, 0.05f, 0.07f}, kWoodOld,
-         kMatWood);
+  AddBox({armC.x, armY, armC.z}, {1.25f, 0.075f, 0.013f}, kSteelArm, kMatSteel);
+  AddBox({armC.x, armY + 0.072f, armC.z}, {1.25f, 0.013f, 0.058f}, kSteelArm,
+         kMatSteel);
+  AddBox({armC.x, armY - 0.072f, armC.z}, {1.25f, 0.013f, 0.058f}, kSteelArm,
+         kMatSteel);
+  float arm2Y = armY - 0.62f;
+  Vec3 arm2C = PoleAxisAt(p, arm2Y);
+  AddBox({arm2C.x, arm2Y, arm2C.z}, {0.85f, 0.075f, 0.013f}, kSteelArm, kMatSteel);
+  AddBox({arm2C.x, arm2Y + 0.072f, arm2C.z}, {0.85f, 0.013f, 0.052f}, kSteelArm,
+         kMatSteel);
+  AddBox({arm2C.x, arm2Y - 0.072f, arm2C.z}, {0.85f, 0.013f, 0.052f}, kSteelArm,
+         kMatSteel);
+  // diagonal knee braces, flat bar this time
   Vec3 brT = PoleAxisAt(p, armY - 0.05f);
   Vec3 brB = PoleAxisAt(p, armY - 0.57f);
-  AddCylinder({brT.x - 0.34f, brT.y, brT.z + 0.03f},
-              {brB.x - 0.94f, brB.y, brB.z + 0.03f}, 0.030f, 0.030f, 6,
-              kWoodDark, kMatWood);
-  AddCylinder({brT.x + 0.34f, brT.y, brT.z + 0.03f},
-              {brB.x + 0.94f, brB.y, brB.z + 0.03f}, 0.030f, 0.030f, 6,
-              kWoodDark, kMatWood);
-
-  // ceramic insulators: three on the main arm, one atop the pole
-  for (float off : {-1.05f, 0.0f, 1.05f}) {
-    Vec3 ib{armC.x + off, armY + 0.05f, armC.z};
-    AddCylinder(ib, Vec3Add(ib, Vec3{0, 0.24f, 0}), 0.052f, 0.062f, 8, kCeramic,
-                kMatCeramic);
-    AddCylinder(Vec3Add(ib, Vec3{0, 0.24f, 0}), Vec3Add(ib, Vec3{0, 0.30f, 0}),
-                0.062f, 0.040f, 8, kCeramic, kMatCeramic);
+  AddCylinder({brT.x - 0.34f, brT.y, brT.z + 0.05f},
+              {brB.x - 0.94f, brB.y, brB.z + 0.05f}, 0.028f, 0.028f, 6,
+              kSteelArm, kMatSteel);
+  AddCylinder({brT.x + 0.34f, brT.y, brT.z + 0.05f},
+              {brB.x + 0.94f, brB.y, brB.z + 0.05f}, 0.028f, 0.028f, 6,
+              kSteelArm, kMatSteel);
+  // bolted arm-to-shaft clamps: two bands and a nut each
+  for (float by : {armY + 0.075f, arm2Y + 0.075f}) {
+    Vec3 ba = PoleAxisAt(p, by);
+    float br2 = TrunkRadius(p, by);
+    AddCylinder({ba.x, by - 0.030f, ba.z}, {ba.x, by + 0.030f, ba.z},
+                br2 + 0.035f, br2 + 0.035f, 8, kSteelArm, kMatSteel);
   }
+
+  // ceramic insulators: three on the main arm, TWO on the lower arm (build P8
+  // built that lower arm and then hung nothing off it — dead hardware), and one
+  // standing on the pole top.
+  for (float off : {-1.05f, 0.0f, 1.05f})
+    AddInsulator({armC.x + off, armY + 0.087f, armC.z});
+  for (float off : {-0.55f, 0.55f})
+    AddInsulator({arm2C.x + off, arm2Y + 0.087f, arm2C.z});
   AddCylinder(top, Vec3Add(top, Vec3{0, 0.18f, 0}), 0.05f, 0.058f, 8, kCeramic,
               kMatCeramic);
   AddCylinder(Vec3Add(top, Vec3{0, 0.18f, 0}), Vec3Add(top, Vec3{0, 0.24f, 0}),
               0.058f, 0.038f, 8, kCeramic, kMatCeramic);
+  // lightning rod, sleeved alongside the top insulator so it cannot foul the
+  // conductor that ties off at the glaze
+  AddCylinder({top.x + 0.06f, p.height - 0.20f, top.z},
+              {top.x + 0.13f, p.height + 0.60f, top.z}, 0.021f, 0.010f, 5,
+              kSteelGalv, kMatSteel);
 
-  // earth wire: a bare cable clipped down the trunk, grounded at the collar.
-  // BUILD-P7: it follows the LEANING axis hop by hop instead of running as
-  // one straight line from the base to a fixed point, which used to drift off
-  // the trunk surface on the leaning poles.
+  // earth wire: a bare galvanized strand clipped down the shaft and bonded to
+  // the base flange. BUILD-P7 made it follow the LEANING axis hop by hop;
+  // BUILD-P9 measures the stand-off off TrunkRadius as well — the old fixed
+  // 0.13 m put the first hop 4 cm INSIDE a 0.17 m shaft, i.e. inside the steel,
+  // where nothing can see it. It runs on the back face, clear of the step bolts
+  // and the number plate.
   {
-    Vec3 prev = PoleAxisAt(p, 0.12f);
-    for (float h = 1.0f; h <= 4.01f; h += 1.0f) {
-      float f = h / p.height;
+    const float eside = -side;
+    Vec3 prev = PoleAxisAt(p, 0.32f);
+    prev.x += eside * (TrunkRadius(p, 0.32f) + 0.024f);
+    AddWire(prev, {base.x + eside * 0.19f, 0.14f, base.z}, 0.01f, 0.012f, 3,
+            kSteelGalv, kMatCable);
+    for (float h = 1.4f; h <= 5.01f; h += 1.2f) {
       Vec3 cur = PoleAxisAt(p, h);
-      float r = 0.17f + (0.115f - 0.17f) * f;
-      prev.x += 0.13f;                       // stand off the bark
-      cur.x += r * 0.92f;
-      AddWire(prev, cur, 0.02f, 0.013f, 3, kMetal, kMatCable);
-      prev = PoleAxisAt(p, h);
+      cur.x += eside * (TrunkRadius(p, h) + 0.024f);
+      AddWire(prev, cur, 0.012f, 0.012f, 3, kSteelGalv, kMatCable);
+      // the clip, so the strand reads as CLIPPED ON rather than floating off
+      Vec3 mid{(prev.x + cur.x) * 0.5f, (prev.y + cur.y) * 0.5f,
+               (prev.z + cur.z) * 0.5f};
+      Vec3 clip0 = PoleAxisAt(p, mid.y);      // start ON the shaft, not 5 cm
+      AddCylinder(clip0, mid, 0.019f, 0.019f, 4, kSteelArm, kMatSteel);
+      prev = cur;
     }
+  }
+
+  // BUILD-P9: pole hardware on the road face — step bolts, the asset number
+  // plate with its band strap, and (on a deterministic scatter) the guy wire.
+  AddStepBolts(p, 3.15f, 6.15f, side);
+  {
+    Vec3 pa = PoleAxisAt(p, 2.35f);
+    float pr = TrunkRadius(p, 2.35f);
+    AddCylinder({pa.x + pr, 2.35f, pa.z}, {pa.x + pr + 0.035f, 2.35f, pa.z},
+                pr + 0.030f, pr + 0.030f, 8, kSteelArm, kMatSteel);
+    // the plate itself stands proud of the band, with a dark legend block
+    AddBox({pa.x + pr + 0.042f, 2.62f, pa.z}, {0.012f, 0.085f, 0.062f},
+           kSteelPlate, kMatMetal);
+    AddBox({pa.x + pr + 0.058f, 2.62f, pa.z}, {0.006f, 0.020f, 0.050f},
+           {0.075f, 0.070f, 0.065f}, kMatMetal);
+    AddBox({pa.x + pr + 0.058f, 2.545f, pa.z}, {0.006f, 0.012f, 0.050f},
+           {0.075f, 0.070f, 0.065f}, kMatMetal);
+  }
+  // guys on every fourth-ish pole: one back and one forward where there is room
+  if ((((int)(p.z * 0.4f)) % 3) == 0) {
+    AddGuyWire(p, side, 1.0f);
+    if ((((int)(p.z * 0.8f)) % 5) == 0) AddGuyWire(p, side, -1.0f);
   }
 
   if (p.serviceSpool) {
     // secondary service spool on the other flank (double-attachment poles).
     // BUILD-P8: measured off the trunk surface, not a fixed offset — at the
-    // old x-0.24 the spool hung ~6 cm clear of the bark.
+    // old x-0.24 the spool hung ~6 cm clear of the bark. BUILD-P9 gives it the
+    // two flanged cheeks and hub that make it a spool instead of a stud.
     Vec3 sa = PoleAxisAt(p, 5.4f);
     float sr = TrunkRadius(p, 5.4f);
-    AddCylinder({sa.x - sr, 5.4f, sa.z}, {sa.x - sr - 0.13f, 5.4f, sa.z}, 0.05f,
-                0.05f, 6, kMetal, kMatMetal);
-
+    AddCylinder({sa.x - sr, 5.4f, sa.z}, {sa.x - sr - 0.10f, 5.4f, sa.z}, 0.035f,
+                0.035f, 6, kMetal, kMatMetal);
+    AddCylinder({sa.x - sr - 0.10f, 5.4f, sa.z}, {sa.x - sr - 0.13f, 5.4f, sa.z},
+                0.135f, 0.135f, 10, kSteelArm, kMatSteel);
+    AddCylinder({sa.x - sr - 0.13f, 5.4f, sa.z}, {sa.x - sr - 0.24f, 5.4f, sa.z},
+                0.135f, 0.135f, 10, kSteelArm, kMatSteel);
+    AddCylinder({sa.x - sr - 0.17f, 5.4f, sa.z}, {sa.x - sr - 0.22f, 5.4f, sa.z},
+                0.052f, 0.052f, 8, kMetal, kMatMetal);
   }
 
   // BUILD-P4 TELECOM ARM: a second, lower crossarm carrying the phone/cable
   // bundles (Japanese poles stack a communications arm under the power arm).
   float telY = armY - 1.30f;
   Vec3 telC = PoleAxisAt(p, telY);
-  AddBox({telC.x, telY, telC.z}, {0.95f, 0.05f, 0.06f}, kWoodOld, kMatWood);
+  AddBox({telC.x, telY, telC.z}, {0.95f, 0.05f, 0.014f}, kSteelArm, kMatSteel);
+  AddBox({telC.x, telY + 0.045f, telC.z}, {0.95f, 0.012f, 0.048f}, kSteelArm,
+         kMatSteel);
   for (float off : {-0.70f, 0.0f, 0.70f}) {
     AddCylinder({telC.x + off, telY + 0.05f, telC.z},
                 {telC.x + off, telY + 0.15f, telC.z}, 0.038f, 0.032f, 6, kMetal,
@@ -667,19 +807,43 @@ static void AddPole(const PoleSpec &p) {
   }
 
   // a couple of CableTV-style cylindrical boxes bolted to the trunk (some
-  // poles, deterministic)
-  if (((int(p.z * 7.0f)) % 3) == 0)
+  // poles, deterministic), now with a bolted lid seam so they read as steel
+  // enclosures rather than pipes
+  if (((int(p.z * 7.0f)) % 3) == 0) {
     AddCylinder({base.x + 0.20f, 3.9f, base.z}, {base.x + 0.20f, 4.5f, base.z},
                 0.11f, 0.11f, 8, kMetal, kMatMetal);
+    AddCylinder({base.x + 0.20f, 4.36f, base.z}, {base.x + 0.20f, 4.40f,
+                base.z}, 0.125f, 0.125f, 8, kSteelArm, kMatSteel);
+    AddBox({base.x + 0.20f, 4.06f, base.z}, {0.055f, 0.045f, 0.115f},
+           kSteelArm, kMatSteel);
+  }
 
   if (p.transformer) {
-    // the can: grey cylinder + cooling fins, bolted below the crossarm
-    Vec3 tc{armC.x + 0.62f, armY - 1.35f, armC.z};
+    // BUILD-P9: the can hangs OFF the arm in z instead of standing in the arm's
+    // own plane, where it used to run straight through the telecom arm below
+    // it. Cooling fins, a tap-changer box and two cut-outs on the arm front
+    // make it the densest piece of hardware on the pole.
+    Vec3 tc{armC.x + 0.62f, armY - 1.42f, armC.z + 0.44f};
+    // hanger straps: two flat bars carrying the can back to the crossarm
+    for (float bz : {-0.13f, 0.13f})
+      AddBox({tc.x + bz, armY - 0.44f, (tc.z + armC.z) * 0.5f},
+             {0.045f, 0.47f, 0.24f}, kSteelArm, kMatSteel);
     AddCylinder(Vec3Add(tc, Vec3{-0.1f, -0.55f, 0}),
                 Vec3Add(tc, Vec3{0.1f, 0.55f, 0}), 0.34f, 0.34f, 10, kMetal,
                 kMatMetal);
+    // radiator fins on the two faces the sun rakes across
+    for (int fi = 0; fi < 5; fi++) {
+      float fy = tc.y - 0.40f + 0.20f * fi;
+      AddBox({tc.x, fy, tc.z + 0.34f}, {0.30f, 0.028f, 0.085f}, kSteelArm,
+             kMatSteel);
+      AddBox({tc.x, fy, tc.z - 0.34f}, {0.30f, 0.028f, 0.085f}, kSteelArm,
+             kMatSteel);
+    }
     AddBox({tc.x, tc.y + 0.30f, tc.z}, {0.40f, 0.16f, 0.16f}, kMetal, kMatMetal);
     AddBox({tc.x, tc.y - 0.34f, tc.z}, {0.10f, 0.22f, 0.10f}, kMetal, kMatMetal);
+    // tap changer / terminal box on the side of the can
+    AddBox({tc.x + 0.30f, tc.y - 0.10f, tc.z + 0.10f}, {0.10f, 0.16f, 0.13f},
+           kSteelArm, kMatSteel);
     // two ceramic bushings on the can's crown + their drop leads.
     // BUILD-P8: the leads used to stop in mid-air 0.5 m above the can. They
     // now run up to the crossarm insulator they actually feed.
@@ -690,6 +854,28 @@ static void AddPole(const PoleSpec &p) {
       AddWire(Vec3Add(bt, Vec3{0, 0.17f, 0}),
               ArmInsulatorTop(p, bz < 0.0f ? 0.0f : 1.05f), 0.05f, 0.011f, 6,
               kCable, kMatCable);
+    }
+    // BUILD-P9: cut-out fuses and lightning arresters on the arm front. They
+    // hang clear of the arm plane (z + 0.17) so they do not intersect the knee
+    // braces, and they are the small bright verticals that make the pole look
+    // like it is doing real work.
+    for (float cx : {-0.42f, 0.42f}) {
+      AddCylinder({armC.x + cx, armY - 0.04f, armC.z},
+                  {armC.x + cx, armY - 0.04f, armC.z + 0.17f}, 0.020f, 0.020f,
+                  5, kSteelArm, kMatSteel);
+      Vec3 ct{armC.x + cx, armY - 0.05f, armC.z + 0.17f};
+      AddCylinder(ct, Vec3Add(ct, Vec3{0, -0.30f, 0}), 0.030f, 0.036f, 6,
+                  kCeramic, kMatCeramic);
+      AddCylinder(Vec3Add(ct, Vec3{0, -0.30f, 0}), Vec3Add(ct, Vec3{0, -0.36f, 0}),
+                  0.038f, 0.028f, 6, kMetal, kMatMetal);
+    }
+    for (float ax : {-0.78f, 0.78f}) {
+      AddCylinder({armC.x + ax, armY - 0.04f, armC.z},
+                  {armC.x + ax, armY - 0.04f, armC.z + 0.15f}, 0.018f, 0.018f,
+                  5, kSteelArm, kMatSteel);
+      Vec3 at{armC.x + ax, armY - 0.05f, armC.z + 0.15f};
+      AddCylinder(at, Vec3Add(at, Vec3{0, -0.22f, 0}), 0.032f, 0.038f, 6,
+                  kCeramic, kMatCeramic);
     }
   }
 }
@@ -797,7 +983,19 @@ static void AddHouse(float x, float z, float w, float d, float h, float face) {
     float wz = z + (float)(i - 1) * (d * 0.30f);
     float wy = 0.10f + h * 0.60f;
     AddBox({wx + face * 0.02f, wy, wz}, {0.05f, 0.26f, 0.34f}, frame, kMatPaint);
-    AddBox({wx + face * 0.06f, wy, wz}, {0.02f, 0.21f, 0.29f}, glass, kMatGlass);
+    // BUILD-P9: at dusk roughly a third of the windows are lit. Warm emissive
+    // panes are the strongest "someone lives in this box" cue a suburban frame
+    // has, and they break up the flat wall slabs that read as untextured grey
+    // boxes in the user's screenshots.
+    bool lit = ((i + pick) % 3) == 0;
+    AddBox({wx + face * 0.06f, wy, wz}, {0.02f, 0.21f, 0.29f},
+           lit ? Vec3{0.96f, 0.71f, 0.40f} : glass, lit ? kMatGlow : kMatGlass);
+    if (lit) {   // glazing bars — a lit pane with no frame reads as a decal
+      AddBox({wx + face * 0.082f, wy, wz}, {0.012f, 0.21f, 0.020f}, frame,
+             kMatPaint);
+      AddBox({wx + face * 0.082f, wy, wz}, {0.012f, 0.020f, 0.29f}, frame,
+             kMatPaint);
+    }
     AddBox({wx + face * 0.09f, wy - 0.28f, wz}, {0.07f, 0.035f, 0.40f}, frame,
            kMatPaint);
   }
@@ -857,18 +1055,6 @@ static void AddPropertyLine(float x, float z0, float z1, float mirror) {
     z += seg + 0.35f;
     i++;
   }
-}
-
-// BUILD-P8: BIRDS ON THE WIRE. Half the reason people photograph these pole
-// lines. Placed through WirePoint() so a bird is always standing ON the
-// sagging cable, never hovering near it.
-static void AddBird(const Vec3 &at, float lean) {
-  const Vec3 feather{0.042f, 0.040f, 0.048f};
-  AddCylinder(at, Vec3Add(at, Vec3{0, 0.115f, 0}), 0.052f, 0.028f, 5, feather,
-              kMatMetal);
-  AddCylinder(Vec3Add(at, Vec3{0, 0.115f, 0}),
-              Vec3Add(at, Vec3{lean * 0.05f, 0.185f, 0.01f}), 0.030f, 0.026f, 5,
-              feather, kMatMetal);
 }
 
 // BUILD-P8: a streetlight on the road side of a pole — arm, lamp head and a
@@ -986,6 +1172,13 @@ static void AddTreeline() {
               14, kCable, kMatCable);
     AddWire(PoleTopInsulatorTop(p), PoleTopInsulatorTop(q), sag * 0.8f, 0.032f,
             14, kCableOld, kMatCable);
+    // BUILD-P9: two more tiers — the lower-arm conductors. Line A now carries
+    // six spans of wire per bay (3 top arm + pole top + 2 lower arm) instead of
+    // four, and it is that DENSITY, not the sag curve, that reads as a real
+    // distribution corridor.
+    for (float off : {-0.55f, 0.55f})
+      AddWire(Arm2InsulatorTop(p, off), Arm2InsulatorTop(q, off), sag * 0.74f,
+              0.024f, 12, kCable, kMatCable);
   }
 
   // ---- a second, closer line: depth + the layered-tangle feel. BUILD-P2:
@@ -1004,6 +1197,14 @@ static void AddTreeline() {
     const PoleSpec &q = lineB[i + 1];
     for (float off : {-1.05f, 1.05f})
       AddWire(ArmInsulatorTop(p, off), ArmInsulatorTop(q, off), 0.88f, 0.026f,
+              12, kCableOld, kMatCable);
+    // BUILD-P9: line B was the sparse one — top-of-pole plus the two lower-arm
+    // spans give it the same tiered look as the main line, which is what turns
+    // the second row from wallpaper into a second plane of poles.
+    AddWire(PoleTopInsulatorTop(p), PoleTopInsulatorTop(q), 0.70f, 0.030f, 12,
+            kCableOld, kMatCable);
+    for (float off : {-0.55f, 0.55f})
+      AddWire(Arm2InsulatorTop(p, off), Arm2InsulatorTop(q, off), 0.62f, 0.024f,
               12, kCableOld, kMatCable);
   }
 
@@ -1051,6 +1252,11 @@ static void AddTreeline() {
                      i * 2 + 1, 0.022f, 12, kCable);
     AddTelecomBundle(TelecomBracketTop(p, 0.70f), TelecomBracketTop(q, 0.70f),
                      i * 2 + 2, 0.022f, 12, kCable);
+    // BUILD-P9: the middle bracket was carrying nothing at all. One more
+    // bundle per bay turns the telecom tier from two parallel cables into the
+    // thick three-deep band every Japanese pole line has.
+    AddTelecomBundle(TelecomBracketTop(p, 0.0f), TelecomBracketTop(q, 0.0f),
+                     i * 2 + 13, 0.020f, 12, kCableOld);
   }
   for (int i = 0; i + 1 < (int)lineB.size(); i++) {
     const PoleSpec &p = lineB[i];
@@ -1279,7 +1485,7 @@ static void RenderHUD() {
   // build tag: on-screen proof of which scene code the exe runs (stale-build
   // screenshots must be detectable at a glance)
   char line1[128];
-  std::snprintf(line1, sizeof(line1), "FPS: %d   build P8   scene 4: power lines", gFps);
+  std::snprintf(line1, sizeof(line1), "FPS: %d   build P9   scene 4: LainBench", gFps);
   RenderText(16.0f, 16.0f, line1);
 }
 
@@ -1292,7 +1498,7 @@ static void RenderResults() {
   std::snprintf(big, sizeof(big), "SCORE : %.0f", gResultsScore);
   std::snprintf(timeLine, sizeof(timeLine), "Time : %.1fs   Average FPS : %.1f",
                 gResultsElapsed, gResultsFps);
-  std::snprintf(hint, sizeof(hint), "Power Lines score");
+  std::snprintf(hint, sizeof(hint), "LainBench score");
 
   float cx = 0.5f * (float)gWindowWidth;
   float cy = 0.5f * (float)gWindowHeight;

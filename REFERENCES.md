@@ -73,7 +73,7 @@ Realism takeaways applied:
   slow renderer wall time and sim time diverge and any straggler on the
   wall clock breaks determinism.
 
-## Power Lines (scene 4) — Lain-style utility corridor
+## LainBench (scene 4) — Lain-style utility corridor
 
 Realism takeaways applied:
 
@@ -85,7 +85,7 @@ Realism takeaways applied:
 - A low amber sun, a drifting white cloud deck and warm gravel bounce give the scene one coherent
   light story, and a filmic knee keeps the bright sky rolling off instead of clipping flat.
 
-## Power Lines (scene 4) — BUILD-P7 realism pass
+## LainBench (scene 4) — BUILD-P7 realism pass
 
 - Backlit air forward-scatters: haze toward the sun is brighter than haze away from it, and it
   thins with altitude. A single constant fog colour is one of the loudest "this is CG" tells in a
@@ -140,7 +140,44 @@ Realism takeaways applied:
   matches nothing IS a floating wire. Tagging the endpoints by call site turns the list into a
   to-do list in one run.
 
-## Notes on staging
+## LainBench (scene 4) — BUILD-P9: steel poles, denser wiring, no birds
+
+Realism takeaways applied:
+
+- **Delete detail that cannot survive its own scale.** Fifty-one perched birds, each a hand's-width
+  blob crossing a bright sky, were the loudest non-photographic tell in the frame — and the eye does
+  not read them as birds at 30 m, it reads them as dirt on the lens. Sub-metre dressing is only worth
+  geometry when the camera is close enough for the silhouette to be legible; otherwise the same
+  polygon budget buys a wire span that crosses the whole frame.
+- **A material identity is worth more than surface detail.** The shafts were rebuilt as hot-dip
+  galvanized steel, and the first attempt reused the existing metal branch — and looked identical to
+  the timber it replaced. Zinc is a bright, semi-specular, vertically weathered surface; running it
+  through a generic metal term gave the same dark post back. A pole only reads as steel if the shader
+  knows what zinc does: crystalline spangle, chalky bloom, rain-washed streaks, rust creeping out of
+  the base plate. Measured, the neutral (unsaturated) share of the upper frame went from 0.12% to
+  3.4% once the branch existed — that number, not the geometry, is what "metallic" means on screen.
+- **A polished cylinder needs a wrapped diffuse term.** Backlit, a Lambert shaft facing away from the
+  sun collapses to a flat cut-out; letting the sun wrap 0.22 around it keeps the roundness readable
+  exactly where the corridor silhouettes hardest.
+- **Dead hardware is worse than no hardware.** Build P8 built a lower crossarm, hung braces on it and
+  ran no conductors along it at all. The cheapest realism win in the whole scene was giving that tier
+  two insulators and two spans — the pole now reads as carrying a load instead of displaying fittings.
+- **Attachments must be measured off the surface they touch, every time.** The P8 rule ("measure off
+  TrunkRadius, not a fixed offset") had to be reapplied to a dozen new parts: the step bolts start 2 cm
+  inside the shaft, the number plate sits ON its band strap, the ID legend block sits ON the plate,
+  the earth-strand clips run from the shaft centre out to the strand, and the cut-out fuses hang off
+  a bracket that starts inside the arm web. Each of those gaps is under a centimetre, which is
+  precisely the scale at which "attached" stops being true.
+- **Keep the hardware clear of the arm it hangs from.** Moving the transformer can out of the arm's
+  own z plane (it used to run straight through the telecom arm below it) and putting the cut-outs on
+  the arm FRONT (z + 0.17, clear of the knee braces at z + 0.05) is what makes the top of the pole
+  read as a dense assembly rather than a few parts intersecting.
+- **Wire count is a cheap silhouette lever.** Six tiers per bay instead of four, and a third telecom
+  bundle on the middle bracket (which had been carrying nothing), deepened the tangle without a single
+  extra triangle of cost per pixel.
+- **Lit windows are the suburban cue.** A third of the street-facing panes are emissive at dusk, with
+  glazing bars over them. Emissive geometry is only believable if the frame behind it still exists —
+  the bars and the sill are what stop a lit pane reading as a sticker.
 
 - Reference images are informational. No image is downloaded at runtime; do not add an image fetch to the binary without explicitly wiring it through Convex/actions and the user's Keys/API keys.
 - Preferred live references for the user's own tuning (not fetched by the app):

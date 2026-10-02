@@ -51,6 +51,7 @@ const float kMatGlass  = 10.0;
 const float kMatLeaf   = 11.0;
 const float kMatShadow = 12.0;  // streamed, alpha-blended ground shadow
 const float kMatGlow   = 13.0;  // emissive: lit signage / lamp lenses at dusk
+const float kMatSteel  = 14.0;  // BUILD-P9: hot-dip galvanized steel (shafts, arms)
 
 // cheap hash: no transcendentals (the old sin-based hash was 20+ cycles on
 // a pre-SSE CPU). Same "value noise", a fraction of the cost.
@@ -186,6 +187,23 @@ void main() {
     } else if (m == kMatMetal) {
         rough = 0.38;
         sheen = 0.22;
+    } else if (m == kMatSteel) {
+        // BUILD-P9: GALVANIZED STEEL. Zinc is neither brown nor smooth: it has
+        // a crystalline spangle, a chalky white bloom where it has weathered,
+        // rain-washed streaks running down the shaft, and rust creeping up out
+        // of the base plate. One of the three noise taps is gated by `near`, so
+        // the far corridor — which is most of the frame — pays for two.
+        float streak = vnoise(vec2((P.x + P.z * 0.35) * 1.60, P.y * 0.22));
+        float spangle = near > 0.02 ? vnoise(vec2((P.x + P.z) * 26.0, P.y * 3.0))
+                                   : 0.5;
+        base *= 0.80 + 0.30 * streak + 0.20 * spangle * near;
+        base = mix(base, base * 1.24 + vec3(0.028, 0.029, 0.029),
+                   smoothstep(0.55, 1.0, streak) * 0.55);
+        float rustN = vnoise(vec2((P.x + P.z) * 2.60, P.y * 0.90));
+        float rust = smoothstep(1.80, 0.25, P.y) * smoothstep(0.42, 0.86, rustN);
+        base = mix(base, vec3(0.135, 0.060, 0.030), rust * 0.70);
+        rough = mix(0.62, 0.34, smoothstep(0.25, 0.85, streak)) + rust * 0.25;
+        sheen = 0.42;
     } else if (m == kMatGlow) {
         // BUILD-P8: emissive. A lit vending machine or lamp lens is its own
         // light source — running it through the diffuse model just made it a
@@ -211,6 +229,10 @@ void main() {
     // Sun. Matte surfaces get plain Lambert; the cables keep a wrap term so
     // a thin tube never goes fully black on its shadow side.
     float wrap = (m == kMatCable) ? 0.35 : 0.0;
+    // BUILD-P9: galvanized steel is a polished cylinder, so the sun wraps
+    // around it — without this the shafts read as flat cut-outs wherever the
+    // sun is behind them, which is most of the run.
+    if (m == kMatSteel) wrap = 0.22;
     float diff = clamp((dot(N, L) + wrap) / (1.0 + wrap), 0.0, 1.0);
     vec3 sunTint = vec3(1.00, 0.66, 0.34);
 

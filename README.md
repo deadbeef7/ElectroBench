@@ -9,7 +9,7 @@ It ships **one** executable that contains **all four** scenes — no second bina
 | **ElectroBench** (the OG) | OpenGL 2.1 / GLSL 1.2, fixed-function pipeline | **110 UZIs** on a shadow-mapped concrete floor, lit by a warm sun |
 | **TideBench** (scene 2) | OpenGL 3.3 core, pixel-shader workloads | An ocean under volumetric clouds (3DMark2001 SE "Nature" recreation) |
 | **PoolBench** (scene 3) | OpenGL 3.3 core, analytic shaders | A white-and-red checkerboard-sky pool room with a hidden light and two waves of falling, splashing teapots (18 total) |
-| **PowerBench** (scene 4) | OpenGL 3.3 core, analytic shaders | A Lain-style power-line corridor at amber dusk: 21 creosote utility poles, a wall of sagging catenary wires tied insulator-top to insulator-top and down to house eave brackets, alpha-blended swinging shadows, an asphalt road between the pole lines, suburban houses and a far treeline, drifting white clouds |
+| **LainBench** (scene 4) | OpenGL 3.3 core, analytic shaders | A Lain-style power-line corridor at amber dusk: 21 galvanized STEEL utility poles (step bolts, number plates, guy wires into buried anchors, cut-out fuses, transformers), six tiers of sagging catenary wire per bay tied insulator-top to insulator-top and down to house eave brackets, alpha-blended swinging shadows, an asphalt road between the pole lines, suburban houses with lit windows, a far treeline, drifting white clouds |
 
 
 
@@ -35,9 +35,13 @@ The PoolBench pool room — an infinite white-and-red checkerboard sky mirrored 
 
 ![PoolBench in motion: teapot splash crowns, droplet streaks and ripple rings propagating across the checkerboard-mirrored water](docs/screenshots/pool_splash.gif)
 
-The PowerBench power-line corridor — an amber dusk under drifting white clouds, two lines of utility poles marching to the horizon, and a wall of sagging wires over the auto-dolly camera (two positions, 7 s apart):
+The LainBench power-line corridor — an amber dusk under drifting white clouds, two lines of steel utility poles marching to the horizon, and a wall of sagging wires over the auto-dolly camera:
 
-![ElectroBench Power Lines scene: utility poles and catenary wires against an amber dusk sky](docs/screenshots/power_lines.gif)
+![ElectroBench LainBench scene: steel utility poles and catenary wires against an amber dusk sky](docs/screenshots/lain_lines.png)
+
+**In motion** — the auto-dolly walking the corridor (four positions down the run): galvanised shafts, guy wires pulling into their anchor blocks, and the telecom bundles peeling off toward the eaves:
+
+![LainBench in motion: steel poles, guy wires and catenary spans over the dolly camera](docs/screenshots/lain_lines.gif)
 
 # How to build ?
 
@@ -190,19 +194,24 @@ Headless visual-test flags (used to verify the render output in CI-like environm
 
 Any `--screenshot` path containing `%d` becomes a **frame sequence**: each `--shot-times` entry writes the next numbered frame (`frames/f-%03d.ppm` → `f-000.ppm`, `f-001.ppm`, …), so a timed burst assembles straight into an animation — that is exactly how the GIF above was made (16 shots, 0.5 s apart, stitched with ImageMagick).
 
-# Scene 4 — Power Lines
+# Scene 4 — LainBench
 
-Power Lines is **scene 4 of the same ElectroBench binary**, also **OpenGL 3.3 core**. The Lain-style
-utility corridor: warm gravel under an amber dusk, two lines of creosote poles marching to the
+LainBench is **scene 4 of the same ElectroBench binary**, also **OpenGL 3.3 core**. The Lain-style
+utility corridor: warm gravel under an amber dusk, two lines of steel poles marching to the
 horizon, and a wall of wires over your head.
 
 What it renders :
-- **Utility poles** built from pure analytic geometry (no model files): trunk with base collar and
-  earth wire, two braced crossarms, ceramic insulator bells, a transformer can with bushings on
-  the heavy poles, and a service spool on the double-attachment poles
-- **Catenary wires** — three conductors per crossarm plus a pole-top wire per span, real sag
-  curves (parabola + cosh tail) swept as 4-sided tubes, every span tied insulator-top to
-  insulator-top, with crossing spans between the two lines and service drops down to junctions
+- **Galvanized steel utility poles** built from pure analytic geometry (no model files): tapered
+  shaft on a welded base flange, a ladder of step bolts up the road face, the asset number plate
+  on its band strap, a bare earth strand clipped down the back, two rolled angle-iron crossarms
+  with knee braces and arm clamps, ceramic pin insulators, a sleeved lightning rod, guy wires
+  running off to buried concrete anchor blocks on the verge, drop-out fuses and lightning arresters
+  on the arm front, a finned transformer can with bushing leads on the heavy poles, and a service
+  spool on the double-attachment poles
+- **Catenary wires** — six tiers per bay (three on the main arm, one on the pole top, two on the
+  lower arm), real sag curves (parabola + cosh tail) swept as 4-sided tubes, every span tied
+  insulator-top to insulator-top, with crossing spans between the two lines, three telecom bundles
+  per bay and service drops down to junctions
 - **No wire ends in mid air**: every conductor lands on an insulator bell at the exact height of
   the glaze, every telecom drop hangs off a clamp ferrule on the cable itself and runs to an eave
   bracket on a house (or ends in a real termination ferrule), and the service drops tie the pole
@@ -274,7 +283,7 @@ Benchmark Results - Time : 45.0s, Average FPS : 12.4, Score : 308
 `build/ElectroBench` is the **only** binary, and it contains all four scenes. It runs the OG 60-second gun scene
 first, then probes an OpenGL 3.3 core context:
 
-- **found** — TideBench runs as scene 2, then PoolBench as scene 3, then Power Lines as scene 4, on
+- **found** — TideBench runs as scene 2, then PoolBench as scene 3, then LainBench as scene 4, on
   the same session, and the final results screen shows **per-scene scores and the average of the
   scenes that ran**
 - **not found** (GL 2.1-only drivers, old iGPUs) — all three GL 3.3 scenes skip themselves cleanly
