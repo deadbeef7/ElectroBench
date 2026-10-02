@@ -300,7 +300,11 @@ void main() {
     // the glitter term owns the crisp sparkles, not the cubemap. The lift
     // is GENTLE and tightly gated: strong lifts at grazing angles blur whole
     // sparkle rows into a banded white horizon film.
-    float sunLift = 0.9 * pow(max(dot(R, L), 0.0), 8.0);
+    // BUILD-P3 SMEAR-WIDTH FIX: the 0.9 lift blurred the env sun into a
+    // large soft blob — mirrored down the water as a WIDE vertical glow
+    // (v0.3 reflects a small disc: a narrow path). Halve the lift; the
+    // footprint LOD below still guards the disc edge against speckle.
+    float sunLift = 0.45 * pow(max(dot(R, L), 0.0), 8.0);
     // FOOTPRINT-AWARE ENV LOD (speckle root fix): the env sun disc is HDR-hot
     // and even blurred it has an EDGE in the cubemap. Ripple-jittered rays
     // straddle that edge between neighbouring pixels, so one pixel samples
@@ -310,10 +314,12 @@ void main() {
     // footprint: the disc edge becomes a multi-pixel gradient, never a dot.
     vec3 rGrad = fwidth(R);
     float rayFoot = max(rGrad.x, max(rGrad.y, rGrad.z));
-    float footLod = clamp(log2(1.0 + rayFoot * 512.0), 0.0, 3.0);
+    float footLod = clamp(log2(1.0 + rayFoot * 288.0), 0.0, 2.2);
     vec3 reflColor = textureLod(uSkyEnvTex, R, clamp(1.5 + reflDist * 0.0012 + sunLift + footLod, 1.0, 6.0)).rgb;
-    float offSun = 1.0 - smoothstep(0.08, 0.45, sunAlign);
-    reflColor *= mix(1.0, 0.46, offSun);
+    // BUILD-P3: narrower off-sun kill (v0.3 behaviour) — the sky halo
+    // mirrored across a wide azimuth band was the last wide-glow source.
+    float offSun = 1.0 - smoothstep(0.06, 0.32, sunAlign);
+    reflColor *= mix(1.0, 0.40, offSun);
 
     // ---- fresnel: sea is a mirror at grazing angles, glass straight down ----
     float NdV = max(dot(N, V), 0.0);
@@ -473,13 +479,19 @@ void main() {
     float sparkleGate = (0.55 + 0.90 * chaos);
     // footprint-safe lobe: widen alpha by the per-pixel NdH gradient so the
     // lobe always covers the noise the pixel spans (no fireflies, any driver).
-    float rough = clamp(0.40 + 0.35 * chaos, 0.0, 0.95);
-    float aGGX = max(0.30, (1.0 - rough) * 0.62);
+    // BUILD-P3 PATH-WIDTH FIX: alpha 0.30-0.37 (plus 24x footprint widening)
+    // painted a GGX lobe ~3x wider than v0.3's pow(NdH,220/90) sparkles, so
+    // the whole middle sea glowed warm instead of one narrow column. Tight
+    // lobe (0.13-0.21, chaos-widened) + gentler footprint widening (10x).
+    float aGGX = clamp(0.13 + 0.08 * chaos, 0.12, 0.21);
     float ndhGrad = fwidth(NdH);
-    aGGX = sqrt(aGGX * aGGX + ndhGrad * ndhGrad * 24.0);
+    aGGX = sqrt(aGGX * aGGX + ndhGrad * ndhGrad * 10.0);
     float a2 = aGGX * aGGX;
     float specCT = D_GGX(NdH, a2) * V_SmithGGX(NoV, NoL, a2) * F_Schlick(NoV, 0.02);
-    float spark = min(specCT * (0.10 + 0.04 * chaos), 0.60);
+    // BUILD-P3 DENSITY MATCH: v0.3 lights a SPARSE set of glints inside the
+    // path (its pow-lobes catch fewer facets); the CT spec at 0.10 gain lit
+    // ~2x more simultaneously. Trim the gain to v0.3 density.
+    float spark = min(specCT * (0.050 + 0.020 * chaos), 0.60);
     // REGRESSION FIX (v0.3 -> master): the Cook-Torrance rewrite dropped the
     // pathGate * shadow gates from the SPARK term (only the weak sheen kept
     // them). A broad GGX lobe then lights warm blotches anywhere wave normals
@@ -487,9 +499,9 @@ void main() {
     // one coherent glitter column under the sun. Both gates ride the whole
     // specular answer again, exactly like v0.3.
     spark *= pathGate * shadow;
-    // broad warm sheen under the sparkles: a lower exponent, lower gain, still
-    // gated to the sun path and shadow, so the whole path warms a little.
-    float sheen = pow(NdH, 6.0) * 0.06 * pathGate * shadow;
+    // broad warm sheen under the sparkles: v0.3's widest band was exponent 14
+    // (the old master used 6 — another wash contributor). Gain kept low.
+    float sheen = pow(NdH, 12.0) * 0.04 * pathGate * shadow;
     color += vec3(1.0, 0.55, 0.22)
            * (spark + sheen)
            * (0.25 + max(L.y, 0.0) * 1.2) * sparkleGate;
