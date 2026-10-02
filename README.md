@@ -2,11 +2,13 @@
 ElectroBench is a 45+60+45+45 second long four-scene benchmark specifiacally designed to run on old and modern PCs, don't critise it by it using OpenGL 2.1, and GLSL 1.2, Even office PCs have low scores at it.
 It uses OpenGL 2.1/3.3, and C++, and uses make for compilation. It is designed to be a replacement for glmark (even though it is great and I used it before).
 
+Every scene is meant to stand up as a screenshot, not just as a frame counter: scene 1 now has a real sky and a real concrete floor instead of a flat slab in a void, and it opens on a scripted flyover. Scene 1's camera flags are `--flyover` / `--no-flyover`, and <kbd>F</kbd> toggles it live (any mouse input hands control back to you).
+
 It ships **one** executable that contains **all four** scenes — no second binary, no child process:
 
 | Scene | Renderer | Contents |
 |---|---|---|
-| **ElectroBench** (the OG) | OpenGL 2.1 / GLSL 1.2, fixed-function pipeline | **110 UZIs** on a shadow-mapped concrete floor, lit by a warm sun |
+| **ElectroBench** (the OG) | OpenGL 2.1 / GLSL 1.2, fixed-function pipeline | **110 UZIs** on a power-trowelled concrete floor under a generated dusk sky, lit by a warm sun, opened by a three-act **flyover camera** (approach, runway pass down the array, pull back) |
 | **TideBench** (scene 2) | OpenGL 3.3 core, pixel-shader workloads | An ocean under volumetric clouds (3DMark2001 SE "Nature" recreation) |
 | **PoolBench** (scene 3) | OpenGL 3.3 core, analytic shaders | A white-and-red checkerboard-sky pool room lit by a visible luminous ceiling panel (with its own reflection lying down the water), grouted tiles, projected caustics and two waves of falling, splashing teapots (18 total) |
 | **LainBench** (scene 4) | OpenGL 3.3 core, analytic shaders | A Lain-style power-line corridor at amber dusk under a **physically-based atmosphere** (Rayleigh + Mie, limb-darkened sun disc, wind-blown cumulus): 21 galvanized STEEL utility poles (step bolts, number plates, guy wires into buried anchors, cut-out fuses, transformers), six tiers of sagging catenary wire per bay tied insulator-top to insulator-top and down to house eave brackets, alpha-blended swinging shadows, a **damp asphalt road with cast concrete kerbs that mirrors the sunset**, suburban houses with lit windows, a far treeline. 4x MSAA |
@@ -15,13 +17,19 @@ It ships **one** executable that contains **all four** scenes — no second bina
 
 # Screenshots
 
-The 110 UZIs lying on the shadow-mapped concrete floor — every gun casts its own compact shadow anchored at its contact point (warm sun from the upper left):
+The 110 UZIs lying on the shadow-mapped concrete floor — every gun casts its own compact shadow anchored at its contact point (warm sun from the upper left). The floor is power-trowelled concrete: burnish sweeps, exposed aggregate, saw-cut control joints, a real sun specular lobe and aerial perspective out to the horizon:
+
+![Original GL 2.1 benchmark: 110 UZIs on a shadow-mapped concrete floor](docs/screenshots/uzi_wide.png)
 
 ![Original GL 2.1 benchmark: 110 UZIs on a shadow-mapped concrete floor](docs/screenshots/uzi_wide.png)
 
 Close-up — mags resting on the ground, shadows clearly visible under each gun:
 
 ![Close-up: UZIs with mags on the ground and per-gun shadows](docs/screenshots/uzi_close.png)
+
+**The flyover** — the opening camera move, ten frames across the run: a high approach that reveals the whole 110-gun array, a low runway pass down its length, then a pull back to the orbit. <kbd>F</kbd> toggles it live, and any mouse input hands the camera back:
+
+![ElectroBench flyover camera: high reveal, low runway pass and pull back over the 110-gun array](docs/screenshots/uzi_flyover.gif)
 
 The TideBench ocean scene — long cloud banks with sunward silver linings, two thin cirrus wisps riding high above the sun, a narrow orange glitter path down the middle of the sea, dark blue-purple water either side, raised swell banks:
 

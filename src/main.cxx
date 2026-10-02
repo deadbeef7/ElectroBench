@@ -145,7 +145,21 @@ float cam_elevation = 26.0f;
 float cam_dist = 10.5f;
 float cam_min_dist = 3.0f;
 float cam_max_dist = 26.0f;
-static const float cam_target[3] = {0.0f, 0.45f, 0.0f};
+float cam_target[3] = {0.0f, 0.45f, 0.0f};
+
+// ---------------------------------------------------------------------------
+// BUILD-P11: THE FLYOVER CAMERA.
+// Scene 1 sat at one static orbit angle for the whole 45-second run, which is
+// the least 3DMark thing about the most 3DMark-shaped scene: every competitor
+// opens on a camera move that shows the workload. The path is three acts —
+// a high approach that reveals the whole 110-gun array, a low runway pass
+// down its length, then a pull back to the orbit — and it is driven off the
+// run clock, so it is identical on every machine and costs nothing per frame.
+// Any mouse input cancels it and hands control back (same rule the pool and
+// LainBench scenes use), and F toggles it.
+// ---------------------------------------------------------------------------
+static bool gFlyover = true;
+static bool gFlyoverUserSet = false;
 
 // Scene layout: the 110 UZIs stand on the floor in a 10x11 grid
 int grid_rows = 11, grid_cols = 10;
@@ -439,7 +453,11 @@ static void RenderResults() {
 // light-space matrix (world -> [0,1] shadow map coords)
 float light_matrix[16];
 
-float sky_color[3] = {0.42f, 0.45f, 0.60f};
+// BUILD-P11: this is the colour the far floor FADES TO, and it is now the sky
+// dome's own horizon colour rather than an unrelated blue-grey. While the two
+// disagreed, the floor ended in a band of clear-colour that had nothing to do
+// with either the floor or the sky.
+float sky_color[3] = {0.86f, 0.80f, 0.70f};
 
 Model model;
 
@@ -511,14 +529,127 @@ GLuint linkProgram(const char *vs_file, const char *fs_file) {
   return prog;
 }
 
-// Draws the floor: one big quad in world space (modelview == view only)
+// Draws the floor: one big quad in world space (modelview == view only).
+// BUILD-P11: 25 m -> 110 m. At 25 m the slab ended inside the frame with a hard
+// edge against empty background, which read as "the model is floating in a
+// void" rather than as a room. The floor now runs out past the haze, so the
+// ground and the sky MEET somewhere instead of stopping.
 void drawFloor() {
   glBegin(GL_QUADS);
-  glVertex3f(-25.0f, 0.0f, -25.0f);
-  glVertex3f(25.0f, 0.0f, -25.0f);
-  glVertex3f(25.0f, 0.0f, 25.0f);
-  glVertex3f(-25.0f, 0.0f, 25.0f);
+  glVertex3f(-110.0f, 0.0f, -110.0f);
+  glVertex3f(110.0f, 0.0f, -110.0f);
+  glVertex3f(110.0f, 0.0f, 110.0f);
+  glVertex3f(-110.0f, 0.0f, 110.0f);
   glEnd();
+}
+
+// ---------------------------------------------------------------------------
+// BUILD-P11: THE SKY. Scene 1 cleared to a flat colour and that was the whole
+// environment: no horizon, no depth cue, no light in the sky for the shadows
+// to come from — a 1999 benchmark exactly.
+//
+// It is now an inverted sphere carrying a small equirectangular sky GENERATED
+// ON THE CPU (128x64, no file to ship, nothing to download): a vertical
+// gradient, a warm haze band on the horizon, and a sun glow placed at the
+// scene's own fixed sun vector, so the light in the sky and the shadows on the
+// floor finally agree. Drawn first, inside the far plane, so everything else
+// draws over it.
+// ---------------------------------------------------------------------------
+static GLuint gSkyDomeTex = 0;
+static const float kSkyDomeR = 105.0f;
+
+static inline float clampf(float v, float lo, float hi) {
+  return v < lo ? lo : (v > hi ? hi : v);
+}
+
+static void BuildSkyDomeTexture() {
+  const int W = 128, H = 64;
+  std::vector<unsigned char> px((size_t)W * H * 4);
+  for (int j = 0; j < H; j++) {
+    // v: 0 at the zenith, 1 at the nadir
+    float v = ((float)j + 0.5f) / (float)H;
+    float el = 90.0f - 180.0f * v;             // degrees
+    float elr = el * 3.14159265f / 180.0f;
+    float cy = sinf(elr), cr = cosf(elr);
+    for (int i = 0; i < W; i++) {
+      float u = ((float)i + 0.5f) / (float)W;
+      float az = u * 6.28318f;
+      float dx = cr * sinf(az), dz = cr * cosf(az), dy = cy;
+      // vertical gradient: cool deep zenith -> neutral mid -> warm pale horizon
+      float up = dy;
+      float r, g, b;
+      if (dy >= 0.0f) {
+        float t = powf(clampf(dy, 0.0f, 1.0f), 0.62f);
+        r = 0.86f + (0.30f - 0.86f) * t;
+        g = 0.80f + (0.40f - 0.80f) * t;
+        b = 0.70f + (0.60f - 0.70f) * t;
+      } else {
+        // Below the horizon the dome is only ever seen past the edge of the
+        // floor, so it starts at EXACTLY sky_color (0.86, 0.80, 0.70) and
+        // falls away into dark ground haze. Starting it anywhere else puts a
+        // visible ring on the horizon, which is the exact artifact this pass
+        // exists to remove.
+        float t = clampf(-dy * 1.6f, 0.0f, 1.0f);
+        r = 0.86f - 0.62f * t;
+        g = 0.80f - 0.60f * t;
+        b = 0.70f - 0.54f * t;
+      }
+      // the sun: a small bright disc inside a broad warm glow, at the scene's
+      // own sun vector, so the sky agrees with the shadows on the floor
+      float mu = dx * sun_dir_world[0] + dy * sun_dir_world[1] +
+                 dz * sun_dir_world[2];
+      if (mu > 0.0f) {
+        float ang2 = 2.0f * (1.0f - mu);
+        float glow = expf(-ang2 * 26.0f);
+        float disc = expf(-ang2 * 5200.0f);
+        r += 0.85f * glow + 0.55f * disc;
+        g += 0.70f * glow + 0.50f * disc;
+        b += 0.48f * glow + 0.42f * disc;
+      }
+      size_t o = ((size_t)j * W + i) * 4;
+      px[o + 0] = (unsigned char)(clampf(r, 0.0f, 1.0f) * 255.0f);
+      px[o + 1] = (unsigned char)(clampf(g, 0.0f, 1.0f) * 255.0f);
+      px[o + 2] = (unsigned char)(clampf(b, 0.0f, 1.0f) * 255.0f);
+      px[o + 3] = 255;
+    }
+  }
+  if (!gSkyDomeTex) glGenTextures(1, &gSkyDomeTex);
+  glBindTexture(GL_TEXTURE_2D, gSkyDomeTex);   // whatever unit is ACTIVE
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, W, H, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+               px.data());
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+}
+
+// The dome is drawn around the CURRENT eye position, so it never clips and
+// never slides as the camera flies.
+void drawSkyDome() {
+  float m[16];
+  glGetFloatv(GL_MODELVIEW_MATRIX, m);
+  const float ex = m[12], ey = m[13], ez = m[14];
+  const int SEG = 32, RING = 16;
+  (void)SEG;
+  (void)RING;
+  glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+  // quad strip: for each column, the vertex on ring r then the one on r+1.
+  // (Emitting a whole ring at a time would not form a strip at all.)
+  for (int r = 0; r < RING; r++) {
+    for (int i = 0; i <= SEG; i++) {
+      float u = (float)i / (float)SEG;
+      float az = u * 6.28318f;
+      for (int k = 0; k < 2; k++) {
+        float v = (float)(r + k) / (float)RING;
+        float el = 90.0f - 180.0f * v;
+        float elr = el * 3.14159265f / 180.0f;
+        glTexCoord2f(u, v);
+        glVertex3f(ex + cosf(elr) * kSkyDomeR * sinf(az),
+                   ey + sinf(elr) * kSkyDomeR,
+                   ez + cosf(elr) * kSkyDomeR * cosf(az));
+      }
+    }
+  }
 }
 
 // Draws the 110 UZIs lying flat on the floor (mag base touching the ground),
@@ -630,6 +761,65 @@ void uploadCommonUniforms(GLuint prog) {
               1.0f / SHADOW_SIZE);
 }
 
+static double RunSeconds() {
+  if (gPerfFreq <= 0.0) return 0.0;
+  return (double)(SDL_GetPerformanceCounter() - gPerfStartTick) / gPerfFreq;
+}
+
+// smoothstep, so the acts blend instead of snapping
+static inline float Smooth01(float u) {
+  if (u < 0.0f) u = 0.0f;
+  if (u > 1.0f) u = 1.0f;
+  return u * u * (3.0f - 2.0f * u);
+}
+
+void UpdateFlyoverCamera(double t) {
+  if (!gFlyover) return;
+  const float span =
+      (float)(grid_cols > grid_rows ? grid_cols : grid_rows) * grid_spacing;
+  float az, el, d, tx, ty, tz;
+  if (t < 7.0) {
+    // ACT 1 — the reveal: high and wide, swinging round to face the run
+    float e = Smooth01((float)t / 7.0f);
+    // The elevation ceiling matters more than it looks: with a 50 deg vertical
+    // FOV, anything above ~25 deg puts the HORIZON off the bottom of the frame,
+    // so the shot becomes floor-to-the-edges with no sky in it at all. The
+    // reveal has to stay under that line or there is nothing to reveal against.
+    az = -78.0f + 53.0f * e;
+    el = 24.0f - 9.0f * e;
+    d = span * 3.0f - span * 1.4f * e;
+    tx = 0.0f;
+    ty = 0.45f;
+    tz = 0.0f;
+  } else if (t < 34.0) {
+    // ACT 2 — the runway: low, moving along the array, looking ahead down it
+    float u = (float)(t - 7.0) / 27.0f;
+    az = -22.0f + 5.0f * sinf(u * 6.28318f);
+    el = 9.0f + 2.0f * sinf(u * 12.56636f);
+    d = span * 1.15f;
+    // travel along -z because the camera sits at +z of the target and looks
+    // back along -z: the target leads the camera, so it IS the look-ahead
+    tz = span * 1.25f - u * span * 2.5f;
+    tx = 0.34f * sinf(u * 9.4f);   // a slight weave, so it is not on rails
+    ty = 0.32f;
+  } else {
+    // ACT 3 — the pull back to the orbit the scene used to sit in forever
+    float e = Smooth01((float)(t - 34.0) / 13.0f);
+    az = -22.0f + 21.0f * e;
+    el = 11.0f + 9.0f * e;
+    d = span * 1.15f + (span * 1.5f - span * 1.15f) * e;
+    tx = 0.0f;
+    ty = 0.45f - 0.13f * e;
+    tz = -span * 1.25f * (1.0f - e);
+  }
+  cam_target[0] = tx;
+  cam_target[1] = ty;
+  cam_target[2] = tz;
+  cam_azimuth = az;
+  cam_elevation = el;
+  cam_dist = d;
+}
+
 // Sets up the orbit camera view matrix; leaves GL_MODELVIEW as the view.
 void applyCamera() {
   glMatrixMode(GL_MODELVIEW);
@@ -659,9 +849,25 @@ void renderScene() {
     return;
   }
 
+  // BUILD-P11: the flyover drives the camera before it is applied
+  UpdateFlyoverCamera(RunSeconds());
   applyCamera();
 
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+  // BUILD-P11: the sky goes down FIRST, inside the far plane, with no program
+  // bound — the whole environment is fixed-function textured geometry, so scene
+  // 1 still costs exactly what it cost before it started looking like a place.
+  if (gSkyDomeTex) {
+    glUseProgram(0);
+    glActiveTexture(GL_TEXTURE7);
+    glBindTexture(GL_TEXTURE_2D, gSkyDomeTex);
+    glDisable(GL_LIGHTING);
+    glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+    glBegin(GL_QUAD_STRIP);
+    drawSkyDome();
+    glEnd();
+  }
 
   // Ground pass
   glUseProgram(groundProg);
@@ -669,6 +875,15 @@ void renderScene() {
   glUniform3fv(glGetUniformLocation(groundProg, "uSunDirWorld"), 1,
                sun_dir_world);
   glUniform3fv(glGetUniformLocation(groundProg, "uSkyColor"), 1, sky_color);
+  // BUILD-P11: the floor needs the eye for its specular, its grazing sheen and
+  // its aerial perspective. GL 2.1 has no built-in camera position, so it is
+  // lifted straight out of the modelview matrix's translation column.
+  {
+    float mv[16];
+    glGetFloatv(GL_MODELVIEW_MATRIX, mv);
+    glUniform3f(glGetUniformLocation(groundProg, "uEyePos"), mv[12], mv[13],
+                mv[14]);
+  }
   glUniform1f(glGetUniformLocation(groundProg, "uShadowDisable"),
               gNoShadow ? 1.0f : 0.0f);
   drawFloor();
@@ -971,6 +1186,11 @@ void processKeys(SDL_Event &event) {
     SDL_Quit();
     exit(0);
   }
+  // BUILD-P11: F toggles the flyover back on after the mouse has taken over
+  if (event.key.keysym.sym == SDLK_f) {
+    gFlyover = !gFlyover;
+    printf("Flyover camera: %s\n", gFlyover ? "on" : "off");
+  }
 }
 
 // Prints any OpenGL errors.
@@ -1138,7 +1358,14 @@ void setup() {
   // bind the shadow map to texture unit 6 (units 0-5 hold the gun maps)
   glActiveTexture(GL_TEXTURE6);
   glBindTexture(GL_TEXTURE_2D, shadowTex);
-  glActiveTexture(GL_TEXTURE0);
+  // BUILD-P11: the generated sky. Built AFTER the sun vector is set, because
+  // the sun glow is baked into the texture at the sun's own direction.
+  // UNIT 7, deliberately: units 0-5 hold the gun's own maps and unit 6 the
+  // shadow map, and a shader sampler remembers its unit even when the ACTIVE
+  // unit has moved on. Binding the dome to unit 0 in the render loop left the
+  // gun shader sampling the sky as its base colour every frame.
+  glActiveTexture(GL_TEXTURE7);
+  BuildSkyDomeTexture();
   glUseProgram(groundProg);
   glUniform1i(glGetUniformLocation(groundProg, "uShadowMap"), 6);
   glUseProgram(gunProg);
@@ -1200,6 +1427,18 @@ int main(int argc, char **argv) {
       gPoolOnly = true; // run only the GL 3.3 pool-room scene
     } else if (arg == "--pole-only") {
       gPoleOnly = true; // run only scene 4: the GL 3.3 power-lines scene
+    } else if (arg == "--flyover") {
+      gFlyover = true;
+      gFlyoverUserSet = true;
+    } else if (arg == "--no-flyover") {
+      gFlyover = false;
+      gFlyoverUserSet = true;
+    } else if (arg == "--flyover") {
+      gFlyover = true;
+      gFlyoverUserSet = true;
+    } else if (arg == "--no-flyover") {
+      gFlyover = false;
+      gFlyoverUserSet = true;
     }
   }
 
@@ -1283,8 +1522,10 @@ int main(int argc, char **argv) {
                  event.type == SDL_MOUSEBUTTONUP ||
                  event.type == SDL_MOUSEWHEEL) {
         handleMouseEvent(event);
+        gFlyover = false;   // any mouse input hands the camera back
       } else if (event.type == SDL_MOUSEMOTION) {
         handleMouseMotion(event);
+        gFlyover = false;
       } else if (event.type == SDL_WINDOWEVENT) {
         if (event.window.event == SDL_WINDOWEVENT_RESIZED) {
           gWinW = event.window.data1;

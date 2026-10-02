@@ -179,6 +179,48 @@ Realism takeaways applied:
   glazing bars over them. Emissive geometry is only believable if the frame behind it still exists —
   the bars and the sill are what stop a lit pane reading as a sticker.
 
+## BUILD-P11: scene 1 gets a place to stand in, and a camera that moves
+
+Realism takeaways applied — the failures here were *structural*, not shading:
+
+- **A void is not an environment.** Scene 1 cleared to a flat colour and that was
+  the entire world: no horizon, no depth cue, no light in the sky for the
+  shadows to come from. It now carries a small equirectangular sky GENERATED ON
+  THE CPU (128x64, no file to ship, nothing to download) — vertical gradient,
+  horizon haze, and a sun glow placed at the scene's own fixed sun vector, so
+  the light in the sky and the shadows on the floor finally agree. It is drawn
+  as an inverted sphere around the current eye position with no program bound:
+  fixed-function textured geometry, so the scene still costs what it cost.
+- **The far floor and the sky have to be the same colour.** The floor's aerial
+  perspective faded to `uSkyColor` while the dome faded somewhere else, and the
+  join was a visible band. Both now start at exactly (0.86, 0.80, 0.70).
+- **Fog that finishes too early is worse than no fog.** `smoothstep(9, 22)` had
+  every pixel past 22 m at the fog colour, which turned the far two-thirds of
+  every frame into one flat wash and removed every depth cue in the shot. It is
+  now exponential out to the horizon, and it brightens toward the sun because
+  backlit air forward-scatters.
+- **A floor is the largest surface in almost every benchmark frame, and a flat
+  one reads as a backdrop.** Power-trowelled concrete now has burnish sweeps in
+  long arcs (a uniform noise has no feature size and reads as film grain),
+  exposed aggregate in the near field only (left running, it aliases into a
+  shimmering band at distance), saw-cut control joints with a chamfered arris,
+  a real sun specular lobe and a grazing sheen. Measured on the near floor, the
+  standard deviation went from a near-flat sheet to 19/255 with a gradient RMS
+  of 6.6 — i.e. the surface finally has texture and therefore has scale.
+- **A GL 2.1 shader cannot invent a camera.** There is no built-in eye position
+  in GLSL 1.2, so the view vector and the distance term were unavailable to the
+  floor until `uEyePos` was added and lifted straight out of the modelview
+  matrix's translation column. Specular, sheen and aerial perspective all need it.
+- **The flyover has to keep the horizon in frame.** With a 50-degree vertical
+  FOV, any camera elevation above ~25 degrees pushes the horizon off the bottom
+  edge, and the shot becomes floor-to-the-edges with no sky in it at all. The
+  first pass of the flyover peaked at 44 degrees and every one of its three acts
+  was a picture of a floor.
+- **A texture unit is global state, not a sampler-local one.** Binding the sky
+  dome to unit 0 in the render loop left the gun shader sampling the sky as its
+  base colour every frame, because a GLSL sampler remembers its unit even after
+  the active unit moves on. The dome lives on unit 7 now.
+
 ## BUILD-P10: photorealism pass (scenes 3 and 4)
 
 References consulted (informational — nothing is fetched at runtime):
