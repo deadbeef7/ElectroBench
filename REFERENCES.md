@@ -112,6 +112,16 @@ Realism takeaways applied:
   stops distant cumulus smearing into horizontal streaks along the horizon.
 - Draw the sky LAST, depth-tested, so its expensive fbm only runs on the pixels the world did not
   cover. On a pre-SSE CPU that pays for a much richer object shader.
+- **A material id must be a `flat` varying.** As a smooth varying it is perspective-correctly
+  interpolated, and a constant `12.0` does not survive that division intact — it arrives as
+  11.9999995, the equality test fails, and the surface silently falls through to the wrong shader
+  branch. Here that meant the ground-shadow pass fell through to the opaque branch, whose alpha of
+  1.0 made the multiplicative blend `dst*(1-srcAlpha)` multiply the road by ZERO: hard black slabs
+  lying across the street. The rounding is driver-specific, so this class of bug looks fine on the
+  machine that wrote it and ships as garbage everywhere else.
+- When a pass uses `glBlendFunc` to multiply (`ZERO, ONE_MINUS_SRC_ALPHA`), the source RGB is
+  irrelevant and the source ALPHA is everything. A mis-routed alpha therefore does not look like a
+  wrong colour, it looks like a black hole — so verify the alpha, not the colour, when debugging.
 
 ## Notes on staging
 

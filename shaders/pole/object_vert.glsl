@@ -24,7 +24,17 @@ uniform mat4 uModel;
 out vec3 vWorld;
 out vec3 vNormal;
 out vec3 vColor;
-out float vMat;
+// BUILD-P7 CRITICAL: the material id MUST be flat. As a smooth varying it
+// is perspective-correctly interpolated across the triangle, and a constant
+// 12.0 does not survive that division intact — it arrives as 11.9999995, the
+// `m == kMatShadow` test fails, and the shadow falls through to the generic
+// path, which outputs alpha 1.0. With the shadow pass blended as
+// dst*(1 - srcAlpha) that multiplies the road by ZERO: hard black rectangles
+// lying across the street. The rounding of that division is driver-specific,
+// so this is exactly the kind of bug that looks fine on one GPU and ships as
+// black slabs on another. vAlpha stays SMOOTH on purpose — it is the
+// penumbra gradient and genuinely wants interpolating.
+flat out float vMat;
 out float vAlpha;
 
 void main() {

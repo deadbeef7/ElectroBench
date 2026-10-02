@@ -26,8 +26,8 @@
 in vec3 vWorld;
 in vec3 vNormal;
 in vec3 vColor;
-in float vMat;
-in float vAlpha;
+flat in float vMat;   // MUST match the flat qualifier in object_vert.glsl
+in float vAlpha;      // smooth: this is the penumbra ramp
 
 out vec4 fragColor;
 
