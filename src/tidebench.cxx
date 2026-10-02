@@ -626,6 +626,12 @@ static void DrawSkyToEnvMap(const Mat4 &proj) {
     Mat4 vp;
     Mat4Multiply(vp, proj, view);
     BindSkyUniforms(vp);
+    // BUILD-P5 SPECK FIX: bake only the 7 base cloud banks into the env
+    // cubemap. The two cirrus wisps (added post-v0.3, parked above the sun)
+    // bake HDR-hot silver linings that the sea then mirrors as isolated
+    // bright dots down the glitter column — v0.3 never had them in its
+    // reflections. The LIVE sky keeps the wisps; the reflections match v0.3.
+    glUniform1i(gSkyProg.loc("uCloudCount"), 7);
     // env capture: dome centred at the origin, small radius, HDR output
     glUniform3f(gSkyProg.loc("uCenter"), 0.0f, 0.0f, 0.0f);
     glUniform1f(gSkyProg.loc("uRadius"), 10.0f);
