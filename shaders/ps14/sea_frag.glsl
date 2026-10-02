@@ -480,6 +480,13 @@ void main() {
     float a2 = aGGX * aGGX;
     float specCT = D_GGX(NdH, a2) * V_SmithGGX(NoV, NoL, a2) * F_Schlick(NoV, 0.02);
     float spark = min(specCT * (0.10 + 0.04 * chaos), 0.60);
+    // REGRESSION FIX (v0.3 -> master): the Cook-Torrance rewrite dropped the
+    // pathGate * shadow gates from the SPARK term (only the weak sheen kept
+    // them). A broad GGX lobe then lights warm blotches anywhere wave normals
+    // catch the sun — scattered lit patches across the whole sea instead of
+    // one coherent glitter column under the sun. Both gates ride the whole
+    // specular answer again, exactly like v0.3.
+    spark *= pathGate * shadow;
     // broad warm sheen under the sparkles: a lower exponent, lower gain, still
     // gated to the sun path and shadow, so the whole path warms a little.
     float sheen = pow(NdH, 6.0) * 0.06 * pathGate * shadow;
