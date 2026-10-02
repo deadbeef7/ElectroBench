@@ -904,22 +904,47 @@ static void DrawSky(const Mat4 &view, const Vec3 &eye, double timeSec) {
 
 // Per-frame ground shadows: a streamed quad per pole along the CURRENT sun
 // ray. Because this rebuilds every frame, the shadows swing as the sun
-// moves — the "alive street" cue. Drawn right after the static geometry
-// with the same program (positions/normals/colours, same vertex layout).
-static GLuint gShadowVbo = 0;
+// moves — the "alive street" cue.
+//
+// BUILD-P6.1 CRITICAL DRIVER FIX: the shadows live in their OWN VAO. The
+// first version rebound the shared object VAO's attribute pointers to the
+// shadow VBO every frame and restored only the element buffer — the object
+// mesh then read its VERTICES from the 84-vertex shadow buffer. Mesa
+// returns zeros for out-of-bounds VBO fetches (invisible), AMD returns
+// garbage: giant misindexed triangles washed over the whole frame (the
+// "soooo glitched" white/orange screenshot). Separate VAO = zero state
+// bleed, on every driver.
+static GLuint gShadowVao = 0, gShadowVbo = 0, gShadowIbo = 0;
 static void DrawGroundShadows(const Mat4 &view, const Vec3 &eye, double t,
                               const std::vector<PoleSpec> &lineA,
                               const std::vector<PoleSpec> &lineB) {
-  if (!gShadowVbo) glGenBuffers(1, &gShadowVbo);
+  if (!gShadowVao) {
+    glGenVertexArrays(1, &gShadowVao);
+    glGenBuffers(1, &gShadowVbo);
+    glGenBuffers(1, &gShadowIbo);
+    glBindVertexArray(gShadowVao);
+    glBindBuffer(GL_ARRAY_BUFFER, gShadowVbo);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(ObjVertex), (void *)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(ObjVertex),
+                          (void *)(3 * sizeof(float)));
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(ObjVertex),
+                          (void *)(6 * sizeof(float)));
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gShadowIbo);
+    glBindVertexArray(0);
+  }
   Vec3 sun = Vec3Norm({SunDirNow(t).x, 0.0f, SunDirNow(t).z});
   Vec3 perp{-sun.z, 0.0f, sun.x};
   Vec3 sc{0.135f, 0.10f, 0.082f};              // warm dusk shadow
   std::vector<ObjVertex> v;
+  std::vector<unsigned int> idx;
   v.reserve((lineA.size() + lineB.size()) * 4);
+  idx.reserve((lineA.size() + lineB.size()) * 6);
   for (const std::vector<PoleSpec> *line : {&lineA, &lineB}) {
     for (const PoleSpec &p : *line) {
-      Vec3 b = PoleAxisAt(p, 0.0f);
-      b.x = p.x; b.z = p.z;
+      Vec3 b{p.x, 0.012f, p.z};
       float reach = 16.0f * (1.0f + 0.05f * (float)((int(p.z) % 7)));
       Vec3 tip = Vec3Add(b, Vec3Scale(sun, -reach));   // AWAY from the sun
       float w0 = 0.34f, w1 = 1.15f;
@@ -931,24 +956,25 @@ static void DrawGroundShadows(const Mat4 &view, const Vec3 &eye, double t,
       unsigned int s = (unsigned int)v.size();
       for (int k = 0; k < 4; k++)
         v.push_back({c[k].x, 0.012f, c[k].z, 0, 1, 0, sc.x, sc.y, sc.z});
-      (void)s;
+      idx.push_back(s); idx.push_back(s + 1); idx.push_back(s + 2);
+      idx.push_back(s); idx.push_back(s + 2); idx.push_back(s + 3);
     }
   }
+  // stream the buffers (VAO unbound: buffer bindings here are global)
+  glBindVertexArray(0);
   glBindBuffer(GL_ARRAY_BUFFER, gShadowVbo);
   glBufferData(GL_ARRAY_BUFFER, v.size() * sizeof(ObjVertex), v.data(),
                GL_STREAM_DRAW);
+  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gShadowIbo);
+  glBufferData(GL_ELEMENT_ARRAY_BUFFER, idx.size() * sizeof(unsigned int),
+               idx.data(), GL_STREAM_DRAW);
+
+  glBindVertexArray(gShadowVao);
+  glUseProgram(gObjProg.handle);
   Mat4 vp;
   Mat4Multiply(vp, gProj, view);
   Mat4 model;
   Mat4Identity(model);
-  glUseProgram(gObjProg.handle);
-  glBindVertexArray(gObjVao);
-  glBindBuffer(GL_ARRAY_BUFFER, gShadowVbo);
-  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(ObjVertex), (void *)0);
-  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(ObjVertex),
-                        (void *)(3 * sizeof(float)));
-  glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(ObjVertex),
-                        (void *)(6 * sizeof(float)));
   glDisable(GL_CULL_FACE);
   glUniformMatrix4fv(gObjProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
   glUniformMatrix4fv(gObjProg.loc("uModel"), 1, GL_FALSE, model.data());
@@ -956,25 +982,7 @@ static void DrawGroundShadows(const Mat4 &view, const Vec3 &eye, double t,
   Vec3 sd = SunDirNow(t);
   glUniform3f(gObjProg.loc("uSunDir"), sd.x, sd.y, sd.z);
   glUniform1f(gObjProg.loc("uTime"), (float)t);
-  // the shadow quads are flat fans; indices come from the shared element
-  // buffer layout of 4-vert quads — build a tiny index buffer once
-  static std::vector<unsigned int> sIdx;
-  static GLuint sIdxBuf = 0;
-  if (sIdx.size() != v.size() / 4 * 6) {
-    sIdx.clear();
-    for (unsigned int q = 0; q + 3 < v.size(); q += 4) {
-      sIdx.push_back(q); sIdx.push_back(q + 1); sIdx.push_back(q + 2);
-      sIdx.push_back(q); sIdx.push_back(q + 2); sIdx.push_back(q + 3);
-    }
-    if (!sIdxBuf) glGenBuffers(1, &sIdxBuf);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, sIdxBuf);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sIdx.size() * sizeof(unsigned int),
-                 sIdx.data(), GL_STREAM_DRAW);
-  } else {
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, sIdxBuf);
-  }
-  glDrawElements(GL_TRIANGLES, (GLsizei)sIdx.size(), GL_UNSIGNED_INT, nullptr);
-  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gObjIbo);   // restore shared layout
+  glDrawElements(GL_TRIANGLES, (GLsizei)idx.size(), GL_UNSIGNED_INT, nullptr);
   glEnable(GL_CULL_FACE);
   glBindVertexArray(0);
 }
