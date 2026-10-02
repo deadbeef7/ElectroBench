@@ -122,6 +122,23 @@ Realism takeaways applied:
 - When a pass uses `glBlendFunc` to multiply (`ZERO, ONE_MINUS_SRC_ALPHA`), the source RGB is
   irrelevant and the source ALPHA is everything. A mis-routed alpha therefore does not look like a
   wrong colour, it looks like a black hole — so verify the alpha, not the colour, when debugging.
+- **A catenary parameterised from its midpoint has to be BASED at the midpoint.** The classic form
+  `a + dir*((t-0.5)*len) - up*(sag*(1-4(t-0.5)^2))` looks right and is not: `x` runs from
+  -len/2 to +len/2, so adding it to `a` (the span START) draws every wire half a span too early,
+  ending in mid air between poles. Every wire in scene 4 was wrong this way for its whole life, and
+  no amount of correct insulator-top attachment could hide it, because the attachment points were
+  never where the wire began and ended. The only reason it survived inspection is that it is
+  invisible to the eye at a glance and obvious to a distance check: `|WirePoint(t=0) - a|`.
+- Anything mounted on a curved surface (a spool on a tapering trunk, a bracket on a leaning pole)
+  must be measured off that surface at the height it is mounted, not offset by a constant — the
+  taper is what made a fixed 0.24 m offset float 0.11 m clear of the bark.
+- Anything added inside a solid is invisible, not wrong: an emissive panel at 0.33 m inside a
+  0.42 m-deep cabinet renders nothing at all, and reads as "the feature is missing" rather than
+  "the feature is misplaced". Place new detail on the OUTSIDE face of its housing.
+- A generic attachment audit is worth more than eyeballing: register every support point, record
+  every wire endpoint, and report the distance from each end to the nearest support. An end that
+  matches nothing IS a floating wire. Tagging the endpoints by call site turns the list into a
+  to-do list in one run.
 
 ## Notes on staging
 

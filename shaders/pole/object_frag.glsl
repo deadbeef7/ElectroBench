@@ -50,6 +50,7 @@ const float kMatRoof   = 9.0;
 const float kMatGlass  = 10.0;
 const float kMatLeaf   = 11.0;
 const float kMatShadow = 12.0;  // streamed, alpha-blended ground shadow
+const float kMatGlow   = 13.0;  // emissive: lit signage / lamp lenses at dusk
 
 // cheap hash: no transcendentals (the old sin-based hash was 20+ cycles on
 // a pre-SSE CPU). Same "value noise", a fraction of the cost.
@@ -67,6 +68,13 @@ float vnoise(vec2 p) {
     float c = hash21(i + vec2(0.0, 1.0));
     float d = hash21(i + vec2(1.0, 1.0));
     return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+// BUILD-P8: the haze colour is needed by both the emissive branch (above) and
+// the lit surfaces (below), so it is factored out rather than duplicated.
+vec3 hazeColFor(vec3 base, vec3 L, vec3 V) {
+    float toSun = max(dot(-V, L), 0.0);
+    return mix(vec3(0.70, 0.52, 0.37), vec3(0.98, 0.75, 0.50), pow(toSun, 3.0));
 }
 
 void main() {
@@ -100,12 +108,20 @@ void main() {
 
     if (m == kMatGround) {
         // dirt/gravel: broad damp patches + fine grit, then a dry-grass
-        // tint where the broad noise runs high (weeds in the verges)
+        // tint where the broad noise runs high (weeds in the verges).
+        // BUILD-P8: the amplitudes are up and the base albedo is down — a
+        // single bright flat plane was reading as blown-out white paper in
+        // the mid-distance, which is the "washed out" complaint.
         float n1 = vnoise(P.xz * 0.42);
         float n2 = vnoise(P.xz * 2.10);
-        base *= 0.80 + 0.34 * n1 + 0.20 * n2 * near;
-        base = mix(base, vec3(0.30, 0.30, 0.16),
-                   smoothstep(0.52, 0.95, n1) * 0.40);
+        float n3 = near > 0.02 ? vnoise(P.xz * 7.5) : 0.5;
+        base *= 0.66 + 0.52 * n1 + 0.26 * n2 + 0.14 * n3 * near;
+        base = mix(base, vec3(0.150, 0.155, 0.082),
+                   smoothstep(0.48, 0.95, n1) * 0.55);
+        // scuffed dust either side of the carriageway (traffic throws grit)
+        float nearRoad = exp(-pow((abs(P.x - uRoadX) - 3.6) / 1.5, 2.0));
+        base = mix(base, base * 1.22 + vec3(0.020, 0.016, 0.010),
+                   nearRoad * 0.55);
         rough = 1.0;
     } else if (m == kMatRoad) {
         float rx = P.x - uRoadX;
@@ -140,16 +156,16 @@ void main() {
     } else if (m == kMatWall) {
         // horizontal siding boards with a seam shadow between each course
         float seam = abs(fract(P.y * 1.25) - 0.5) * 2.0;
-        base *= mix(0.80, 1.06, smoothstep(0.06, 0.34, seam));
-        base *= 0.94 + 0.12 * vnoise(vec2((P.x + P.z) * 2.2, P.y * 0.9));
+        base *= mix(0.70, 1.10, smoothstep(0.06, 0.34, seam));
+        base *= 0.88 + 0.24 * vnoise(vec2((P.x + P.z) * 2.2, P.y * 0.9));
         // rain-streaked dirt splashing up the bottom 40 cm
-        base *= mix(0.62, 1.0, smoothstep(0.0, 0.55, P.y));
+        base *= mix(0.55, 1.0, smoothstep(0.0, 0.55, P.y));
         rough = 0.9;
     } else if (m == kMatRoof) {
         // pantile courses: a repeating ridge/valley along the slope
         float course = abs(fract(P.z * 0.85 + P.x * 0.0) - 0.5) * 2.0;
-        base *= mix(0.78, 1.08, smoothstep(0.12, 0.55, course));
-        base *= 0.88 + 0.24 * vnoise(P.xz * 1.7);
+        base *= mix(0.70, 1.12, smoothstep(0.12, 0.55, course));
+        base *= 0.84 + 0.32 * vnoise(P.xz * 1.7);
         rough = 0.85;
     } else if (m == kMatGlass) {
         // windows read as dark holes with a hard sky glint on them
@@ -170,6 +186,17 @@ void main() {
     } else if (m == kMatMetal) {
         rough = 0.38;
         sheen = 0.22;
+    } else if (m == kMatGlow) {
+        // BUILD-P8: emissive. A lit vending machine or lamp lens is its own
+        // light source — running it through the diffuse model just made it a
+        // pale box. Emitted straight through, with only a touch of haze on
+        // top so distant lamps still sit in the air.
+        float distG = dist;
+        float hz = 1.0 - exp(-distG * 0.0016);
+        vec3 g = base * 1.05;
+        g = mix(g, hazeColFor(g, L, V), clamp(hz, 0.0, 0.45));
+        fragColor = vec4(pow(max(g, vec3(0.0)), vec3(1.0 / 2.2)), 1.0);
+        return;
     }
 
     // ---- lighting ----------------------------------------------------------
@@ -177,8 +204,8 @@ void main() {
     // warm and dim. A single flat ambient is why every surface in build P6
     // looked like it was lit by the same paint bucket.
     float up = N.y * 0.5 + 0.5;
-    vec3 ambGround = vec3(0.175, 0.120, 0.088);
-    vec3 ambSky    = vec3(0.540, 0.470, 0.480);
+    vec3 ambGround = vec3(0.125, 0.086, 0.064);
+    vec3 ambSky    = vec3(0.395, 0.340, 0.360);
     vec3 amb = mix(ambGround, ambSky, up);
 
     // Sun. Matte surfaces get plain Lambert; the cables keep a wrap term so
@@ -214,12 +241,11 @@ void main() {
     // (road, shoulders, house bases) into one featureless cream sheet, which
     // is exactly the "washed out" complaint.
     float hFall = exp(-max(P.y, 0.0) * 0.11);
-    float fog = 1.0 - exp(-dist * 0.0024 * hFall);
-    fog += 0.10 * (1.0 - exp(-dist * 0.022));
+    float fog = 1.0 - exp(-dist * 0.0018 * hFall);
+    fog += 0.09 * (1.0 - exp(-dist * 0.020));
     float toSun = max(dot(-V, L), 0.0);
-    vec3 hazeCol = mix(vec3(0.74, 0.56, 0.40),
-                       vec3(1.00, 0.78, 0.52), pow(toSun, 3.0));
-    col = mix(col, hazeCol, clamp(fog, 0.0, 0.80));
+    vec3 hazeCol = hazeColFor(base, L, V);
+    col = mix(col, hazeCol, clamp(fog, 0.0, 0.70));
 
     // analytic silhouette veil: poles and wires are seen THROUGH the haze,
     // so a thin dark shape never reads as pure black against a bright sky

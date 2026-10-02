@@ -204,15 +204,22 @@ What it renders :
   curves (parabola + cosh tail) swept as 4-sided tubes, every span tied insulator-top to
   insulator-top, with crossing spans between the two lines and service drops down to junctions
 - **No wire ends in mid air**: every conductor lands on an insulator bell at the exact height of
-  the glaze, every telecom drop runs to an eave bracket on a house (or ends in a real termination
-  ferrule), and the service drops tie the pole spool to those same brackets
+  the glaze, every telecom drop hangs off a clamp ferrule on the cable itself and runs to an eave
+  bracket on a house (or ends in a real termination ferrule), and the service drops tie the pole
+  spool to those same brackets. A build-time audit confirmed 0 of 786 wire ends are further than
+  5 cm from real hardware
 - A **dusk sky** rendered directly at full screen resolution: amber-to-cream gradient, a low veiled
   sun disc sitting on the haze band (the dolly walks straight toward it, so poles and wires cross
   it as silhouettes), two layers of drifting value-noise clouds, and horizon ray crossbars
 - A **straight asphalt road with worn centre dashes and edge lines running BETWEEN the two pole
   lines** (the auto camera drives down its middle; poles line both shoulders), two burnished
   wheel paths, gravel shoulders, gabled **suburban houses** on both flanks with plinths, overhanging
-  eaves, framed windows and entry canopies, and a far treeline closing the horizon
+  eaves, framed windows, entry canopies, rooftop water tanks and TV aerials, and a far treeline
+  closing the horizon
+- The **details that make it a Japanese suburb rather than a corridor**: concrete block property
+  walls with tiled caps and gate posts running along both front boundaries, hedges behind them,
+  **birds perched on the sagging cables**, streetlights reaching over the road with lit lenses,
+  and glowing drinks machines at the kerb
 - **Per-material surface shading** (one material id per vertex drives it): creosote bark grain on
   the trunks, siding courses and rain-dirt on the house walls, pantile courses on the roofs,
   aggregate speckle and wheel-path polish on the tarmac, damp patches and dry grass on the verges

@@ -295,6 +295,7 @@ static const float kMatRoof = 9.0f;
 static const float kMatGlass = 10.0f;
 static const float kMatLeaf = 11.0f;
 static const float kMatShadow = 12.0f;
+static const float kMatGlow = 13.0f;     // emissive: lit signs at dusk
 
 static const Vec3 kWoodDark{0.165f, 0.115f, 0.085f};   // creosote pole
 static const Vec3 kWoodOld{0.230f, 0.180f, 0.140f};   // weathered crossarm
@@ -302,7 +303,8 @@ static const Vec3 kCeramic{0.780f, 0.760f, 0.700f};   // insulator glaze
 static const Vec3 kCable{0.055f, 0.050f, 0.055f};    // rubber wire
 static const Vec3 kCableOld{0.085f, 0.075f, 0.070f};
 static const Vec3 kMetal{0.190f, 0.195f, 0.200f};    // transformer can
-static const Vec3 kGravel{0.520f, 0.420f, 0.310f};   // warm dirt road
+static const Vec3 kGravel{0.330f, 0.272f, 0.205f};   // BUILD-P8: dry dirt is
+                                                     // ~0.3 albedo, not 0.52
 
 // BUILD-P7 ROAD GEOMETRY. The road was rebuilt because build P6 laid it out
 // as three coplanar strips with a 0.35 m HOLE down the left side (the body
@@ -366,11 +368,44 @@ static void AddCylinder(const Vec3 &base, const Vec3 &top, float rBase, float rT
 static void AddWire(const Vec3 &a, const Vec3 &b, float sag, float radius,
                     int samples, const Vec3 &color, float mat = kMatCable);
 
+// BUILD-P8: the exact point of a sagging wire at parameter t, shared by the
+// tube builder and by everything that has to ATTACH to a wire. Build P7
+// computed telecom drop points on the straight line between the two span
+// ends, but the bundle sags up to 0.75 m below that line — so every drop's
+// top end and every clamp bead floated clear of the cable it belonged to
+// (the "small cylinders sitting mid air" report). One evaluator, used by
+// both, so the attachment can never drift from the geometry again.
+static Vec3 WirePoint(const Vec3 &a, const Vec3 &b, float sag, float t) {
+  Vec3 delta = Vec3Sub(b, a);
+  float len = Vec3Len(delta);
+  if (len < 1e-3f) return a;
+  Vec3 dir = Vec3Scale(delta, 1.0f / len);
+  Vec3 side = Vec3Norm(Vec3Cross(dir, Vec3{0, 1, 0}));
+  if (Vec3Len(side) < 1e-4f) side = Vec3{1, 0, 0};
+  Vec3 up = Vec3Norm(Vec3Cross(side, dir));
+  float halfSpan = len * 0.5f;
+  // BUILD-P8 CRITICAL: `x` is measured FROM THE MIDPOINT, so the curve has to
+  // be based at the midpoint. It used to be added to `a` (the span start),
+  // which put t=0 at a - dir*halfSpan and t=1 at a + dir*halfSpan — i.e.
+  // EVERY wire in the scene was drawn half a span too early, starting at the
+  // midpoint of the previous span and stopping in mid air between poles.
+  // That is the root cause of the "wires are cut" reports: no amount of
+  // careful insulator-top attachment could fix it, because the attachment
+  // points were never where the wire actually began and ended.
+  Vec3 mid = Vec3Add(a, Vec3Scale(delta, 0.5f));
+  float x = (t - 0.5f) * len;
+  float y = sag * (1.0f - 4.0f * (t - 0.5f) * (t - 0.5f));
+  float tail = sag * 0.06f * (std::cosh(x / (halfSpan * 0.72f)) - 1.0f)
+             / (float)std::cosh(halfSpan / (halfSpan * 0.72f));
+  return Vec3Add(Vec3Add(mid, Vec3Scale(dir, x)), Vec3Scale(up, -y - tail));
+}
+
 // BUILD-P7: the drop wires need somewhere REAL to land. AddHouse registers a
 // service anchor (an eave bracket) here; AddTelecomBundle runs a drop to the
 // nearest reachable anchor instead of leaving it hanging in mid air, which is
 // what made build P6 read as "the wires are cut".
 static std::vector<Vec3> gDropAnchors;
+static void AddBird(const Vec3 &at, float lean);
 
 // BUILD-P4 TELECOM BUNDLE: a communication cable sags between its two pole
 // brackets, and a bundle of thin DROP WIRES peels off along the span — the
@@ -383,20 +418,24 @@ static std::vector<Vec3> gDropAnchors;
 // floating in the air is the exact artefact the user screenshotted.
 static void AddTelecomBundle(const Vec3 &a, const Vec3 &b, int seed,
                              float radius, int samples, const Vec3 &color) {
-  AddWire(a, b, 0.55f + 0.10f * ((seed * 7) % 3), radius, samples, color,
-          kMatCable);
+  float sag = 0.55f + 0.10f * ((seed * 7) % 3);
+  AddWire(a, b, sag, radius, samples, color, kMatCable);
   int drops = 4 + (seed % 3);                    // 4-6 drop wires per span
   for (int i = 0; i < drops; i++) {
     float t = 0.18f + 0.62f * (float)((seed * 13 + i * 29) % 100) / 100.0f;
     float drop = 0.35f + 0.55f * (float)((seed * 17 + i * 41) % 100) / 100.0f;
-    Vec3 p{a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t - drop,
-           a.z + (b.z - a.z) * t};
-    // the clamp where the drop peels off the bundle (a small metal ferrule
-    // ON the cable — not a rod hanging in the air)
-    Vec3 peel{a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t,
-              a.z + (b.z - a.z) * t};
-    AddCylinder(peel, Vec3Add(peel, Vec3{0, 0.09f, 0}), 0.036f, 0.036f, 6,
-                kMetal, kMatMetal);
+    // BUILD-P8: peel the drop off the cable where the cable ACTUALLY is, not
+    // where the straight line between the poles would be.
+    Vec3 peel = WirePoint(a, b, sag, t);
+    // BUILD-P8: the drop hangs OFF the clamp, so it starts at the clamp's
+    // lower face. It used to start a further `drop` (0.35-0.90 m) below the
+    // cable — i.e. it hung from nothing at all, which the audit measured at
+    // up to 0.895 m from any hardware.
+    Vec3 p{peel.x, peel.y - 0.035f, peel.z};
+    // the clamp ferrule the drop is bound to — sitting ON the cable
+    AddCylinder(Vec3Add(peel, Vec3{0, -0.035f, 0}), Vec3Add(peel, Vec3{0, 0.035f, 0}),
+                0.030f, 0.030f, 6, kMetal, kMatMetal);
+    // (birds are added once per bundle below, not once per drop wire)
     // nearest house anchor this drop can plausibly reach. The scan starts at
     // a per-drop offset so five drops in one span fan out to five different
     // brackets instead of all bunching on the same eave.
@@ -425,6 +464,16 @@ static void AddTelecomBundle(const Vec3 &a, const Vec3 &b, int seed,
                   0.026f, 0.026f, 6, kCeramic, kMatCeramic);
     }
   }
+  // BUILD-P8: birds perched on the bundle, ONCE per bundle. Placed through
+  // WirePoint so a bird always stands on the sagging cable rather than near
+  // it — the body deliberately overlaps the cable by a few millimetres.
+  if ((seed % 3) == 1) {
+    for (int bi = 0; bi < 3; bi++) {
+      float bt = 0.28f + 0.22f * (float)((seed * 11 + bi * 7) % 10) / 10.0f;
+      Vec3 sp = WirePoint(a, b, sag, bt);
+      AddBird(Vec3Add(sp, Vec3{0, radius * 0.55f, 0}), (float)(bi & 1) * 0.4f);
+    }
+  }
 }
 
 // A sagging wire between two attachment points: a real catenary sampled as a
@@ -442,15 +491,9 @@ static void AddWire(const Vec3 &a, const Vec3 &b, float sag, float radius,
 
   std::vector<Vec3> centres(samples + 1);
   for (int i = 0; i <= samples; i++) {
-    float t = (float)i / samples;              // 0..1 along the span
     // catenary: cosh(x/a) shape approximated by the standard sag parabola
     // plus a cosh tail — visually indistinguishable at wire radii.
-    float x = (t - 0.5f) * len;
-    float y = sag * (1.0f - 4.0f * (t - 0.5f) * (t - 0.5f));
-    float tail = sag * 0.06f * ((float)std::cosh(x / (halfSpan * 0.72f)) - 1.0f)
-               / (float)std::cosh(halfSpan / (halfSpan * 0.72f));
-    Vec3 c = Vec3Add(Vec3Add(a, Vec3Scale(dir, x)), Vec3Scale(up, -y - tail));
-    centres[i] = c;
+    centres[i] = WirePoint(a, b, sag, (float)i / samples);
   }
   unsigned int start = (unsigned int)gVerts.size();
   for (int i = 0; i <= samples; i++) {
@@ -516,6 +559,23 @@ struct PoleSpec {
 static Vec3 PoleAxisAt(const PoleSpec &p, float h) {
   float f = h / p.height;
   return {p.x + p.leanX * f, h, p.z + p.leanZ * f};
+}
+// BUILD-P8: one source of truth for the trunk radius, so anything mounted on
+// the bark can be measured off it instead of guessing a fixed offset (which is
+// how the service spool and the junction cans ended up hanging in mid air).
+static float TrunkRadius(const PoleSpec &p, float h) {
+  float f = h / p.height;
+  return 0.17f + (0.115f - 0.17f) * f;
+}
+// BUILD-P8: the telecom arm sits 1.30 m under the power arm and its three
+// bracket stubs stand 0.15 m proud of the wood. The telecom spans used to
+// attach at the BRACKET BASE on the UNLEANED pole x, i.e. up to 0.16 m from
+// any real hardware — another set of wire ends floating just clear of the
+// things meant to hold them.
+static Vec3 TelecomBracketTop(const PoleSpec &p, float off) {
+  float telY = p.height - 0.55f - 1.30f;
+  Vec3 a = PoleAxisAt(p, telY);
+  return {a.x + off, telY + 0.15f, a.z};
 }
 static Vec3 ArmInsulatorTop(const PoleSpec &p, float off) {
   // crossarm at height-0.55, insulator stack on top of it ends at +0.30 —
@@ -585,9 +645,14 @@ static void AddPole(const PoleSpec &p) {
   }
 
   if (p.serviceSpool) {
-    // secondary service spool on the other flank (double-attachment poles)
-    AddCylinder({p.x - 0.24f, 5.4f, p.z}, {p.x - 0.34f, 5.4f, p.z}, 0.05f,
+    // secondary service spool on the other flank (double-attachment poles).
+    // BUILD-P8: measured off the trunk surface, not a fixed offset — at the
+    // old x-0.24 the spool hung ~6 cm clear of the bark.
+    Vec3 sa = PoleAxisAt(p, 5.4f);
+    float sr = TrunkRadius(p, 5.4f);
+    AddCylinder({sa.x - sr, 5.4f, sa.z}, {sa.x - sr - 0.13f, 5.4f, sa.z}, 0.05f,
                 0.05f, 6, kMetal, kMatMetal);
+
   }
 
   // BUILD-P4 TELECOM ARM: a second, lower crossarm carrying the phone/cable
@@ -595,10 +660,11 @@ static void AddPole(const PoleSpec &p) {
   float telY = armY - 1.30f;
   Vec3 telC = PoleAxisAt(p, telY);
   AddBox({telC.x, telY, telC.z}, {0.95f, 0.05f, 0.06f}, kWoodOld, kMatWood);
-  for (float off : {-0.70f, 0.0f, 0.70f})
+  for (float off : {-0.70f, 0.0f, 0.70f}) {
     AddCylinder({telC.x + off, telY + 0.05f, telC.z},
                 {telC.x + off, telY + 0.15f, telC.z}, 0.038f, 0.032f, 6, kMetal,
                 kMatMetal);
+  }
 
   // a couple of CableTV-style cylindrical boxes bolted to the trunk (some
   // poles, deterministic)
@@ -614,13 +680,16 @@ static void AddPole(const PoleSpec &p) {
                 kMatMetal);
     AddBox({tc.x, tc.y + 0.30f, tc.z}, {0.40f, 0.16f, 0.16f}, kMetal, kMatMetal);
     AddBox({tc.x, tc.y - 0.34f, tc.z}, {0.10f, 0.22f, 0.10f}, kMetal, kMatMetal);
-    // two ceramic bushings on the can's crown + their drop leads
+    // two ceramic bushings on the can's crown + their drop leads.
+    // BUILD-P8: the leads used to stop in mid-air 0.5 m above the can. They
+    // now run up to the crossarm insulator they actually feed.
     for (float bz : {-0.12f, 0.12f}) {
       Vec3 bt{tc.x, tc.y + 0.46f, tc.z + bz};
       AddCylinder(bt, Vec3Add(bt, Vec3{0, 0.16f, 0}), 0.045f, 0.038f, 6,
                   kCeramic, kMatCeramic);
-      AddWire(Vec3Add(bt, Vec3{0, 0.18f, 0}), {tc.x, armY - 0.30f, tc.z + bz},
-              0.08f, 0.011f, 5, kCable, kMatCable);
+      AddWire(Vec3Add(bt, Vec3{0, 0.17f, 0}),
+              ArmInsulatorTop(p, bz < 0.0f ? 0.0f : 1.05f), 0.05f, 0.011f, 6,
+              kCable, kMatCable);
     }
   }
 }
@@ -647,11 +716,14 @@ static void AddQuad(const Vec3 &p0, const Vec3 &p1, const Vec3 &p2,
 // ridge cap, glazed windows with frames and sills and an entry canopy. Each
 // house also registers a SERVICE ANCHOR (an eave bracket on the street side)
 // so the telecom drops terminate on hardware instead of in mid air.
+// BUILD-P8: wall/roof palettes come DOWN a stop. At 0.29-0.52 albedo plus a
+// bright dusk ambient, every house in the mid-distance clipped toward the
+// same cream as the sky and the suburb read as blank white slabs.
 static const Vec3 kWallTints[5] = {
-    {0.400f, 0.352f, 0.300f}, {0.470f, 0.425f, 0.360f}, {0.330f, 0.300f, 0.278f},
-    {0.520f, 0.470f, 0.386f}, {0.290f, 0.272f, 0.262f}};
+    {0.235f, 0.208f, 0.178f}, {0.285f, 0.256f, 0.214f}, {0.185f, 0.170f, 0.158f},
+    {0.330f, 0.300f, 0.246f}, {0.160f, 0.152f, 0.148f}};
 static const Vec3 kRoofTints[3] = {
-    {0.150f, 0.132f, 0.128f}, {0.330f, 0.175f, 0.105f}, {0.190f, 0.180f, 0.175f}};
+    {0.095f, 0.084f, 0.082f}, {0.215f, 0.112f, 0.066f}, {0.125f, 0.118f, 0.115f}};
 
 static void AddHouse(float x, float z, float w, float d, float h, float face) {
   int pick = (int)std::fmod(std::fabs(std::sin(x * 12.9898f + z * 78.233f)) *
@@ -663,7 +735,7 @@ static void AddHouse(float x, float z, float w, float d, float h, float face) {
 
   // concrete plinth: the house sits ON something instead of hovering
   AddBox({x, 0.09f, z}, {w * 0.5f + 0.07f, 0.09f, d * 0.5f + 0.07f},
-         {0.230f, 0.215f, 0.200f}, kMatPaint);
+         {0.150f, 0.142f, 0.132f}, kMatPaint);
   // body
   AddBox({x, 0.10f + h * 0.5f, z}, {w * 0.5f, h * 0.5f, d * 0.5f}, wall,
          kMatWall);
@@ -684,6 +756,38 @@ static void AddHouse(float x, float z, float w, float d, float h, float face) {
   // ridge cap
   AddCylinder({x0, yRidge + 0.02f, z}, {x1, yRidge + 0.02f, z}, 0.055f, 0.055f,
               5, Vec3Add(roof, Vec3{0.05f, 0.03f, 0.02f}), kMatRoof);
+
+  // ---- BUILD-P8 ROOF CLUTTER: the black plastic water tank on stilts, a TV
+  // aerial and an aircon box. Every tiled roof in Japan carries some
+  // combination, and their silhouettes are most of what makes a distant
+  // roofline read as a house instead of a wedge.
+  if (pick % 3 != 1) {
+    float tx = x - w * 0.22f, tz = z + d * 0.10f;
+    const Vec3 tank{0.055f, 0.058f, 0.062f};
+    for (int l = 0; l < 4; l++) {
+      float lx = tx + (l & 1 ? 0.26f : -0.26f);
+      float lz = tz + (l & 2 ? 0.22f : -0.22f);
+      // legs start well BELOW the roof plane: the roof slopes away from the
+      // ridge, so a leg based at yRidge hovered in the air
+      AddCylinder({lx, yRidge - 0.45f, lz}, {lx, yRidge + 0.52f, lz}, 0.045f,
+                  0.045f, 4, {0.090f, 0.086f, 0.082f}, kMatMetal);
+    }
+    AddCylinder({tx, yRidge + 0.52f, tz}, {tx, yRidge + 1.02f, tz}, 0.34f, 0.31f,
+                8, tank, kMatMetal);
+  }
+  {   // TV aerial: a mast with two crossbars
+    float ax = x + w * 0.28f, az = z - d * 0.22f;
+    AddCylinder({ax, yRidge - 0.40f, az}, {ax, yRidge + 0.95f, az}, 0.028f,
+                0.020f, 4, {0.120f, 0.118f, 0.115f}, kMatMetal);
+    for (int k = 0; k < 2; k++)
+      AddBox({ax, yRidge + 0.62f + 0.24f * k, az}, {0.30f, 0.016f, 0.016f},
+             {0.120f, 0.118f, 0.115f}, kMatMetal);
+  }
+  if (pick % 2 == 0) {   // aircon condenser, bracketed ON the wall
+    float cx2 = x + streetX + face * 0.15f;
+    AddBox({cx2, 1.85f, z + d * 0.12f}, {0.20f, 0.17f, 0.28f},
+           {0.165f, 0.160f, 0.155f}, kMatMetal);
+  }
 
   // ---- windows: frame + sill + glazing on the street flank and the gable
   const Vec3 frame{0.320f, 0.300f, 0.270f};
@@ -723,6 +827,81 @@ static void AddHouse(float x, float z, float w, float d, float h, float face) {
               kCeramic, kMatCeramic);
   gDropAnchors.push_back({anchor.x, anchor.y + 0.17f, anchor.z});
 }
+
+// BUILD-P8: PROPERTY LINES. The most Japanese thing about a suburban street is
+// that you never see the neighbours' gardens: every plot is walled off with a
+// concrete block wall under a tiled cap, broken by a gate post now and then,
+// with a hedge behind it. They also give the corridor the mid-ground rhythm
+// the bare verges never had — without them the eye runs straight from the
+// gravel to the house fronts with nothing in between.
+static void AddPropertyLine(float x, float z0, float z1, float mirror) {
+  const Vec3 wall{0.150f, 0.145f, 0.135f};
+  const Vec3 cap{0.190f, 0.176f, 0.158f};
+  float z = z0;
+  int i = 0;
+  while (z < z1) {
+    float seg = 7.0f + 3.0f * (float)((i * 7) % 4) / 4.0f;
+    float h = 1.50f + 0.26f * (float)((i * 5) % 3) / 3.0f;
+    float cz = z + seg * 0.5f;
+    AddBox({x, h * 0.5f, cz}, {0.11f, h * 0.5f, seg * 0.5f}, wall, kMatPaint);
+    AddBox({x, h + 0.045f, cz}, {0.17f, 0.045f, seg * 0.5f}, cap, kMatRoof);
+    if ((i % 3) == 1) {                       // gate post + cap
+      AddBox({x, 1.05f, z}, {0.17f, 1.05f, 0.17f}, cap, kMatPaint);
+      AddBox({x, 2.14f, z}, {0.22f, 0.05f, 0.22f}, cap, kMatRoof);
+    }
+    if ((i % 2) == 0) {                       // hedge behind the wall
+      float hx = x + mirror * (0.95f + 0.55f * (float)((i * 3) % 3) / 3.0f);
+      AddBox({hx, 0.58f, cz}, {0.46f, 0.58f, seg * 0.40f},
+             {0.048f, 0.078f, 0.040f}, kMatLeaf);
+    }
+    z += seg + 0.35f;
+    i++;
+  }
+}
+
+// BUILD-P8: BIRDS ON THE WIRE. Half the reason people photograph these pole
+// lines. Placed through WirePoint() so a bird is always standing ON the
+// sagging cable, never hovering near it.
+static void AddBird(const Vec3 &at, float lean) {
+  const Vec3 feather{0.042f, 0.040f, 0.048f};
+  AddCylinder(at, Vec3Add(at, Vec3{0, 0.115f, 0}), 0.052f, 0.028f, 5, feather,
+              kMatMetal);
+  AddCylinder(Vec3Add(at, Vec3{0, 0.115f, 0}),
+              Vec3Add(at, Vec3{lean * 0.05f, 0.185f, 0.01f}), 0.030f, 0.026f, 5,
+              feather, kMatMetal);
+}
+
+// BUILD-P8: a streetlight on the road side of a pole — arm, lamp head and a
+// glowing lens. Real poles carry these; their glow is one of the few warm
+// accents that reads at dusk against all that orange.
+static void AddStreetLight(const PoleSpec &p, float side) {
+  float armY = p.height - 2.35f;
+  Vec3 a = PoleAxisAt(p, armY);
+  float tipx = a.x + side * 2.15f;
+  AddCylinder({a.x, armY, a.z}, {tipx, armY + 0.30f, a.z}, 0.055f, 0.045f, 6,
+              {0.140f, 0.138f, 0.135f}, kMatMetal);
+  AddBox({tipx + side * 0.12f, armY + 0.26f, a.z}, {0.26f, 0.07f, 0.15f},
+         {0.150f, 0.148f, 0.145f}, kMatMetal);
+  // lens sits just BELOW the housing (which spans armY+0.19..+0.33) instead
+  // of intersecting it
+  AddBox({tipx + side * 0.12f, armY + 0.145f, a.z}, {0.21f, 0.045f, 0.12f},
+         {0.88f, 0.68f, 0.42f}, kMatGlow);
+}
+
+// BUILD-P8: a lit drinks machine by the kerb. Vending machines are lit at
+// dusk in every Japanese street and throw the only cool light in the frame.
+static void AddVendingMachine(float x, float z, float face) {
+  AddBox({x, 0.78f, z}, {0.42f, 0.78f, 0.32f}, {0.185f, 0.150f, 0.120f},
+         kMatMetal);
+  // BUILD-P8: the lit front has to sit ON the cabinet's outer face (0.42 m),
+  // not at 0.33 m where it was buried inside the metal — a hidden emissive
+  // panel is why the machine rendered as nothing at all.
+  AddBox({x + face * 0.46f, 0.80f, z}, {0.03f, 0.62f, 0.26f},
+         {0.88f, 0.93f, 1.00f}, kMatGlow);
+  AddBox({x + face * 0.45f, 0.18f, z}, {0.03f, 0.12f, 0.24f},
+         {0.30f, 0.26f, 0.22f}, kMatMetal);
+}
+
 
 // BUILD-P7: the far treeline. An empty plane running to a bare horizon is the
 // other half of "looks unrealistic" — real suburbs have a ragged band of
@@ -791,6 +970,8 @@ static void AddTreeline() {
                      0.10f * ((i * 7) % 3 - 1), 0.08f * ((i * 5) % 3 - 1)});
   for (const PoleSpec &p : lineA) AddPole(p);
   gLineA = lineA;
+  // BUILD-P8: streetlights on alternate line A poles, reaching over the road
+  for (int i = 0; i < (int)lineA.size(); i += 2) AddStreetLight(lineA[i], 1.0f);
 
   // wires along line A: 3 crossarm conductors + the pole-top wire. BUILD-P2
   // FIX: every span ties INSULATOR TOP to INSULATOR TOP (ArmInsulatorTop /
@@ -802,9 +983,9 @@ static void AddTreeline() {
     float sag = 0.78f + 0.12f * ((i * 3) % 3);
     for (float off : {-1.05f, 0.0f, 1.05f})
       AddWire(ArmInsulatorTop(p, off), ArmInsulatorTop(q, off), sag, 0.028f,
-              14, kCable);
+              14, kCable, kMatCable);
     AddWire(PoleTopInsulatorTop(p), PoleTopInsulatorTop(q), sag * 0.8f, 0.032f,
-            14, kCableOld);
+            14, kCableOld, kMatCable);
   }
 
   // ---- a second, closer line: depth + the layered-tangle feel. BUILD-P2:
@@ -821,9 +1002,9 @@ static void AddTreeline() {
   for (int i = 0; i + 1 < (int)lineB.size(); i++) {
     const PoleSpec &p = lineB[i];
     const PoleSpec &q = lineB[i + 1];
-    for (float off : {-0.85f, 0.85f})
+    for (float off : {-1.05f, 1.05f})
       AddWire(ArmInsulatorTop(p, off), ArmInsulatorTop(q, off), 0.88f, 0.026f,
-              12, kCableOld);
+              12, kCableOld, kMatCable);
   }
 
   // ---- the crossing spans: line B feeds into line A (the tangle). BUILD-P2
@@ -831,8 +1012,8 @@ static void AddTreeline() {
   for (int i = 0; i < 4; i++) {
     const PoleSpec &p = lineB[i];
     const PoleSpec &q = lineA[i + 1];
-    AddWire(ArmInsulatorTop(p, 0.85f), ArmInsulatorTop(q, -1.05f), 1.30f,
-            0.024f, 16, kCable);
+    AddWire(ArmInsulatorTop(p, 1.05f), ArmInsulatorTop(q, -1.05f), 1.30f,
+            0.024f, 16, kCable, kMatCable);
   }
 
   // ---- BUILD-P6/P7: THE SUBURB, built BEFORE the telecom tangle so the drop
@@ -849,6 +1030,12 @@ static void AddTreeline() {
     AddHouse(15.0f + 2.5f * (i % 3), z, 4.8f + 1.5f * ((i * 3) % 3),
              5.4f + 1.1f * ((i * 7) % 3), 3.1f + 1.0f * ((i * 5) % 3), -1.0f);
   }
+  // BUILD-P8: the walled property lines between road and front gardens, plus a
+  // couple of lit vending machines at the kerb.
+  AddPropertyLine(-9.0f, -14.0f, 168.0f, -1.0f);
+  AddPropertyLine(13.0f, -8.0f, 176.0f, 1.0f);
+  AddVendingMachine(-7.4f, 30.0f, 1.0f);
+  AddVendingMachine(11.6f, 96.0f, -1.0f);
   AddTreeline();
 
   // ---- BUILD-P4: THE TELECOM TANGLE. Two bundles per span on line A (one
@@ -860,26 +1047,23 @@ static void AddTreeline() {
   for (int i = 0; i + 1 < (int)lineA.size(); i++) {
     const PoleSpec &p = lineA[i];
     const PoleSpec &q = lineA[i + 1];
-    float telY = p.height - 1.85f;
-    float telYq = q.height - 1.85f;
-    AddTelecomBundle({p.x - 0.70f, telY, p.z}, {q.x - 0.70f, telYq, q.z},
+    AddTelecomBundle(TelecomBracketTop(p, -0.70f), TelecomBracketTop(q, -0.70f),
                      i * 2 + 1, 0.022f, 12, kCable);
-    AddTelecomBundle({p.x + 0.70f, telY, p.z}, {q.x + 0.70f, telYq, q.z},
+    AddTelecomBundle(TelecomBracketTop(p, 0.70f), TelecomBracketTop(q, 0.70f),
                      i * 2 + 2, 0.022f, 12, kCable);
   }
   for (int i = 0; i + 1 < (int)lineB.size(); i++) {
     const PoleSpec &p = lineB[i];
     const PoleSpec &q = lineB[i + 1];
-    AddTelecomBundle({p.x, p.height - 1.85f, p.z}, {q.x, q.height - 1.85f, q.z},
+    AddTelecomBundle(TelecomBracketTop(p, 0.0f), TelecomBracketTop(q, 0.0f),
                      i * 3 + 40, 0.020f, 10, kCableOld);
   }
   // slack cross-line telecom loops B -> A (the messy diagonal drips)
   for (int i = 0; i < 5; i++) {
     const PoleSpec &p = lineB[i];
     const PoleSpec &q = lineA[i + 1];
-    AddTelecomBundle({p.x - 0.35f, p.height - 1.85f, p.z},
-                     {q.x - 0.70f, q.height - 1.85f, q.z}, i * 5 + 77,
-                     0.018f, 14, kCable);
+    AddTelecomBundle(TelecomBracketTop(p, -0.70f), TelecomBracketTop(q, -0.70f),
+                     i * 5 + 77, 0.018f, 14, kCable);
   }
 
   // ---- service drops: from the pole service spool down to the NEAREST house
@@ -902,11 +1086,12 @@ static void AddTreeline() {
       AddWire(ArmInsulatorTop(p, 1.05f), a, 0.48f, 0.020f, 12, kCableOld,
               kMatCable);
     }
-    // junction cans stay mounted on the pole wall
-    AddCylinder({PoleAxisAt(p, 3.05f).x - 0.30f, 3.05f, p.z},
-                {PoleAxisAt(p, 2.45f).x - 0.30f, 2.45f, p.z},
-                0.09f, 0.09f, 8, kMetal, kMatMetal);
-    AddBox({PoleAxisAt(p, 3.10f).x - 0.30f, 3.10f, p.z}, {0.16f, 0.10f, 0.12f},
+    // junction cans stay mounted on the pole wall — BUILD-P8: braced against
+    // the measured trunk radius instead of a fixed 0.30 m offset.
+    Vec3 ja = PoleAxisAt(p, 3.05f);
+    float jr = TrunkRadius(p, 3.05f);
+    AddCylinder({ja.x - jr, 3.05f, ja.z}, {ja.x - jr - 0.10f, 2.45f, ja.z},
+                0.09f, 0.09f, 8, kMetal, kMatMetal);    AddBox({ja.x - jr - 0.06f, 3.10f, ja.z}, {0.16f, 0.10f, 0.12f},
            kMetal, kMatMetal);
   }
 
@@ -1094,7 +1279,7 @@ static void RenderHUD() {
   // build tag: on-screen proof of which scene code the exe runs (stale-build
   // screenshots must be detectable at a glance)
   char line1[128];
-  std::snprintf(line1, sizeof(line1), "FPS: %d   build P7   scene 4: power lines", gFps);
+  std::snprintf(line1, sizeof(line1), "FPS: %d   build P8   scene 4: power lines", gFps);
   RenderText(16.0f, 16.0f, line1);
 }
 
