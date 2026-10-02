@@ -1320,9 +1320,29 @@ static void AddTreeline() {
     // the measured trunk radius instead of a fixed 0.30 m offset.
     Vec3 ja = PoleAxisAt(p, 3.05f);
     float jr = TrunkRadius(p, 3.05f);
-    AddCylinder({ja.x - jr, 3.05f, ja.z}, {ja.x - jr - 0.10f, 2.45f, ja.z},
-                0.09f, 0.09f, 8, kMetal, kMatMetal);    AddBox({ja.x - jr - 0.06f, 3.10f, ja.z}, {0.16f, 0.10f, 0.12f},
-           kMetal, kMatMetal);
+    AddBox({ja.x - jr - 0.06f, 3.10f, ja.z}, {0.16f, 0.10f, 0.12f}, kMetal,
+           kMatMetal);
+    // BUILD-P10: the drop stub USED TO JUST STOP. It left the housing at 3.05 m,
+    // angled down and out, and ended at 2.45 m in clear air — a 0.6 m metal
+    // cylinder hanging off a pole with nothing on the end of it, which is
+    // exactly what reads as a flying cylinder at a glance. A real service drop
+    // ends in a weatherhead: a boot where the cable enters, and the cable
+    // itself running away to a termination. Here it runs to the nearest house
+    // eave bracket when one is in range, and otherwise into a drip loop back
+    // onto the pole — which is what an unused drop actually does.
+    Vec3 stubEnd{ja.x - jr - 0.10f, 2.45f, ja.z};
+    AddCylinder({ja.x - jr, 3.05f, ja.z}, stubEnd, 0.09f, 0.09f, 8, kMetal,
+                kMatMetal);
+    AddCylinder(stubEnd, {stubEnd.x - 0.04f, 2.30f, stubEnd.z}, 0.075f, 0.105f,
+                8, kMetal, kMatMetal);   // weatherhead boot
+    if (best >= 0) {
+      AddWire({stubEnd.x - 0.04f, 2.24f, stubEnd.z}, gDropAnchors[best], 0.42f,
+              0.016f, 8, kCableOld, kMatCable);
+    } else {
+      AddWire({stubEnd.x - 0.04f, 2.24f, stubEnd.z},
+              {ja.x - jr - 0.02f, 2.86f, ja.z}, 0.16f, 0.016f, 8, kCableOld,
+              kMatCable);
+    }
   }
 
   // ---- BUILD-P7: THE ROAD, REBUILT. Build P6 laid it out in three pieces
