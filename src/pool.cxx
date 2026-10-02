@@ -751,14 +751,15 @@ static void SpawnRing(int pot, float x, float z, float strength) {
   }
 }
 
-// BUILD-D4 SPLASH STRATEGY — "steep Worthington":
-//  * the crown is a nearly-VERTICAL sheet: radius ≈ pot footprint (never
-//    wider than ~1.7x pot radius), height ramps to ~1.9x pot radius, so the
-//    sheet points UP like high-speed footage of a stone entering water
+// BUILD-P2 BIGGER CROWNS: the user asked for larger, more real splashes.
+//  * the crown is a nearly-VERTICAL sheet that RISES: radius ≈ 1.3x the pot
+//    footprint (never a wide dome), height ramps to ~2.5x pot radius (cap
+//    raised 2.8 -> 3.6 m) so the sheet towers over the pot
+//  * the lip FLARES outward at the top (real Worthington profile: cavity
+//    necks in, lip unfurls) — see splash_vert.glsl
 //  * the film tears LATE (tear weights shifted to the last third of life)
-//  * ejecta goes UP, not out: lateral velocity is 1/3 of the old value and
-//    air drag bleeds it back within ~0.4 m of the rim — no more spray flying
-//    10-20 m sideways (that wide halo WAS the blue bank across the horizon)
+//  * ejecta goes UP, not out: lateral velocity stays bounded and air drag
+//    bleeds it back near the rim — no spray halo across the pool
 //  * the Rayleigh jet stays a slender vertical column near the impact axis
 static void SpawnSplash(int pot, float x, float z, float impactSpeed, float scale) {
   const bool waveTwo = pot >= 9;
@@ -772,12 +773,13 @@ static void SpawnSplash(int pot, float x, float z, float impactSpeed, float scal
   crown.center = {x, kWaterLevel, z};
   crown.age = 0.0f;
   crown.scale = scale;
-  crown.radius = 0.52f * scale;   // ≈ the pot's own footprint: the sheet hugs
-                                  // the cavity rim and RISES from there
-  crown.height = std::fmin((0.65f + 0.95f * s) * scale * (waveTwo ? 1.10f : 1.0f),
-                           2.8f); // steep cap: height ≈ 2x+ the radius — the
-                                  // water points UP (reference crowns are tall
-                                  // narrow sheets, never wide domes)
+  crown.radius = 0.68f * scale;   // ≈ 1.3x the pot's footprint: the sheet
+                                  // hugs the cavity rim and RISES from there
+  crown.height = std::fmin((0.85f + 1.20f * s) * scale * (waveTwo ? 1.10f : 1.0f),
+                           3.6f); // steep cap: height ≈ 2.5x the radius — the
+                                  // water points UP and TOWERS (reference
+                                  // crowns are tall narrow sheets, never wide
+                                  // domes)
   crown.spike = std::fmin(1.0f, 0.45f + 0.4f * s);
   crown.life = waveTwo ? 1.1f : 1.0f;
 
@@ -785,7 +787,7 @@ static void SpawnSplash(int pot, float x, float z, float impactSpeed, float scal
   // Mostly vertical launch with a small inward-biased lateral bleed so the
   // spray falls back near the crown instead of painting a halo across the
   // pool (the literal source of the horizon bank on build D3).
-  int n = (38 + (int)(18.0f * s)) * (waveTwo ? 2 : 1);
+  int n = (46 + (int)(20.0f * s)) * (waveTwo ? 2 : 1);
   for (int i = 0; i < n; i++) {
     // fixed pseudo-random spread (deterministic across runs like the rest
     // of the bench)
@@ -801,9 +803,9 @@ static void SpawnSplash(int pot, float x, float z, float impactSpeed, float scal
     // STEEP ejecta: strong vertical kick, small lateral component that air
     // drag eats quickly (see the drag term in UpdatePhysics)
     float out = (0.45f + 0.80f * s * (0.30f + 0.70f * r01)) * scale;
-    float up = 3.2f + 4.6f * s * r01;
+    float up = 3.6f + 5.2f * s * r01;      // taller crowns throw harder
     d.vel = {std::cos(a) * out, up, std::sin(a) * out};
-    d.radius = (0.030f + 0.038f * ((i * 13) % 7) / 7.0f) * scale;
+    d.radius = (0.036f + 0.044f * ((i * 13) % 7) / 7.0f) * scale;
     if (fragment) d.radius *= 1.5f; // torn sheet chunk, no cloud ballooning
     d.maxLife = d.life = (0.75f + 0.45f * ((i * 29) % 5) / 5.0f) *
                          (waveTwo ? 1.10f : 1.0f);
@@ -817,7 +819,7 @@ static void SpawnSplash(int pot, float x, float z, float impactSpeed, float scal
   jet.center = {x, kWaterLevel, z};
   jet.velY = 0.0f;      // delayed: starts moving when the crown collapses
   jet.height = 0.0f;
-  jet.radius = (0.09f + 0.05f * s) * scale;
+  jet.radius = (0.12f + 0.06f * s) * scale;
   jet.life = 0.0f;
 
   // ---- BUILD-D8: the cavity entrains air — a bubble plume rises under
@@ -962,26 +964,26 @@ static void UpdatePhysicsStep(double now, float dt) {
     // --- crown: STEEP sheet, near-zero radial growth, late collapse ---
     if (crown.active) {
       crown.age += dt;
-      // BUILD-D4: the sheet stays at the pot's footprint — it RISES, it does
-      // not spread. Only a tiny 0.52 -> 0.60 relaxation as the lip unfurls
-      // (radial growth was THE cloud driver on every earlier build).
+      // BUILD-P2: the sheet hugs the pot's footprint but breathes outward
+      // a little further as the lip unfurls (0.68 -> 0.82 of scale)
       float t = crown.age;
-      crown.radius = std::fmin(0.52f + 0.14f * t, 0.60f) * crown.scale;
-      crown.height *= 1.0f - std::fmin(1.05f * dt, 0.9f);   // the lip falls back
+      crown.radius = std::fmin(0.68f + 0.20f * t, 0.82f) * crown.scale;
+      crown.height *= 1.0f - std::fmin(0.92f * dt, 0.9f);   // the lip falls back
       crown.spike *= 1.0f - std::fmin(0.55f * dt, 0.9f);
-      crown.life = 1.0f - t / 1.05f;
+      crown.life = 1.0f - t / 1.18f;      // bigger crowns linger a beat longer
       if (crown.life <= 0.0f || crown.height < 0.04f) {
         crown.active = false;
         // jet launches as the crown collapses — a real Rayleigh jet fires on
         // the cavity's inertial collapse; bigger pots cavitate deeper and
         // punch a taller column.
         float s = gJetPunch[i];
-        jet.velY = 4.6f + 2.0f * s;
+        jet.velY = 5.6f + 2.4f * s;   // taller crowns cavitate deeper: a
+                                      // stronger Rayleigh punch
         // slender Rayleigh column HUGGING the impact axis (BUILD-D4: the old
         // +0.9/+0.4 lateral offset threw every jet away from its pot,
         // widening the far-field cloud)
         jet.radius = std::fmin(jet.radius * (0.85f + 0.5f * s),
-                               0.055f * crown.scale + 0.015f);
+                               0.075f * crown.scale + 0.020f);
       }
     }
 
