@@ -1,18 +1,31 @@
 #version 330 core
-// SCENE 4 (POWER LINES): the sky. A warm orange late-afternoon gradient —
-// deep amber at the zenith through pale peach into a hazy cream horizon —
-// with soft white cumulus drifting slowly, and a LOW SUN: a tight veiled
-// disc sitting right on the haze band (wires and poles cross it — the
-// serial-experiments silhouette money shot), not a diffuse glow.
-// Fully analytic: the clouds are smooth value noise carved into puffy cells,
-// scrolled at two different speeds (parallax depth). No textures.
+// SCENE 4 (LAINBENCH): the sky.
 //
-// BUILD-P7: the dome is drawn LAST, depth-tested, so it only shades pixels
-// the world did not cover (about half the frame). That bought the budget for
-// a better cloud: the old projection dir.xz/h exploded as h -> 0 and smeared
-// the noise into horizontal streaks along the horizon — the single ugliest
-// thing in build P6. The deck is now clamped, and the last few degrees above
-// the horizon are left to the haze, which is what actually happens at dusk.
+// BUILD-P10 — the old dome was a three-stop gradient (amber zenith, peach
+// middle, cream horizon) with a soft fbm cloud smeared over it. It was the
+// most obviously synthetic part of the frame: a real dusk sky is not a colour
+// ramp, it is an ATMOSPHERE, and the ramp has no sun in it.
+//
+// This version is a single-scattering analytic atmosphere:
+//   * Rayleigh scattering (molecular, 1/lambda^4) — the blue that survives
+//     overhead and dies first toward the horizon, which is WHY a low sun makes
+//     the horizon orange rather than the zenith;
+//   * Mie scattering (aerosol, forward-peaked Henyey-Greenstein, g = 0.76) —
+//     the aureole around the sun, and the cream haze band the corridor
+//     silhouettes against;
+//   * the sun's own extinction along ITS path, so as uSunDir sinks through
+//     the run the light reddens on its own instead of a keyframed palette;
+//   * a small multiple-scattering floor, without which a single-scatter model
+//     at sunset predicts a monochrome red sky with no blue anywhere.
+// The optical depth along a ray is its air mass, 1/(h + 0.14), so the whole
+// model is a few dozen flops — affordable on a pre-SSE CPU, and the reason it
+// can share the frame with the object pass.
+//
+// The clouds are still fully analytic (no textures): three decks at different
+// scales and drift rates for parallax, a density term eroded by a finer
+// octave so the edges billow instead of fading, a sun-lit crown, a warm
+// shadowed belly, and a silver lining where the cloud is thin AND the sun is
+// behind it — the single most recognisable thing about a backlit cumulus.
 
 in vec3 vDir;                 // world position on the dome (radius 400)
 
@@ -43,77 +56,167 @@ float vnoise(vec2 p) {
 float fbm2(vec2 p) {
     return vnoise(p) * 0.66 + vnoise(p * 2.17 + 19.3) * 0.34;
 }
+float fbm3(vec2 p) {
+    return vnoise(p) * 0.54 + vnoise(p * 2.13 + 11.7) * 0.29
+         + vnoise(p * 4.31 + 41.2) * 0.17;
+}
+
+// ---- scattering coefficients ----------------------------------------------
+// Rayleigh in RGB: the real 5.8 : 13.5 : 33.1 x 1e-6 m^-1 ratio, i.e. the
+// 1 : 2.3 : 5.7 that puts blue in the sky. Scaled to a convenient magnitude.
+const vec3  kBetaR = vec3(0.058, 0.135, 0.331);
+// Mie is the aerosol term, and it is GREY: it scatters every wavelength about
+// equally, so wherever it is strong it DESATURATES the sky. That is why kBetaM
+// is deliberately well below the Rayleigh figure for a hazy city air — the
+// real aureole hugs the sun within ~10 degrees and the rest of the dome stays
+// saturated, which is exactly what a high clean-air sunset looks like. The
+// first pass of this shader used 0.0245 with a 1.25 gain and the whole sky
+// came back cream: the aureole had swallowed the entire frame.
+const float kBetaM = 0.0125;
+const float kSunI  = 330.0;       // scaled solar radiance
+const float kSunPath = 8.0;       // sun-path optical depth multiplier
+const float kRayGain = 3.20;      // single-scatter Rayleigh gain
+
+// One analytic atmosphere evaluation. Also used by the object shader (wet road
+// and window reflections mirror the real sky, not a guess at it) — the copy in
+// object_frag.glsl is kept byte-identical on purpose, exactly like the pool
+// scene's shared checker.
+vec3 atmosphere(vec3 dir, vec3 sun) {
+    float h = dir.y;
+    float mu = dot(dir, sun);
+    float mView = 1.0 / (max(h, 0.0) + 0.14);
+    float mSun  = 1.0 / (max(sun.y, 0.0) + 0.14);
+
+    // extinction along the view ray (red survives the long path, blue does not)
+    vec3 Tview = exp(-(kBetaR + vec3(kBetaM)) * mView * 0.92);
+    // extinction along the SUN's path: this is what reddens the light as the
+    // sun sinks, and it is the whole reason a sunset goes orange by itself
+    vec3 Tsun = exp(-kBetaR * mSun * kSunPath - vec3(kBetaM * mSun * 1.15));
+
+    float phR = 0.0596831 * (1.0 + mu * mu);              // 3/(16pi)(1+mu^2)
+    const float g = 0.76, gg = g * g;
+    float phM = 0.0795775 * (1.0 - gg)
+              / max(pow(1.0 + gg - 2.0 * g * mu, 1.5), 1e-3);   // HG, g=0.76
+
+    vec3 single = kBetaR * phR * kRayGain * Tview * Tsun;
+    vec3 mie    = vec3(kBetaM * phM * 0.25) * Tview * Tsun;
+    // MULTIPLE SCATTERING. A single-scatter model has no blue anywhere at
+    // sunset, because every blue photon the sun sends up is scattered away on
+    // the way in. Real upper skies are blue purely from second- and
+    // third-order scattering, so this is where the blue at altitude comes
+    // from, ramped in with height rather than present at the horizon.
+    float multiK = 0.012 + 0.30 * smoothstep(0.45, 1.00, h);
+    vec3 multi  = kBetaR * phR * 0.80 * Tview * multiK;
+    return (single + mie + multi) * kSunI;
+}
+
+// Filmic shoulder + gamma, matching the object pass. Output is
+// DISPLAY-REFERRED, because the object shader gamma-encodes too and the two
+// passes have to agree or the corridor silhouettes against the wrong sky.
+vec3 encodeSky(vec3 hdr) {
+    // ACES (Narkowicz) — rolls the bright horizon and the sun aureole off
+    // instead of clipping them into flat paper
+    const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
+    vec3 x = clamp(hdr, 0.0, 8.0);
+    x = clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+    return pow(x, vec3(1.0 / 2.2));
+}
 
 void main() {
     vec3 dir = normalize(vDir - uEyePos);     // ray direction from the camera
     float h = dir.y;                          // -1 .. 1
+    vec3 sun = normalize(uSunDir);
+    float mu = dot(dir, sun);
 
-    // ---- the orange gradient ------------------------------------------------
-    // zenith amber -> peach -> pale cream horizon. Below the horizon the
-    // gradient keeps darkening (the ground quad covers most of it anyway).
-    vec3 zen   = vec3(0.80, 0.31, 0.07);
-    vec3 mid   = vec3(0.97, 0.58, 0.24);
-    vec3 horiz = vec3(1.00, 0.84, 0.60);
+    // ---- the atmosphere ----------------------------------------------------
     vec3 sky;
-    if (h >= 0.0) {
-        float t = pow(clamp(h, 0.0, 1.0), 0.55);        // wide horizon band
-        sky = mix(mix(horiz, mid, smoothstep(0.0, 0.35, t)),
-                  zen, smoothstep(0.30, 0.95, t));
+    if (h >= -0.02) {
+        sky = atmosphere(vec3(dir.x, max(h, 0.0), dir.z), sun);
+        // AIRLIGHT BAND. The single-scatter term has to fade OUT toward the
+        // horizon (the view extinction kills it), but a real sunset horizon is
+        // the BRIGHTEST part of the sky: that light has bounced so many times
+        // it is effectively an isotropic glow, which no one-scatter model
+        // contains. This band is that glow, warm and stronger toward the sun.
+        // It is also the surface the corridor silhouettes against, so its
+        // colour and level are the two numbers the whole scene reads from.
+        float hz = exp(-max(h, 0.0) * 7.0);
+        sky += (vec3(0.30, 0.145, 0.055)
+              + vec3(0.34, 0.20, 0.085) * pow(max(mu, 0.0), 3.0)) * hz;
     } else {
-        sky = mix(horiz, vec3(0.42, 0.22, 0.10), smoothstep(0.0, -0.35, h));
+        // below the horizon the dome is only ever seen past the edge of the
+        // ground quad: dark warm ground haze, matched to the aerial
+        // perspective the object pass mixes in.
+        sky = atmosphere(vec3(dir.x, 0.015, dir.z), sun) * 0.42
+            + vec3(0.030, 0.018, 0.010);
     }
 
-    // ---- veiled sun: a TIGHT LOW DISC on the haze band. The camera dollies
-    // straight toward it, so poles and wires cross the disc as silhouettes.
-    // BUILD-P6 MOVING SUN: uSunDir drifts in azimuth and sinks over the run
-    // (the C++ side advances it); disc, bloom and glow all follow.
-    float sunAmt = max(dot(dir, normalize(uSunDir)), 0.0);
-    float disc = smoothstep(0.9996, 0.99985, sunAmt);           // ~1.6 deg veil
-    sky += vec3(1.0, 0.86, 0.62) * disc * 0.44;
-    sky += vec3(1.0, 0.80, 0.52) * pow(sunAmt, 30.0) * 0.20;   // tight core
-    sky += vec3(1.0, 0.70, 0.38) * pow(sunAmt, 7.0) * 0.055;   // wide halo
-
-    // ---- clouds --------------------------------------------------------------
-    // Project the ray onto a virtual cloud deck (like the ocean scene's
-    // shadows): p = dir.xz / dir.y gives a natural perspective squashing.
-    // BUILD-P7: the deck height is CLAMPED (hh) — dividing by a near-zero h
-    // is what smeared the old clouds into horizon streaks.
-    if (h > 0.035) {
-        float hh = max(h, 0.085);
-        vec2 cp = dir.xz / hh * 0.32;
-        vec2 drift = vec2(uTime * 0.006, -uTime * 0.0023);  // wind flows up-
+    // ---- clouds ------------------------------------------------------------
+    // Project the ray onto a virtual deck: p = dir.xz / dir.y gives the
+    // perspective squash for free. The deck height is CLAMPED — dividing by a
+    // near-zero dir.y is what smeared the build-P6 clouds into horizon
+    // streaks — and the last few degrees are left to the haze, which is what
+    // actually happens at dusk.
+    float cover = 0.0;
+    vec3 cloudCol = vec3(0.0);
+    if (h > 0.030) {
+        float hh = max(h, 0.075);
+        vec2 cp = dir.xz / hh * 0.30;
+        vec2 drift = vec2(uTime * 0.0060, -uTime * 0.0023);  // wind flows up-
                                                             // corridor, like
                                                             // the wires lean
-        float n = fbm2(cp * 0.55 + drift);
-        float n2 = fbm2(cp * 1.25 - drift * 1.7 + 31.0);   // second layer
-        // carve puffy cells: a tight smooth band of the fbm, the second
-        // layer chewing holes in it so the edges billow
-        float cells = smoothstep(0.44, 0.63, n);
-        cells *= 0.72 + 0.28 * smoothstep(0.34, 0.62, n2);
-        // the haze eats the last few degrees above the horizon: that is the
-        // whole reason the old deck streaked, and leaving it clear reads
-        // correctly (distant cloud dissolves into the band)
-        float horizFade = smoothstep(0.040, 0.28, h);
-        float zenFade   = 1.0 - smoothstep(0.60, 0.98, h);
-        float cover = cells * horizFade * zenFade;
+        float base = fbm3(cp * 0.50 + drift);
+        // a finer deck at a different speed ERODES the base: cloud edges are
+        // billowed by the shear layer above them, they do not fade evenly
+        float det  = fbm2(cp * 2.70 - drift * 2.4 + 31.0);
+        // density, then threshold: this is what gives a cloud a hard-ish sunlit
+        // crown and a soft dissolving skirt instead of one smooth blob
+        float dens = base - 0.22 * (det - 0.5);
+        // BUILD-P10 TUNING: coverage is deliberately sparse. The first pass
+        // thresholded at 0.505 and put a continuous sheet of cloud across the
+        // whole top of the frame — a featureless pale band that read as fog,
+        // and it is exactly what the old hand-drawn version of this sky did
+        // NOT do: it had open orange sky right up to the frame edge.
+        cover = smoothstep(0.620, 0.780, dens) * 0.94;
+        cover *= 0.80 + 0.20 * smoothstep(0.40, 0.66, det);
+        // the haze eats the last few degrees above the horizon
+        cover *= smoothstep(0.035, 0.26, h);
+        cover *= 1.0 - smoothstep(0.62, 0.99, h);        // thinner at zenith
 
-        // WHITE tops (HDR >1: clips to 255 through the output — the reference
-        // look is pure white cumulus on orange), warm shadowed bellies under
-        // them (light from the low sun)
-        float bell = smoothstep(0.62, 0.46, n) * cover;
-        vec3 cloudCol = mix(vec3(1.10, 1.04, 0.95), vec3(0.90, 0.54, 0.30),
-                            bell * 0.90);
-        sky = mix(sky, cloudCol, clamp(cover * 1.20, 0.0, 1.0));
+        // LIGHT the cloud instead of picking two colours: a sunlit crown, a
+        // warm shadowed belly (light from BELOW is the ground, not the sky),
+        // and a silver lining wherever the cloud is thin and the sun behind it.
+        // The crown is PINK-gold, not white: at this sun elevation the tops are
+        // lit by light that has already crossed the whole atmosphere, so a
+        // neutral-white cumulus is the same mistake as a neutral-white sky.
+        vec3 crown = vec3(1.25, 1.02, 0.78);
+        vec3 belly = vec3(0.30, 0.155, 0.130);
+        float lift = pow(clamp(cover, 0.0, 1.0), 0.55);
+        cloudCol = mix(belly, crown, lift);
+        float silver = pow(max(mu, 0.0), 14.0) * (1.0 - cover) * 1.35;
+        cloudCol += vec3(1.00, 0.72, 0.42) * silver;
+        // a touch of sky in the thin skirt so the cloud does not read as paint
+        cloudCol += vec3(0.20, 0.13, 0.10) * (1.0 - lift) * max(mu, 0.0);
     }
 
-    // horizon haze band: a bright cream strip right at eye level sells the
-    // heavy late-afternoon atmosphere the wires silhouette against
-    float band = exp(-abs(h) * 26.0);
-    sky += vec3(1.0, 0.88, 0.66) * band * 0.10;
+    // ---- the sun: a TIGHT disc with limb darkening, plus the aureole the
+    // atmosphere term already produced around it -----------------------------
+    // angular distance without acos: 1 - cos(d) ~ d^2/2, so d = sqrt(2(1-mu))
+    float d2 = 2.0 * (1.0 - mu);
+    float R2 = 0.0026;                                    // ~0.66 deg radius
+    float disc = smoothstep(R2 * 1.10, R2 * 0.82, d2);
+    float limb = 0.55 + 0.45 * sqrt(clamp(1.0 - d2 / (R2 * 1.05), 0.0, 1.0));
+    // the disc is seen THROUGH the atmosphere: it is dimmed and reddened by
+    // exactly the same extinction the sky is, so it sets on the haze band
+    // instead of punching a white hole in it
+    vec3 sunTrans = exp(-kBetaR * (1.0 / (max(sun.y, 0.0) + 0.14)) * kSunPath
+                        - vec3(kBetaM * 1.15));
+    sky += vec3(1.0, 0.90, 0.74) * sunTrans * disc * limb * 1.05;
+
+    sky = mix(sky, cloudCol, clamp(cover, 0.0, 1.0));
 
     // subtle dither: kills gradient banding on smooth drivers
     float dith = vhash(dir.xy * 1913.7 + fract(uTime) * 17.0);
     sky += (dith - 0.5) * (1.5 / 255.0);
 
-    fragColor = vec4(sky, 1.0);
+    fragColor = vec4(encodeSky(sky), 1.0);
 }

@@ -46,6 +46,12 @@
 #include <GL/glew.h>
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_opengl.h>
+// SDL 2.0.5 renamed SDL_GL_MULTISAMPLESAMPLES to SDL_GL_SAMPLES (same enum
+// value, 14). Accept either spelling so the MSAA request still builds against
+// the older SDL2 headers some of these static builds ship.
+#ifndef SDL_GL_SAMPLES
+#define SDL_GL_SAMPLES SDL_GL_MULTISAMPLESAMPLES
+#endif
 
 #include "../lib/asset_path.hxx"
 #include "font_atlas.hxx" // shared HUD font data and atlas layout
@@ -307,6 +313,8 @@ static const float kMatGlow = 13.0f;     // emissive: lit signs at dusk
 // zinc spangle, rain-washed streaks, rust blooming at the foot and a much
 // sharper specular than paint.
 static const float kMatSteel = 14.0f;
+// BUILD-P10: cast concrete kerb (must match kMatKerb in object_frag.glsl)
+static const float kMatKerb = 15.0f;
 
 static const Vec3 kWoodDark{0.165f, 0.115f, 0.085f};   // creosote (treeline)
 static const Vec3 kWoodOld{0.230f, 0.180f, 0.140f};   // weathered timber
@@ -332,6 +340,9 @@ static const float kRoadHalf = 2.7f;    // 5.4 m carriageway
 static const float kRoadY = 0.030f;
 static const float kPaintY = 0.050f;
 static const float kShadowY = 0.075f;
+// BUILD-P10: the kerb stands 16 cm proud of the carriageway, top at kKerbTopY,
+// and its gutter face carries the standing water the road shader reflects.
+static const float kKerbTopY = 0.190f;
 
 static void PushVert(const Vec3 &p, const Vec3 &n, const Vec3 &c,
                      float mat = kMatPaint, float alpha = 1.0f) {
@@ -810,12 +821,25 @@ static void AddPole(const PoleSpec &p) {
   // poles, deterministic), now with a bolted lid seam so they read as steel
   // enclosures rather than pipes
   if (((int(p.z * 7.0f)) % 3) == 0) {
-    AddCylinder({base.x + 0.20f, 3.9f, base.z}, {base.x + 0.20f, 4.5f, base.z},
-                0.11f, 0.11f, 8, kMetal, kMatMetal);
-    AddCylinder({base.x + 0.20f, 4.36f, base.z}, {base.x + 0.20f, 4.40f,
-                base.z}, 0.125f, 0.125f, 8, kSteelArm, kMatSteel);
-    AddBox({base.x + 0.20f, 4.06f, base.z}, {0.055f, 0.045f, 0.115f},
-           kSteelArm, kMatSteel);
+    // BUILD-P9: this can was pinned to base.x/base.z — the pole's GROUND
+    // position — and to a flat +0.20 m standoff. Both are wrong on a leaning,
+    // tapering shaft: the enclosure slid sideways off the side of the pole it
+    // is bolted to (up to lean * 4.2/height ~ 8 cm) and its lid seam and label
+    // block floated with it, which is exactly what a "flying cylinder" is.
+    // Measure off the LEANED axis and off TrunkRadius at the height it is
+    // mounted, embed it 3 cm into the shaft, and hang it on two flat straps
+    // that visibly reach back to the wood.
+    Vec3 ca = PoleAxisAt(p, 3.9f);
+    float cr = TrunkRadius(p, 3.9f);
+    float cx = ca.x + cr + 0.075f;
+    for (float by : {3.99f, 4.41f})
+      AddBox({ca.x + cr * 0.5f, by, ca.z}, {0.075f, 0.030f, 0.075f}, kSteelArm,
+             kMatSteel);
+    AddCylinder({cx, 3.9f, ca.z}, {cx, 4.5f, ca.z}, 0.11f, 0.11f, 8, kMetal,
+                kMatMetal);
+    AddCylinder({cx, 4.36f, ca.z}, {cx, 4.40f, ca.z}, 0.125f, 0.125f, 8,
+                kSteelArm, kMatSteel);
+    AddBox({cx, 4.06f, ca.z}, {0.055f, 0.045f, 0.115f}, kSteelArm, kMatSteel);
   }
 
   if (p.transformer) {
@@ -1336,6 +1360,19 @@ static void AddTreeline() {
       gIdx.push_back(es); gIdx.push_back(es + 1); gIdx.push_back(es + 2);
       gIdx.push_back(es); gIdx.push_back(es + 2); gIdx.push_back(es + 3);
     }
+    // BUILD-P10: CAST KERBS. A road that meets the ground in a straight line is
+    // the loudest non-photographic tell in any street shot — there is nothing
+    // in it to catch light, nothing to cast a shadow, and the eye reads the
+    // carriageway as a decal. The kerb is 0.32 m wide, 16 cm proud, and gets
+    // its own material so the shader can put aggregate in the concrete and
+    // standing water in the gutter beside it.
+    for (int e = 0; e < 2; e++) {
+      float sgn = e ? 1.0f : -1.0f;
+      float xc = (e ? kRoadX + kRoadHalf : kRoadX - kRoadHalf) + sgn * 0.16f;
+      AddBox({xc, kKerbTopY * 0.5f, (z0 + z1) * 0.5f}, {0.16f, kKerbTopY * 0.5f,
+             (z1 - z0) * 0.5f},
+             {0.245f, 0.238f, 0.225f}, kMatKerb);
+    }
     // centre dashes: 3 m paint, 5 m gap
     for (float z = -60.0f; z < 400.0f; z += 8.0f) {
       unsigned int ds = (unsigned int)gVerts.size();
@@ -1485,7 +1522,7 @@ static void RenderHUD() {
   // build tag: on-screen proof of which scene code the exe runs (stale-build
   // screenshots must be detectable at a glance)
   char line1[128];
-  std::snprintf(line1, sizeof(line1), "FPS: %d   build P9   scene 4: LainBench", gFps);
+  std::snprintf(line1, sizeof(line1), "FPS: %d   build P10   scene 4: LainBench", gFps);
   RenderText(16.0f, 16.0f, line1);
 }
 
@@ -1918,20 +1955,37 @@ int RunPoleScene(bool *gaveUpOut) {
     winW = gWindowWidthOverride;
     winH = (gWindowWidthOverride * HEIGHT + WIDTH / 2) / WIDTH;
   }
+  gWindowWidth = winW;
+  gWindowHeight = winH;
 
-  gWindow = SDL_CreateWindow(gName, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
-                             winW, winH,
-                             SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
-  if (gWindowWidthOverride > 0) {
-    gWindowWidth = winW;
-    gWindowHeight = winH;
-    glViewport(0, 0, winW, winH);
+  // BUILD-P10: 4x MULTISAMPLE. Nothing else in this pass moves the image closer
+  // to a photograph. The frame is a tangle of 3-4 cm cylinders crossing a
+  // bright sky: without coverage antialiasing every wire is a hard stair-step
+  // and the whole corridor reads as vector art. MSAA fixes exactly that and
+  // costs nothing per fragment on any driver from the GMA 950 up, because it
+  // runs at sample rate, not pixel rate.
+  // Safety: a driver that cannot do MSAA is allowed to fail context creation,
+  // so the whole window is rebuilt with the attributes off rather than
+  // dropping the scene. The result is printed so the active mode is never a
+  // guess.
+  bool msaa = true;
+  for (int attempt = 0; attempt < 2; attempt++) {
+    SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, msaa ? 1 : 0);
+    SDL_GL_SetAttribute(SDL_GL_SAMPLES, msaa ? 4 : 0);
+    gWindow = SDL_CreateWindow(gName, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
+                               winW, winH,
+                               SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
+    if (!gWindow) {
+      std::fprintf(stderr, "Window could not be created! SDL_Error: %s\n", SDL_GetError());
+      return EXIT_FAILURE;
+    }
+    gContext = SDL_GL_CreateContext(gWindow);
+    if (gContext) break;
+    // this driver refused the multisample request: tear it down and go plain
+    SDL_DestroyWindow(gWindow);
+    gWindow = nullptr;
+    msaa = false;
   }
-  if (!gWindow) {
-    std::fprintf(stderr, "Window could not be created! SDL_Error: %s\n", SDL_GetError());
-    return EXIT_FAILURE;
-  }
-  gContext = SDL_GL_CreateContext(gWindow);
   if (!gContext) {
     std::printf("Power lines scene: OpenGL 3.3 core context unavailable — skipping this scene\n");
     std::fflush(stdout);
@@ -1939,6 +1993,10 @@ int RunPoleScene(bool *gaveUpOut) {
     if (gaveUpOut) *gaveUpOut = true;
     return 1;
   }
+  glViewport(0, 0, gWindowWidth, gWindowHeight);
+  int samples = 0;
+  SDL_GL_GetAttribute(SDL_GL_SAMPLES, &samples);
+  std::printf("Antialiasing: %dx MSAA%s\n", samples, samples > 1 ? "" : " (unavailable)");
   SDL_GL_SetSwapInterval(0);
 
   if (glewInit() != GLEW_OK) {

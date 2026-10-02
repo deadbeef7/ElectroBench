@@ -8,8 +8,8 @@ It ships **one** executable that contains **all four** scenes — no second bina
 |---|---|---|
 | **ElectroBench** (the OG) | OpenGL 2.1 / GLSL 1.2, fixed-function pipeline | **110 UZIs** on a shadow-mapped concrete floor, lit by a warm sun |
 | **TideBench** (scene 2) | OpenGL 3.3 core, pixel-shader workloads | An ocean under volumetric clouds (3DMark2001 SE "Nature" recreation) |
-| **PoolBench** (scene 3) | OpenGL 3.3 core, analytic shaders | A white-and-red checkerboard-sky pool room with a hidden light and two waves of falling, splashing teapots (18 total) |
-| **LainBench** (scene 4) | OpenGL 3.3 core, analytic shaders | A Lain-style power-line corridor at amber dusk: 21 galvanized STEEL utility poles (step bolts, number plates, guy wires into buried anchors, cut-out fuses, transformers), six tiers of sagging catenary wire per bay tied insulator-top to insulator-top and down to house eave brackets, alpha-blended swinging shadows, an asphalt road between the pole lines, suburban houses with lit windows, a far treeline, drifting white clouds |
+| **PoolBench** (scene 3) | OpenGL 3.3 core, analytic shaders | A white-and-red checkerboard-sky pool room lit by a visible luminous ceiling panel (with its own reflection lying down the water), grouted tiles, projected caustics and two waves of falling, splashing teapots (18 total) |
+| **LainBench** (scene 4) | OpenGL 3.3 core, analytic shaders | A Lain-style power-line corridor at amber dusk under a **physically-based atmosphere** (Rayleigh + Mie, limb-darkened sun disc, wind-blown cumulus): 21 galvanized STEEL utility poles (step bolts, number plates, guy wires into buried anchors, cut-out fuses, transformers), six tiers of sagging catenary wire per bay tied insulator-top to insulator-top and down to house eave brackets, alpha-blended swinging shadows, a **damp asphalt road with cast concrete kerbs that mirrors the sunset**, suburban houses with lit windows, a far treeline. 4x MSAA |
 
 
 
@@ -27,7 +27,7 @@ The TideBench ocean scene — long cloud banks with sunward silver linings, two 
 
 ![ElectroBench TideBench scene](docs/screenshots/ps14_dusk_t36.png)
 
-The PoolBench pool room — an infinite white-and-red checkerboard sky mirrored on open water, lit only by a hidden light, with two waves of teapots raining down in scattered positions, splashing on impact, then parking right where they fell (no bobbing, no righting — they stay put):
+The PoolBench pool room — an infinite white-and-red checkerboard sky mirrored on open water, lit by a visible luminous ceiling panel whose reflection lies stretched down the pool, with grouted tiles and projected caustics crawling over the room, and two waves of teapots raining down in scattered positions, splashing on impact, then parking right where they fell (no bobbing, no righting — they stay put):
 
 ![ElectroBench PoolBench scene](docs/screenshots/pool_teapot.png)
 
@@ -35,7 +35,7 @@ The PoolBench pool room — an infinite white-and-red checkerboard sky mirrored 
 
 ![PoolBench in motion: teapot splash crowns, droplet streaks and ripple rings propagating across the checkerboard-mirrored water](docs/screenshots/pool_splash.gif)
 
-The LainBench power-line corridor — an amber dusk under drifting white clouds, two lines of steel utility poles marching to the horizon, and a wall of sagging wires over the auto-dolly camera:
+The LainBench power-line corridor — an amber dusk under a real atmosphere (Rayleigh sky, a tight limb-darkened sun disc sitting on the haze band, wind-blown cumulus with sunward silver linings), two lines of steel utility poles marching to the horizon, cast concrete kerbs and a damp road mirroring the sunset, and a wall of sagging wires over the auto-dolly camera:
 
 ![ElectroBench LainBench scene: steel utility poles and catenary wires against an amber dusk sky](docs/screenshots/lain_lines.png)
 

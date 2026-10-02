@@ -51,6 +51,12 @@
 #include <GL/glew.h>
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_opengl.h>
+// SDL 2.0.5 renamed SDL_GL_MULTISAMPLESAMPLES to SDL_GL_SAMPLES (same enum
+// value, 14). Accept either spelling so the MSAA request still builds against
+// the older SDL2 headers some of these static builds ship.
+#ifndef SDL_GL_SAMPLES
+#define SDL_GL_SAMPLES SDL_GL_MULTISAMPLESAMPLES
+#endif
 
 #include "../lib/asset_path.hxx"
 #include "font_atlas.hxx" // shared HUD font data and atlas layout
@@ -95,7 +101,7 @@ static const float kLightTint[3] = {0.86f, 0.95f, 1.05f};// cool pool-room glow
 
 // hidden light: direction TOWARD the light, high and behind the default
 // camera so the water specular path lands between camera and teapot
-static const float kLightDir[3] = {-0.32f, 0.80f, -0.50f};
+static const float kLightDir[3] = {-0.30f, 0.52f, -0.80f};
 
 // ------------------------------------------------------------ tiny math utils
 struct Vec3 {
@@ -1992,19 +1998,30 @@ int RunPoolScene(bool *gaveUpOut) {
     winW = gWindowWidthOverride;
     winH = (gWindowWidthOverride * HEIGHT + WIDTH / 2) / WIDTH;
   }
+  gWindowWidth = winW;
+  gWindowHeight = winH;
 
-  gWindow = SDL_CreateWindow(NAME, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, winW, winH,
-                             SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
-  if (gWindowWidthOverride > 0) {
-    gWindowWidth = winW;
-    gWindowHeight = winH;
-    glViewport(0, 0, winW, winH);
+  // BUILD-P10: 4x MSAA. The room is full of thin geometry (crown walls, jets,
+  // droplets, the teapot silhouette against a hard red/white tile edge) and
+  // every one of those edges is a stair-step without coverage antialiasing.
+  // A driver that refuses the request is retried without it rather than
+  // dropping the scene.
+  bool msaa = true;
+  for (int attempt = 0; attempt < 2; attempt++) {
+    SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, msaa ? 1 : 0);
+    SDL_GL_SetAttribute(SDL_GL_SAMPLES, msaa ? 4 : 0);
+    gWindow = SDL_CreateWindow(NAME, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, winW, winH,
+                               SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
+    if (!gWindow) {
+      std::fprintf(stderr, "Window could not be created! SDL_Error: %s\n", SDL_GetError());
+      return EXIT_FAILURE;
+    }
+    gContext = SDL_GL_CreateContext(gWindow);
+    if (gContext) break;
+    SDL_DestroyWindow(gWindow);
+    gWindow = nullptr;
+    msaa = false;
   }
-  if (!gWindow) {
-    std::fprintf(stderr, "Window could not be created! SDL_Error: %s\n", SDL_GetError());
-    return EXIT_FAILURE;
-  }
-  gContext = SDL_GL_CreateContext(gWindow);
   if (!gContext) {
     std::printf("Pool room scene: OpenGL 3.3 core context unavailable — skipping this scene\n");
     std::fflush(stdout);
@@ -2012,6 +2029,10 @@ int RunPoolScene(bool *gaveUpOut) {
     if (gaveUpOut) *gaveUpOut = true;
     return 1;
   }
+  glViewport(0, 0, gWindowWidth, gWindowHeight);
+  int samples = 0;
+  SDL_GL_GetAttribute(SDL_GL_SAMPLES, &samples);
+  std::printf("Antialiasing: %dx MSAA%s\n", samples, samples > 1 ? "" : " (unavailable)");
   SDL_GL_SetSwapInterval(0);
 
   if (glewInit() != GLEW_OK) {

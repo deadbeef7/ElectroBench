@@ -1,13 +1,29 @@
 #version 330 core
-// Pool scene sky: an infinite checkerboard dome, lit by a HIDDEN light
-// source. The checker tiles follow the dome's direction (planar projection
-// from above, the classic pool-room trick) so the pattern converges nicely
-// at the horizon and the whole dome glows softly without any visible sun,
-// lamp or fixture anywhere in the scene.
+// Pool scene sky: an infinite checkerboard dome — the room itself. The checker
+// tiles follow the dome's direction (angular projection, the classic pool-room
+// trick) so the pattern converges nicely at the horizon and the whole dome glows
+// softly.
 //
-// The light is only ever communicated through shading: a soft directional
-// gradient that is brighter toward the light azimuth, and the matching
-// specular sheen the water and teapot pick up. Nothing renders the light.
+// BUILD-P10 — two changes that move this from "graphic" to "photographic":
+//
+// 1. THE LIGHT NOW EXISTS. The room was lit by a HIDDEN source: a gradient that
+//    happened to be brighter in one direction, with no lamp anywhere to
+//    justify it. Real rooms show their light. A big soft luminous panel now
+//    sits in the light's own direction with a dark mullion cross and a bloom
+//    skirt, and everything else in the scene — the water's specular streak, the
+//    teapot's highlight, the room's own gradient — is suddenly the CONSEQUENCE
+//    of something visible rather than an unexplained asymmetry.
+//
+// 2. CAUSTICS. Refracted light through moving water is the defining optical
+//    event of a pool room and it was completely absent. The projection here is
+//    the real one: the light ray that lands on a surface point has last touched
+//    the water plane upstream, so the surface's coordinate is unrolled into the
+//    water plane and the same two crossing webs the water and the teapots use
+//    are evaluated there. Two details make it read as light and not as a stain:
+//    the filaments are raised to a high power (caustics are FOLDS in the water
+//    surface, so they are mostly dark with thin bright lines, not a soft
+//    brightening), and they fall off with height, because the floor is close to
+//    the water and the upper wall and ceiling are not.
 
 in vec3 vWorld;
 in vec3 vNormal;
@@ -65,9 +81,21 @@ void main() {
     vec3 tileB = vec3(1.50, 0.008, 0.010); // deep pure red
     vec3 albedo = mix(tileB, tileA, c);
 
+    // GROUT. A checkerboard of pure colour with a razor edge is a graphic, not
+    // a tiled room: real ceramic has a recessed joint between every tile that
+    // reads as a dark line and, at a grazing angle, as a continuous grey seam.
+    // Only drawn where the pixel footprint is small enough to resolve a tile —
+    // otherwise the antialiased blend toward 0.5 at the horizon would smear the
+    // grout over the entire far field.
+    float foot = max(fwidth(plane.x), fwidth(plane.y));
+    float grout = (1.0 - smoothstep(0.06, 0.34, foot))
+                * smoothstep(0.10, 0.0, abs(c - 0.5));
+    albedo *= mix(1.0, 0.62, grout);
+
     // HIDDEN light: a broad directional wash, brighter toward the light.
     // No disc, no lamp model — the sky simply gets brighter that way.
-    float toLight = clamp(dot(dir, normalize(uLightDir)), 0.0, 1.0);
+    vec3 Ld = normalize(uLightDir);
+    float toLight = clamp(dot(dir, Ld), 0.0, 1.0);
     float wash = pow(toLight, 1.6);
 
     // horizon glaze keeps the dome melting into the water plane
@@ -75,6 +103,59 @@ void main() {
 
     vec3 col = albedo * uLightTint * (0.85 + 0.55 * wash);
     col += uLightTint * 0.05 * horiz;
+
+    // ---- CAUSTICS ON THE ROOM ---------------------------------------------
+    // Unroll the surface into the water plane: the caustic that lands here is
+    // the one refracted through the water UPSTREAM of this point, which is a
+    // fixed offset along the light direction, so a per-fragment unroll is the
+    // exact projection rather than an approximation of it.
+    // FREQUENCY NOTE: the first attempt unrolled at 9.0, which gives cells 40
+    // degrees across — nine cells over the whole dome, so the "caustic" was a
+    // smooth gradient with no filaments in it. Caustic cells are decimetres on
+    // a floor, and the floor here is metres away, so the frequency has to be
+    // an order of magnitude higher. Likewise pow(q1*q2, 6) is nearly zero
+    // everywhere (the mean of two half-sine waves is 0.25, and 0.25^6 is
+    // 2e-4): the web has to be thresholded, not raised to a power, or only the
+    // exact peaks survive and the room gets no light at all.
+    // The unroll basis is the room's own ANGULAR grid (`plane`), not the world
+    // xz: on a dome the wall at grazing incidence compresses any world-space
+    // projection into sub-pixel slivers, so a world-space unroll produced no
+    // filaments at all. Angles are uniform across the room, so a constant
+    // angular cell size is both stable and honest here.
+    vec2 wuv = plane * 20.0;
+    float q1 = 0.5 + 0.5 * sin(wuv.x + sin(wuv.y * 0.62 + uTime * 1.15) * 1.9);
+    float q2 = 0.5 + 0.5 * sin(wuv.y * 0.74 - uTime * 0.95
+                              + sin(wuv.x * 0.68 - uTime * 0.60) * 1.7);
+    float caus = pow(smoothstep(0.28, 0.90, q1 * q2), 1.4);
+    // vertical falloff: the floor sits at the waterline, the upper wall and the
+    // ceiling are metres away from it and get a fraction of the light
+    float cfall = exp(-max(up, 0.0) * 4.2) * horiz;
+    // light has to actually arrive here
+    cfall *= 0.35 + 0.65 * wash;
+    col += uLightTint * albedo * caus * cfall * 0.90;
+
+    // ---- THE PANEL: the light source itself --------------------------------
+    // A soft rectangular luminous panel in the light's direction, with a dark
+    // mullion cross and a bloom skirt that carries onto the surrounding tiles.
+    // Built in a tangent frame around Ld so it stays a flat rectangle whatever
+    // the light direction is.
+    vec3 tUp = abs(Ld.y) > 0.9 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0);
+    vec3 tx = normalize(cross(tUp, Ld));
+    vec3 ty = cross(Ld, tx);
+    float cosA = max(dot(dir, Ld), 0.08);
+    vec2 q = vec2(dot(dir, tx), dot(dir, ty)) / cosA;
+    float half_ = 0.30;
+    float box = max(abs(q.x), abs(q.y));
+    // soft-edged diffuser: the panel is a diffusing sheet, so its border is a
+    // ramp over several degrees, not a step
+    float panel = smoothstep(half_, half_ * 0.55, box);
+    // mullion cross — the giveaway that this is a light fitting and not a blob
+    float mull = smoothstep(0.030, 0.012, abs(q.x))
+               + smoothstep(0.030, 0.012, abs(q.y));
+    panel *= clamp(1.0 - mull * 0.85, 0.0, 1.0);
+    col += uLightTint * panel * 5.6;
+    // bloom skirt: the panel is bright enough to light the tiles right around it
+    col += uLightTint * smoothstep(half_ * 2.6, half_, box) * 0.30;
 
     // FILMIC ACES (Narkowicz) tonemap — the same grading the teapots wear.
     // The old x/(x+0.35) knee let the hot-white tiles plateau at clip level

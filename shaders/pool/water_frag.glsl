@@ -86,6 +86,29 @@ float checker(vec2 p) {
     return 0.5 - 0.5 * i.x * i.y;
 }
 
+// BUILD-P10: THE LUMINOUS PANEL, AS REFLECTED BY THE WATER. Copied from
+// sky_frag.glsl on purpose (one file cannot include the other without
+// extension support on every driver).
+//
+// This is the single most photographic thing the room can contain: a bright
+// fitting with its own reflection lying stretched down the water, broken up
+// by the ripple. A pool room lit by an invisible source reads as a graphics
+// demo no matter how good the tiles are; the same room with its light
+// reflected in the water reads as a photograph.
+float panelRadiance(vec3 rd, vec3 Ld) {
+    vec3 tUp = abs(Ld.y) > 0.9 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0);
+    vec3 tx = normalize(cross(tUp, Ld));
+    vec3 ty = cross(Ld, tx);
+    float cosA = max(dot(rd, Ld), 0.08);
+    vec2 q = vec2(dot(rd, tx), dot(rd, ty)) / cosA;
+    float box = max(abs(q.x), abs(q.y));
+    float panel = smoothstep(0.30, 0.165, box);
+    float mull = smoothstep(0.030, 0.012, abs(q.x))
+               + smoothstep(0.030, 0.012, abs(q.y));
+    panel *= clamp(1.0 - mull * 0.85, 0.0, 1.0);
+    return panel + 0.055 * smoothstep(0.78, 0.30, box);
+}
+
 // reflected ray into the dome-space checker: mirror the view ray about the
 // water plane, then map through the SAME ANGULAR GRID as sky_frag.glsl —
 // tile columns line up across the horizon like a real room.
@@ -101,7 +124,13 @@ vec3 reflectedCheckerColor(vec3 dirToViewer, vec3 pos, float rippleBump) {
     // against a BRIGHT sky still wins over the dark body). Keep most of the
     // tile colour: brightness modulated mildly by view angle.
     float fres = 0.35 + 0.65 * pow(1.0 - clamp(dot(-dirToViewer, vec3(0.0, 1.0, 0.0)), 0.0, 1.0), 1.5);
-    return albedo * fres;
+    vec3 out_ = albedo * fres;
+    // the fitting itself, plus its bloom skirt on the surrounding tiles
+        // A light fitting seen in a mirror is an order of magnitude brighter than
+    // the tiles around it, and it is that contrast — not the size — that makes
+    // the reflection read as a reflection.
+    out_ += uLightTint * panelRadiance(normalize(rd), normalize(uLightDir)) * 14.0;
+    return out_;
 }
 
 // REFLECTED TEAPOTS (BUILD-D7): the old analytic ghost pass darkened

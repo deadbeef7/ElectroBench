@@ -179,6 +179,91 @@ Realism takeaways applied:
   glazing bars over them. Emissive geometry is only believable if the frame behind it still exists —
   the bars and the sill are what stop a lit pane reading as a sticker.
 
+## BUILD-P10: photorealism pass (scenes 3 and 4)
+
+References consulted (informational — nothing is fetched at runtime):
+
+- Physically based skies, single-scattering analytic model, Rayleigh + Mie
+  (Henyey-Greenstein), air-mass approximation `1/(h + k)`:
+  - https://en.wikipedia.org/wiki/Rayleigh_scattering
+  - https://en.wikipedia.org/wiki/Mie_scattering
+  - https://en.wikipedia.org/wiki/Henyey%E2%80%93Greenstein_phase_function
+- Water caustics — GPU Gems Ch. 2, "Rendering Water Caustics" (aesthetics-driven
+  real-time caustics) and Martin Renou, "Real-time rendering of water caustics":
+  - https://developer.nvidia.com/gpugems/gpugems/part-i-natural-effects/chapter-2-rendering-water-caustics
+  - https://medium.com/@martinRenou/real-time-rendering-of-water-caustics-59cda1d74aa
+- Cook-Torrance microfacet terms (GGX NDF, Smith visibility, Schlick Fresnel):
+  - https://en.wikipedia.org/wiki/Cook%E2%80%93Torrance_shading_model
+  - https://disneyanimation.com/publications/physically-based-shading-at-disney/
+- ACES filmic tone mapping (Narkowicz fit) and the split-tone film grade:
+  - https://en.wikipedia.org/wiki/Academy_Color_Encoding_System
+- Poleline hardware still referenced for the pole-top fittings: CPUC *Construction
+  Requirements for Pole Line Guys* (two insulators in the overhead guy, one in the
+  anchor guy) and JEA *Guys and Anchors* (3/8" and 7/16" galvanized guy strand).
+
+Realism takeaways applied — **measurement over eyeballing**:
+
+- **Nothing beats coverage antialiasing for a wire tangle.** The frame is 3-4 cm
+  cylinders crossing a bright sky; without MSAA every conductor is a hard
+  stair-step and the corridor reads as vector art. 4x MSAA costs nothing per
+  fragment on any driver from the GMA 950 up because it runs at sample rate, not
+  pixel rate, and it is the single largest step toward "photograph" in this pass.
+  It is requested with a **fallback**: a driver that refuses the multisample
+  attribute gets its window rebuilt without it rather than dropping the scene,
+  and the mode in force is printed at startup so it is never a guess.
+- **A sunset sky is an atmosphere, not a colour ramp.** The old dome was three
+  stops with an fbm smeared over it. It is now single-scattering Rayleigh + Mie
+  with the sun's own extinction along its own path — so the sky reddens BY
+  ITSELF as `uSunDir` sinks, instead of a keyframed palette — plus a small
+  multiple-scattering floor, without which a one-scatter model predicts a
+  monochrome red sky with no blue in it anywhere. Measured: clipped pixels
+  (>0.97 luma) fell from **4.20% to 0.59%** at an unchanged saturation, i.e. the
+  whole dynamic range moved under the shoulder instead of onto a clip wall.
+- **Aureole is a knife, not a blanket.** Mie is grey and desaturating, so it has
+  to be small: the first pass used a realistic-looking aerosol coefficient with
+  a 1.25 gain and the entire dome came back cream. Real clean-air sunset skies
+  keep the aureole inside ~10 degrees and the rest of the sky saturated.
+- **Horizon airlight is the one term a one-scatter model cannot supply.** The
+  single-scatter integral has to FADE toward the horizon (the view extinction
+  kills it) but a real sunset horizon is the BRIGHTEST part of the sky, because
+  that light has bounced until it is isotropic. It is also the surface the whole
+  corridor silhouettes against, so its level and colour are the two numbers the
+  scene reads from.
+- **A wet road is high contrast, not uniformly shiny.** Fresnel runs to ~0.6 at
+  this camera's grazing angle, so a broad wetness term turned the entire
+  carriageway into one sheet of reflected horizon and the tarmac disappeared —
+  the road reflection now samples the SAME analytic sky the sky pass uses, but
+  only in patches, so bright mirror pools sit next to dry textured stone.
+- **A road that meets the ground in a straight line is a giveaway.** Cast kerbs
+  (0.32 m wide, 16 cm proud, their own material with exposed aggregate and
+  standing water in the gutter) give the corridor something to catch light and
+  something to cast a shadow.
+- **Specular had to become a real microfacet lobe.** Blinn-Phong with an exponent
+  mapped from roughness cannot make a highlight that is both tight and
+  energy-sane, which is why neither the damp road nor the galvanised steel ever
+  produced a convincing glint. D·G·F costs ~20 flops, which is affordable here.
+- **Grade it like film.** A physically shaded frame still looks rendered until a
+  split tone is applied — cool shadows, warm highlights, and a small saturation
+  lift, because per-channel atmosphere maths pulls colour out of everything.
+- **A light source that is invisible is not a light source.** The pool room was
+  lit by an unexplained asymmetry: a gradient brighter in one direction with no
+  fitting anywhere to justify it. There is now a luminous ceiling panel with a
+  mullion cross, and its reflection lies stretched down the water — the single
+  most photographic thing the room can contain. The light was also dropped from
+  53 degrees to 31 degrees elevation, because the panel's reflection only lands
+  inside the frame if the source does.
+- **Caustics have to be thresholded, not powered.** `pow(q1*q2, 6)` over two
+  half-sine waves is ~2e-4 almost everywhere: only the exact peaks survive and
+  the room gets no light at all. A smoothstep on the product is what produces
+  filaments. And on a dome the unroll must be in the room's own ANGULAR grid —
+  a world-space projection compresses to sub-pixel slivers at grazing incidence
+  and produces no filaments at all.
+- **Anything mounted on a leaning surface must be measured off that surface.**
+  The junction-can enclosure was still pinned to the pole's GROUND position
+  (base.x/base.z) with a flat 0.20 m standoff, so on every leaning pole it slid
+  up to 8 cm off the side of the shaft it is bolted to — with its lid seam and
+  label block floating with it. It now hangs off two flat straps from the leaned
+  axis at the height it is mounted, measured against TrunkRadius.
 - Reference images are informational. No image is downloaded at runtime; do not add an image fetch to the binary without explicitly wiring it through Convex/actions and the user's Keys/API keys.
 - Preferred live references for the user's own tuning (not fetched by the app):
   - Real pool photos where a bright object (ball, teapot, fruit) is dropped into still water and the reflection reads as a darkened, broken-up mirror.

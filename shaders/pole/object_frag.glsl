@@ -52,6 +52,7 @@ const float kMatLeaf   = 11.0;
 const float kMatShadow = 12.0;  // streamed, alpha-blended ground shadow
 const float kMatGlow   = 13.0;  // emissive: lit signage / lamp lenses at dusk
 const float kMatSteel  = 14.0;  // BUILD-P9: hot-dip galvanized steel (shafts, arms)
+const float kMatKerb   = 15.0;  // BUILD-P10: cast concrete kerb + gutter
 
 // cheap hash: no transcendentals (the old sin-based hash was 20+ cycles on
 // a pre-SSE CPU). Same "value noise", a fraction of the cost.
@@ -76,6 +77,43 @@ float vnoise(vec2 p) {
 vec3 hazeColFor(vec3 base, vec3 L, vec3 V) {
     float toSun = max(dot(-V, L), 0.0);
     return mix(vec3(0.70, 0.52, 0.37), vec3(0.98, 0.75, 0.50), pow(toSun, 3.0));
+}
+
+// ---------------------------------------------------------------------------
+// BUILD-P10: the atmosphere, copied BYTE-IDENTICALLY from sky_frag.glsl (the
+// same rule the pool scene follows with its checker: one file cannot include
+// the other without extension support on every driver).
+//
+// Why the object pass needs it: a wet road and a dark window do not reflect a
+// guessed constant — they reflect THE SKY. A flat grey reflection term is one
+// of the loudest "this is CG" tells in any shot containing a road, and the
+// corridor is exactly that shot. Sampling the real analytic sky along the
+// reflection ray is what turns the carriageway into a mirror of the sunset,
+// and it is the cheapest large win available: the same twenty flops the sky
+// pass already spends, over the road's share of the frame.
+// ---------------------------------------------------------------------------
+const vec3  kBetaR = vec3(0.058, 0.135, 0.331);
+const float kBetaM = 0.0125;
+const float kSunI  = 330.0;
+const float kSunPath = 8.0;
+const float kRayGain = 3.20;
+
+vec3 atmosphere(vec3 dir, vec3 sun) {
+    float h = dir.y;
+    float mu = dot(dir, sun);
+    float mView = 1.0 / (max(h, 0.0) + 0.14);
+    float mSun  = 1.0 / (max(sun.y, 0.0) + 0.14);
+    vec3 Tview = exp(-(kBetaR + vec3(kBetaM)) * mView * 0.92);
+    vec3 Tsun  = exp(-kBetaR * mSun * kSunPath - vec3(kBetaM * mSun * 1.15));
+    float phR = 0.0596831 * (1.0 + mu * mu);
+    const float g = 0.76, gg = g * g;
+    float phM = 0.0795775 * (1.0 - gg)
+              / max(pow(1.0 + gg - 2.0 * g * mu, 1.5), 1e-3);
+    vec3 single = kBetaR * phR * kRayGain * Tview * Tsun;
+    vec3 mie    = vec3(kBetaM * phM * 0.25) * Tview * Tsun;
+    float multiK = 0.012 + 0.30 * smoothstep(0.45, 1.00, h);
+    vec3 multi  = kBetaR * phR * 0.80 * Tview * multiK;
+    return (single + mie + multi) * kSunI;
 }
 
 void main() {
@@ -106,6 +144,7 @@ void main() {
     vec3 base = vColor;
     float rough = 0.85;     // 0 = mirror, 1 = chalk
     float sheen = 0.0;      // extra grazing term (cables, glass)
+    float wet = 0.0;        // BUILD-P10: standing-water film (road, kerb)
 
     if (m == kMatGround) {
         // dirt/gravel: broad damp patches + fine grit, then a dry-grass
@@ -139,6 +178,26 @@ void main() {
         // a darker seam down the very centre where the tar is oldest
         base *= 1.0 - 0.18 * exp(-pow(rx / 0.55, 2.0));
         rough = mix(0.95, 0.62, wp);          // polished paths catch the sun
+        // BUILD-P10: DAMP TARMAC. A wet surface is not "a shinier dry one":
+        // the water film fills the aggregate, so the albedo drops hard (the
+        // light that used to scatter back out of the stone now enters it and
+        // comes back specular), and the roughness collapses. The physics is
+        // free; what it buys is a road that mirrors the sunset down the
+        // corridor instead of reading as grey felt. Damp comes from a broad
+        // noise field plus the ruts, which is where water actually collects.
+        // PATCHY ON PURPOSE: the first pass gave the whole carriageway a 0.16
+        // wetness floor plus a broad coverage, and at this camera's grazing
+        // angle Fresnel runs to ~0.6, so the entire road turned into one
+        // uniform sheet of reflected horizon and the tarmac vanished. A wet
+        // road is high CONTRAST — bright mirror patches next to dry, dark,
+        // textured stone — and that contrast is the whole effect.
+        float damp = smoothstep(0.52, 0.86, vnoise(P.xz * 0.30 + 11.0));
+        damp = clamp(damp * 0.85 + wp * 0.22, 0.0, 1.0);
+        // gutters at both edges never dry out
+        damp = clamp(damp + 0.55 * exp(-pow((abs(rx) - 2.45) / 0.38, 2.0)), 0.0, 1.0);
+        base *= mix(1.0, 0.55, damp);
+        rough = mix(rough, 0.20, damp);
+        wet = damp;
     } else if (m == kMatLine) {
         // worn road paint: chipped at the edges, dirty in the middle
         float wear = near > 0.02 ? vnoise(P.xz * 6.0) : 0.5;
@@ -173,6 +232,30 @@ void main() {
         base *= 0.42;
         rough = 0.06;
         sheen = 0.55;
+    } else if (m == kMatKerb) {
+        // BUILD-P10: cast concrete kerb. Three things make concrete read as
+        // concrete and not as a grey box: exposed aggregate (a bright speckle
+        // of stones in a darker cement matrix), a chamfered top arris that
+        // catches a hard highlight, and the dirt that collects in the gutter
+        // and sprays up the face. The kerb is also the strongest single cue
+        // that this is a real street rather than a plane with paint on it.
+        float agg = vnoise(vec2(P.x * 41.0, P.z * 9.0));
+        float cement = vnoise(vec2(P.x * 3.1, P.z * 0.85));
+        base *= 0.80 + 0.30 * cement;
+        if (near > 0.02) {
+            // aggregate only resolves up close; fading it out is also what
+            // stops it from aliasing into a shimmering band at 60 m
+            float stones = smoothstep(0.62, 0.86, agg);
+            base = mix(base, base * 1.85 + vec3(0.020), stones * near * 0.75);
+        }
+        // dirt in the gutter and splashed up the vertical face
+        float gz = 1.0 - clamp(P.y / 0.16, 0.0, 1.0);
+        base = mix(base, vec3(0.115, 0.098, 0.078), smoothstep(0.35, 1.0, gz) * 0.60);
+        // a hair of standing water in the gutter line keeps the kerb wet too
+        wet = 0.40 * smoothstep(0.55, 0.95, gz);
+        base *= mix(1.0, 0.55, wet);
+        rough = mix(0.88, 0.30, wet);
+        sheen = 0.10;
     } else if (m == kMatLeaf) {
         // canopy clumping — one octave is enough at silhouette distance
         float n = vnoise(P.xz * 0.85 + P.y * 0.35);
@@ -236,23 +319,69 @@ void main() {
     float diff = clamp((dot(N, L) + wrap) / (1.0 + wrap), 0.0, 1.0);
     vec3 sunTint = vec3(1.00, 0.66, 0.34);
 
-    // specular: shininess from roughness, scaled down for chalky materials
+    // BUILD-P10: SPECULAR IS NOW A REAL MICROFACET LOBE. The old term was
+    // Blinn-Phong with an exponent mapped from roughness, which cannot make a
+    // highlight that is both tight AND energy-sane: it is why the damp road and
+    // the steel never got a convincing glint. D (GGX) * G (Smith, Schlick
+    // approximation) * F (Schlick) is the standard answer and costs about
+    // twenty extra flops, so it is affordable even here.
     vec3 H = normalize(L + V);
-    float shin = mix(6.0, 220.0, 1.0 - rough);
-    float sp = pow(max(dot(N, H), 0.0), shin) * (1.0 - rough * 0.85) * 1.6;
+    float NoV = clamp(dot(N, V), 1e-3, 1.0);
+    float NoL = max(dot(N, L), 0.0);
+    float NoH = max(dot(N, H), 0.0);
+    float VoH = max(dot(V, H), 0.0);
+    float a2 = max(rough * rough, 0.0025);
+    a2 = a2 * a2;
+    float dd = NoH * NoH * (a2 - 1.0) + 1.0;
+    float D = a2 / (3.14159265 * dd * dd);
+    float kg = a2 * 0.5;
+    float G = 0.25 / (max(NoV * (1.0 - kg) + kg, 1e-4)
+                      * max(NoL * (1.0 - kg) + kg, 1e-4));
+    float Fs = 0.045 + 0.955 * pow(1.0 - VoH, 5.0);
+    // clamped so a near-mirror facet can never fire a white hole in the frame
+    float sp = min(D * G * Fs / (4.0 * NoV) * NoL, 3.0) * 1.35;
+
+    // BUILD-P10: WET SURFACES REFLECT THE SKY. A reflection ray perturbed by
+    // the surface's own ripple noise (so the mirror breaks up like water, not
+    // glass), sampled from the SAME analytic atmosphere the sky pass uses. At
+    // the camera's grazing angle down the corridor Fresnel runs to 1, which is
+    // what lays a long bright sheen of sunset down the wet road — the single
+    // most photographic thing in the shot, and previously absent.
+    vec3 skyRefl = vec3(0.0);
+    float wetF = 0.0;
+    if (wet > 0.01) {
+        vec3 Np = N;
+        float rip = vnoise(P.xz * 2.7) - 0.5;
+        float rip2 = vnoise(P.xz * 2.7 + 19.0) - 0.5;
+        Np = normalize(N + vec3(rip, 0.0, rip2) * (0.16 * wet));
+        vec3 R = reflect(-V, Np);
+        R.y = abs(R.y);                       // never sample below the horizon
+        skyRefl = atmosphere(normalize(R), L);
+        // the sheen is scaled back from a pure mirror: a real wet road is also
+        // a thin film over an absorbing substrate, so even at grazing
+        // incidence it never reaches the full Fresnel reflection
+        wetF = (0.030 + 0.970 * pow(1.0 - NoV, 5.0)) * wet * 0.52;
+        // a wet surface is also darker in the diffuse term
+        diff *= mix(1.0, 0.55, wet);
+    }
 
     // grazing rim: wires glint along their whole length against the sun
     float edge = 1.0 - abs(dot(N, V));
     float rim = pow(edge, 6.0) * sheen;
 
-    vec3 col = base * (amb + sunTint * diff * 1.15) + sunTint * (sp + rim);
+    vec3 col = base * (amb + sunTint * diff * 1.15) + sunTint * (sp + rim)
+             + skyRefl * wetF;
 
     // ---- contact darkening -------------------------------------------------
     // Everything standing on the ground picks up a contact gradient: the
     // house walls darken into their own footprint, the pole bases sit in
     // dirt. Ground/road/paint are excluded (they ARE the floor) and so are
-    // the wires (they never touch).
-    if (m != kMatGround && m != kMatRoad && m != kMatLine)
+    // the wires (they never touch). The kerb is INCLUDED from P10 but with a
+    // gentler ramp: it stands only 16 cm proud of the road, so the full
+    // 1.30 m falloff would bury the whole thing in its own shadow.
+    if (m == kMatKerb)
+        col *= mix(0.80, 1.0, smoothstep(0.0, 0.16, P.y));
+    else if (m != kMatGround && m != kMatRoad && m != kMatLine)
         col *= mix(0.60, 1.0, smoothstep(0.0, 1.30, P.y));
 
     // ---- aerial perspective ------------------------------------------------
@@ -277,6 +406,19 @@ void main() {
     // gentle highlight knee (only compresses the TOP end; dark values pass)
     col = clamp(col, 0.0, 4.0);
     col = col / (col * 0.35 + vec3(0.72));
+    // ---- BUILD-P10: THE GRADE. A physically shaded frame still looks rendered
+    // until it is graded like a photograph, and the grade is nearly free. Two
+    // moves: a SPLIT TONE (cool blue in the shadows, warm in the highlights —
+    // the signature of film stock and of every real dusk photograph, and the
+    // cue that tells the eye "camera" rather than "renderer"), and a small
+    // saturation lift, because the per-channel atmosphere model pulls colour
+    // out of everything it touches.
+    float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
+    col = mix(col, col * vec3(0.93, 0.98, 1.13),
+              (1.0 - smoothstep(0.02, 0.34, lum)) * 0.50);   // cool shadows
+    col = mix(col, col * vec3(1.07, 1.01, 0.92),
+              smoothstep(0.52, 1.00, lum) * 0.45);          // warm highlights
+    col = clamp(mix(vec3(lum), col, 1.12), 0.0, 1.0);
     // tiny dither: the haze gradient is a wide smooth ramp and 8-bit output
     // bands visibly on the corridor floor
     col += (hash21(gl_FragCoord.xy + fract(uTime) * 13.0) - 0.5) * (1.2 / 255.0);
