@@ -179,6 +179,38 @@ Realism takeaways applied:
   glazing bars over them. Emissive geometry is only believable if the frame behind it still exists —
   the bars and the sill are what stop a lit pane reading as a sticker.
 
+## BUILD-P12: matching a reference photograph (scene 4)
+
+The reference is a street-level worm's-eye shot of a Japanese utility pole. What
+was taken from it — and what was deliberately left alone:
+
+TAKEN:
+- **The shaft is CONCRETE, not timber and not steel.** Build P9 rebuilt the poles
+  as galvanized steel; the reference is unmistakably a weathered precast concrete
+  shaft. Line A is now concrete and line B stays steel, which is what a real
+  street has and what stops fifteen identical shafts reading as one repeated
+  prop. Concrete only reads as concrete if it is DIRECTIONAL: vertical water
+  staining running down from every bracket, horizontal form-board lifts from
+  the mould, spalled patches showing darker aggregate, and a grime line washed
+  up the first two metres.
+- **The web, not the conductors.** Six neat distribution conductors read as a
+  power line DIAGRAM. What fills the corners of the reference frame is sixteen
+  thin black telecom drops and cross-connects strung between the same two poles
+  at different heights, slack, and not in a plane. Sixteen per bay, deterministic
+  so the benchmark stays comparable, each one tube.
+- **Slack cable.** The flat wound helix hung off a bracket, and the big circular
+  bight at a drop point, are the two most recognisable objects on a real pole and
+  cost nothing per pixel. Both are terminated — a coil whose cable simply stops is
+  the same "floating cylinder" mistake as the unterminated stub from build P10.
+- **The aim point moved UP.** Aiming at 5.5 m framed the least interesting three
+  metres of the shaft. The subject of the shot is the top of the pole.
+- **Something tall and thin in the far distance.** Two lattice cell masts. A
+  street with no vertical beyond the pole line has no scale.
+
+LEFT ALONE: the sky. The reference is a clear blue afternoon; this scene's amber
+dusk atmosphere was established in build P10 and the user asked for the wires and
+the upper pole, explicitly not the sky.
+
 ## BUILD-P11: scene 1 gets a place to stand in, and a camera that moves
 
 Realism takeaways applied — the failures here were *structural*, not shading:

@@ -254,13 +254,17 @@ static void UpdateAutoCamera(float t) {
   float z = 4.0f + std::fmod(t * 2.6f, span);
   // BUILD-P5: the camera drives the road's right lane (the road is centred
   // at x = +2.6), hugging the centreline so the poles stream past on the left
-  gCamPos = {2.6f + std::sin(t * 0.05f) * 0.35f,         // gentle weave
-             1.9f + 0.22f * std::sin(t * 0.11f),         // breathing height
+  gCamPos = {2.0f + std::sin(t * 0.05f) * 0.30f,         // gentle weave
+             1.55f + 0.18f * std::sin(t * 0.11f),        // breathing height
              z};
-  // BUILD-P2: aim up the corridor with the LOW SUN sitting on the horizon —
-  // poles cross it as dark silhouettes and wires string straight over it
-  // (the money shot of the serial-experiments look).
-  Vec3 target{-0.45f, 5.5f, z + 26.0f};
+  // BUILD-P12: AIM HIGHER. The reference photograph is taken from the pavement
+  // looking UP, and the subject of the shot is the top of the pole: the
+  // crossarms, the insulators, the transformer and the cable web. Aiming at
+  // 5.5 m framed the middle of the shaft instead, which is the least
+  // interesting 3 m of it. The aim point now sits just under the main arm, so
+  // the upper half of every pole fills the frame and the web reads against the
+  // sky rather than against more poles.
+  Vec3 target{-1.15f, 7.6f, z + 17.0f};
   Vec3 f = Vec3Norm(Vec3Sub(target, gCamPos));
   gCamYaw = std::atan2(-f.x, -f.z);
   gCamPitch = std::asin(f.y) * -1.0f;   // negative = looking up
@@ -315,6 +319,12 @@ static const float kMatGlow = 13.0f;     // emissive: lit signs at dusk
 static const float kMatSteel = 14.0f;
 // BUILD-P10: cast concrete kerb (must match kMatKerb in object_frag.glsl)
 static const float kMatKerb = 15.0f;
+// BUILD-P12: weathered precast concrete pole shaft (must match kMatConcrete in
+// object_frag.glsl). Japanese distribution poles are overwhelmingly CONCRETE,
+// not timber and not steel — a round shaft with a weathered grey skin, which
+// is what the reference photograph actually shows.
+static const float kMatConcrete = 16.0f;
+static const Vec3 kConcreteGrey{0.300f, 0.293f, 0.278f};
 
 static const Vec3 kWoodDark{0.165f, 0.115f, 0.085f};   // creosote (treeline)
 static const Vec3 kWoodOld{0.230f, 0.180f, 0.140f};   // weathered timber
@@ -675,14 +685,117 @@ static void AddGuyWire(const PoleSpec &p, float side, float zSign) {
          {0.230f, 0.222f, 0.208f}, kMatPaint);
 }
 
-static void AddPole(const PoleSpec &p) {
+// BUILD-P12: SLACK COIL. The single most recognisable object on a Japanese
+// utility pole: a metre of spare black cable wound into a flat helix and hung
+// off the side of the shaft on a bracket. It is pure silhouette, it costs
+// nothing per pixel, and its absence is why a modelled pole reads as a pole
+// in a diagram rather than a pole in a street.
+//
+// Built from short straight runs rather than one swept tube because AddWire
+// already owns the tube builder and a catenary between two points 4 cm apart
+// is indistinguishable from a straight one — this gets the shape for free.
+static void AddSlackCoil(const PoleSpec &p, float h, float side, int turns,
+                         float radius, float pitch) {
+  float r0 = TrunkRadius(p, h);
+  Vec3 a = PoleAxisAt(p, h);
+  float cx = a.x + side * (r0 + radius);
+  const int steps = turns * 5;
+  // the bracket the coil hangs from — the coil is ATTACHED, not floating
+  AddCylinder({a.x + side * (r0 - 0.02f), h + pitch * 0.5f, a.z},
+              {cx, h + pitch * 0.5f, a.z}, 0.022f, 0.022f, 5, kSteelArm,
+              kMatSteel);
+  Vec3 prev{cx + radius, h + pitch * 0.5f, a.z};
+  for (int i = 1; i <= steps; i++) {
+    float t = (float)i / (float)steps;
+    float ang = t * (float)turns * 6.28318f;
+    // the coil flattens as it hangs: a wound cable under its own weight is an
+    // ellipse, not a circle seen side-on
+    Vec3 cur{cx + radius * 0.28f * std::cos(ang), h + pitch * 0.5f - t * pitch,
+             a.z + radius * std::sin(ang)};
+    AddWire(prev, cur, 0.0f, 0.017f, 2, kCable, kMatCable);
+    prev = cur;
+  }
+  // and the tail, running back up to the shaft: a coil whose cable simply
+  // stops is the same "floating cylinder" mistake as an unterminated stub
+  AddWire(prev, {a.x + side * (r0 + 0.03f), h + pitch * 0.5f + 0.06f, a.z},
+          0.05f, 0.017f, 4, kCable, kMatCable);
+}
+
+// BUILD-P12: SLACK LOOP. The big circular bight of service cable left hanging
+// at a drop point so the cable is not pulled taut. Distinct from the coil: one
+// turn, much larger, and it hangs in the plane of the road where it reads
+// against the sky.
+static void AddSlackLoop(const PoleSpec &p, float h, float side, float radius) {
+  float r0 = TrunkRadius(p, h);
+  Vec3 a = PoleAxisAt(p, h);
+  const int steps = 22;
+  Vec3 prev = a;
+  for (int i = 1; i <= steps; i++) {
+    float t = (float)i / (float)steps;
+    float ang = 3.14159f * t;
+    // hangs in the z/y plane, hanging off the road side of the shaft
+    Vec3 cur{a.x + side * (r0 + 0.10f + 0.16f * std::sin(ang)),
+             h - radius * (1.0f - std::cos(ang)) * 0.5f,
+             a.z + radius * std::sin(ang) * 0.85f};
+    AddWire(prev, cur, 0.0f, 0.016f, 2, kCable, kMatCable);
+    prev = cur;
+  }
+  AddWire(prev, a, 0.0f, 0.016f, 2, kCable, kMatCable);
+}
+
+// BUILD-P12: a lattice radio mast. Not decoration: a cell mast standing behind
+// the pole line is one of the few things that puts the corridor at a real
+// scale, and its open truss silhouette is legible at 80 m where a solid box
+// would be a smear. Four legs plus zigzag bracing, 24 m.
+static void AddLatticeMast(float x, float z, float height) {
+  const Vec3 steel{0.290f, 0.292f, 0.300f};
+  const float halfBase = 1.55f, halfTop = 0.42f;
+  for (int c = 0; c < 4; c++) {
+    float sx = (c == 0 || c == 3) ? -1.0f : 1.0f;
+    float sz = (c < 2) ? -1.0f : 1.0f;
+    AddCylinder({x + sx * halfBase, 0.0f, z + sz * halfBase},
+                {x + sx * halfTop, height, z + sz * halfTop}, 0.085f, 0.055f,
+                4, steel, kMatSteel);
+  }
+  for (float h = 1.6f; h < height - 0.4f; h += 1.9f) {
+    float t0 = h / height, t1 = (h + 1.9f) / height;
+    float hb0 = halfBase + (halfTop - halfBase) * t0;
+    float hb1 = halfBase + (halfTop - halfBase) * t1;
+    for (int s = 0; s < 4; s++) {
+      float a0x = (s == 0 || s == 3) ? -hb0 : hb0;
+      float a0z = (s < 2) ? -hb0 : hb0;
+      int n = (s + 1) & 3;
+      float a1x = (n == 0 || n == 3) ? -hb1 : hb1;
+      float a1z = (n < 2) ? -hb1 : hb1;
+      AddCylinder({x + a0x, h, z + a0z}, {x + a1x, h + 1.9f, z + a1z}, 0.032f,
+                  0.032f, 3, steel, kMatSteel);
+      // the horizontal belt at each level closes the truss
+      AddCylinder({x + a0x, h, z + a0z}, {x - a0x, h, z + a0z}, 0.026f, 0.026f,
+                  3, steel, kMatSteel);
+      AddCylinder({x + a0x, h, z + a0z}, {x + a0x, h, z - a0z}, 0.026f, 0.026f,
+                  3, steel, kMatSteel);
+    }
+  }
+  // the whip antennas on top
+  for (int i = 0; i < 3; i++) {
+    float ax = x + (i - 1) * 0.5f;
+    AddCylinder({ax, height, z}, {ax, height + 2.6f - 0.5f * (float)(i & 1), z},
+                0.030f, 0.012f, 4, steel, kMatSteel);
+  }
+}
+
+static void AddPole(const PoleSpec &p, bool concrete = false) {
   Vec3 base = PoleAxisAt(p, kGroundY);
   Vec3 top = PoleAxisAt(p, p.height);
   const float side = PoleRoadSide(p);
-  // BUILD-P9: the trunk is hot-dip galvanized STEEL, not creosote timber. The
-  // shaft is the single largest silhouette in frame after the sky, so leaving
-  // it a dark brown cylinder is what made every pole read as a wooden post.
-  AddCylinder(base, top, 0.17f, 0.115f, 10, kSteelGalv, kMatSteel);
+  // BUILD-P12: the shaft material is per-pole now. Line A is concrete (the
+  // reference), line B stays hot-dip galvanized steel from build P9 — a real
+  // street has both, and the material contrast is what stops fifteen identical
+  // shafts reading as one repeated prop.
+  if (concrete)
+    AddCylinder(base, top, 0.17f, 0.115f, 10, kConcreteGrey, kMatConcrete);
+  else
+    AddCylinder(base, top, 0.17f, 0.115f, 10, kSteelGalv, kMatSteel);
   // welded base flange standing in the ring of dirt kicked up around it
   AddCylinder({base.x, kGroundY - 0.02f, base.z}, {base.x, 0.10f, base.z},
               0.52f, 0.34f, 8, {0.30f, 0.24f, 0.18f}, kMatGround);
@@ -781,6 +894,14 @@ static void AddPole(const PoleSpec &p) {
     AddBox({pa.x + pr + 0.058f, 2.545f, pa.z}, {0.006f, 0.012f, 0.050f},
            {0.075f, 0.070f, 0.065f}, kMatMetal);
   }
+  // BUILD-P12: SLACK CABLE. Deterministic scatter — a real street has slack
+  // cable on some poles and none on others, and a uniformly clean line is the
+  // giveaway that it was laid out by a loop.
+  if (concrete && ((((int)(p.z * 0.5f)) % 3) == 0))
+    AddSlackCoil(p, 5.2f, -side, 6, 0.30f, 1.15f);
+  if (concrete && ((((int)(p.z * 0.7f)) % 4) == 1))
+    AddSlackLoop(p, 6.5f, side, 0.85f);
+
   // guys on every fourth-ish pole: one back and one forward where there is room
   if ((((int)(p.z * 0.4f)) % 3) == 0) {
     AddGuyWire(p, side, 1.0f);
@@ -1178,7 +1299,7 @@ static void AddTreeline() {
     lineA.push_back({-3.4f, 2.0f + 12.4f * i, 8.6f + 0.35f * ((i * 5) % 3),
                      i == 1 || i == 6 || i == 11, i == 3 || i == 9,
                      0.10f * ((i * 7) % 3 - 1), 0.08f * ((i * 5) % 3 - 1)});
-  for (const PoleSpec &p : lineA) AddPole(p);
+  for (const PoleSpec &p : lineA) AddPole(p, /*concrete=*/true);
   gLineA = lineA;
   // BUILD-P8: streetlights on alternate line A poles, reaching over the road
   for (int i = 0; i < (int)lineA.size(); i += 2) AddStreetLight(lineA[i], 1.0f);
@@ -1204,6 +1325,37 @@ static void AddTreeline() {
       AddWire(Arm2InsulatorTop(p, off), Arm2InsulatorTop(q, off), sag * 0.74f,
               0.024f, 12, kCable, kMatCable);
   }
+
+  // ---- BUILD-P12: THE CABLE WEB. This is what the reference photograph is
+  // actually about. Six neat distribution conductors read as a power line
+  // DIAGRAM. What makes a real pole is the sixteen thin black telecom drops
+  // and cross-connects strung between the same two poles at different
+  // heights, most of them slack, none of them in a plane — the web that fills
+  // every corner of the frame between the arms. One tube each, and the entire
+  // silhouette of the upper half of the shot.
+  for (int i = 0; i + 1 < (int)lineA.size(); i++) {
+    const PoleSpec &p = lineA[i];
+    const PoleSpec &q = lineA[i + 1];
+    for (int k = 0; k < 16; k++) {
+      float fk = (float)k;
+      // pseudo-random but DETERMINISTIC offsets along the telecom bracket, so
+      // the same web is generated every run and the benchmark stays comparable
+      float u0 = fk * 0.37f;  u0 -= std::floor(u0);
+      float u1 = fk * 0.61f + 0.23f; u1 -= std::floor(u1);
+      float u2 = fk * 0.29f;  u2 -= std::floor(u2);
+      float u3 = fk * 0.83f;  u3 -= std::floor(u3);
+      Vec3 a = TelecomBracketTop(p, -0.66f + 1.32f * u0);
+      Vec3 b = TelecomBracketTop(q, -0.66f + 1.32f * u1);
+      float r = 0.010f + 0.007f * u3;
+      float sag = 0.18f + 0.62f * u2;
+      AddWire(a, b, sag, r, 7, kCableOld, kMatCable);
+    }
+  }
+
+  // ---- BUILD-P12: two cell masts behind the corridor. Pure scale cue, but a
+  // street with no tall thin thing in the far distance has no distance.
+  AddLatticeMast(17.5f, 101.0f, 24.0f);
+  AddLatticeMast(-27.0f, 138.0f, 27.5f);
 
   // ---- a second, closer line: depth + the layered-tangle feel. BUILD-P2:
   // the 17 m offset put line B so far off-axis it read as flat wallpaper;
@@ -1542,7 +1694,7 @@ static void RenderHUD() {
   // build tag: on-screen proof of which scene code the exe runs (stale-build
   // screenshots must be detectable at a glance)
   char line1[128];
-  std::snprintf(line1, sizeof(line1), "FPS: %d   build P10   scene 4: LainBench", gFps);
+  std::snprintf(line1, sizeof(line1), "FPS: %d   build P12   scene 4: LainBench", gFps);
   RenderText(16.0f, 16.0f, line1);
 }
 

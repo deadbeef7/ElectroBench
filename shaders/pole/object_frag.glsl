@@ -53,6 +53,7 @@ const float kMatShadow = 12.0;  // streamed, alpha-blended ground shadow
 const float kMatGlow   = 13.0;  // emissive: lit signage / lamp lenses at dusk
 const float kMatSteel  = 14.0;  // BUILD-P9: hot-dip galvanized steel (shafts, arms)
 const float kMatKerb   = 15.0;  // BUILD-P10: cast concrete kerb + gutter
+const float kMatConcrete = 16.0;// BUILD-P12: weathered precast concrete shaft
 
 // cheap hash: no transcendentals (the old sin-based hash was 20+ cycles on
 // a pre-SSE CPU). Same "value noise", a fraction of the cost.
@@ -287,6 +288,35 @@ void main() {
         base = mix(base, vec3(0.135, 0.060, 0.030), rust * 0.70);
         rough = mix(0.62, 0.34, smoothstep(0.25, 0.85, streak)) + rust * 0.25;
         sheen = 0.42;
+    } else if (m == kMatConcrete) {
+        // BUILD-P12: WEATHERED PRECAST CONCRETE. The reference pole is a
+        // concrete shaft, and the things that say "concrete" rather than
+        // "grey cylinder" are all directional: vertical water staining that
+        // runs DOWN from every bracket, horizontal form-board lifts from the
+        // mould, spalled patches showing darker aggregate, and a dirt line
+        // where rain has washed the street's dirt up the first two metres.
+        float streak = vnoise(vec2((P.x + P.z * 0.45) * 2.10, P.y * 0.10));
+        base *= 0.84 + 0.28 * streak;
+        // form-board seams: the mould leaves a faint horizontal line every
+        // 0.6 m, and they are what make the shaft read as CAST rather than as
+        // turned
+        float board = abs(fract(P.y * 1.62) - 0.5) * 2.0;
+        base *= mix(0.94, 1.05, smoothstep(0.04, 0.26, board));
+        // spalling — chipped patches revealing the darker coarse aggregate,
+        // near field only or it aliases at distance
+        if (near > 0.02) {
+            float spall = smoothstep(0.70, 0.93,
+                                     vnoise(vec2((P.x + P.z) * 7.5, P.y * 1.7)));
+            base = mix(base, vec3(0.180, 0.172, 0.162), spall * 0.55 * near);
+        }
+        // grime washed up the foot, and rain streaks strongest just under the
+        // hardware where the water always runs off
+        base = mix(base, vec3(0.168, 0.158, 0.140),
+                   smoothstep(2.4, 0.10, P.y) * 0.42);
+        base = mix(base, base * 0.82,
+                   smoothstep(0.55, 0.95, streak) * 0.30);
+        rough = 0.90 - 0.10 * streak;
+        sheen = 0.06;
     } else if (m == kMatGlow) {
         // BUILD-P8: emissive. A lit vending machine or lamp lens is its own
         // light source — running it through the diffuse model just made it a

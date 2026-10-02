@@ -11,7 +11,7 @@ It ships **one** executable that contains **all four** scenes — no second bina
 | **ElectroBench** (the OG) | OpenGL 2.1 / GLSL 1.2, fixed-function pipeline | **110 UZIs** on a power-trowelled concrete floor under a generated dusk sky, lit by a warm sun, opened by a three-act **flyover camera** (approach, runway pass down the array, pull back) |
 | **TideBench** (scene 2) | OpenGL 3.3 core, pixel-shader workloads | An ocean under volumetric clouds (3DMark2001 SE "Nature" recreation) |
 | **PoolBench** (scene 3) | OpenGL 3.3 core, analytic shaders | A white-and-red checkerboard-sky pool room lit by a visible luminous ceiling panel (with its own reflection lying down the water), grouted tiles, projected caustics and two waves of falling, splashing teapots (18 total) |
-| **LainBench** (scene 4) | OpenGL 3.3 core, analytic shaders | A Lain-style power-line corridor at amber dusk under a **physically-based atmosphere** (Rayleigh + Mie, limb-darkened sun disc, wind-blown cumulus): 21 galvanized STEEL utility poles (step bolts, number plates, guy wires into buried anchors, cut-out fuses, transformers), six tiers of sagging catenary wire per bay tied insulator-top to insulator-top and down to house eave brackets, alpha-blended swinging shadows, a **damp asphalt road with cast concrete kerbs that mirrors the sunset**, suburban houses with lit windows, a far treeline. 4x MSAA |
+| **LainBench** (scene 4) | OpenGL 3.3 core, analytic shaders | A utility corridor at amber dusk under a **physically-based atmosphere** (Rayleigh + Mie, limb-darkened sun disc, wind-blown cumulus): weathered **concrete** pole shafts carrying the hardware the reference photograph shows — three tiers of pin insulators, transformer, cut-out fuses, step bolts, guy wires into buried anchors — wrapped in a **dense web of 16 thin slack telecom cables per bay** plus **hanging slack coils and service loops**, two lattice cell masts for scale, a **damp asphalt road with cast concrete kerbs that mirrors the sunset**, houses with lit windows. 4x MSAA |
 
 
 
@@ -43,11 +43,11 @@ The PoolBench pool room — an infinite white-and-red checkerboard sky mirrored 
 
 ![PoolBench in motion: teapot splash crowns, droplet streaks and ripple rings propagating across the checkerboard-mirrored water](docs/screenshots/pool_splash.gif)
 
-The LainBench power-line corridor — an amber dusk under a real atmosphere (Rayleigh sky, a tight limb-darkened sun disc sitting on the haze band, wind-blown cumulus with sunward silver linings), two lines of steel utility poles marching to the horizon, cast concrete kerbs and a damp road mirroring the sunset, and a wall of sagging wires over the auto-dolly camera:
+The LainBench power-line corridor — an amber dusk under a real atmosphere (Rayleigh sky, a tight limb-darkened sun disc sitting on the haze band, wind-blown cumulus with sunward silver linings). The camera aims at the **top** of the pole, because that is the subject: concrete shafts, three tiers of pin insulators, transformers and cut-outs, a **dense web of thin slack telecom cable** strung between the same two poles at a dozen heights, coils of spare cable hung off the brackets, and cell masts standing behind the line. Below it, cast concrete kerbs and a damp road mirroring the sunset:
 
 ![ElectroBench LainBench scene: steel utility poles and catenary wires against an amber dusk sky](docs/screenshots/lain_lines.png)
 
-**In motion** — the auto-dolly walking the corridor (four positions down the run): galvanised shafts, guy wires pulling into their anchor blocks, and the telecom bundles peeling off toward the eaves:
+**In motion** — the auto-dolly walking the corridor (four positions down the run): the cable web sweeping overhead pole after pole, slack coils swinging past, guy wires pulling into their anchor blocks, and the telecom bundles peeling off toward the eaves:
 
 ![LainBench in motion: steel poles, guy wires and catenary spans over the dolly camera](docs/screenshots/lain_lines.gif)
 
