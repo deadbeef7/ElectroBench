@@ -1,7 +1,9 @@
 #version 330 core
 // SCENE 4 (POWER LINES): the sky. A warm orange late-afternoon gradient —
 // deep amber at the zenith through pale peach into a hazy cream horizon —
-// with soft white cumulus drifting slowly, and a low veiled sun glow.
+// with soft white cumulus drifting slowly, and a LOW SUN: a tight veiled
+// disc sitting right on the haze band (wires and poles cross it — the
+// serial-experiments silhouette money shot), not a diffuse glow.
 // Fully analytic: the clouds are two octaves of smooth value noise carved
 // into puffy cells, scrolled at two different speeds (parallax depth).
 // A tiny hash dither kills the last banding on wide gradients.
@@ -56,10 +58,21 @@ void main() {
         sky = mix(horiz, vec3(0.42, 0.22, 0.10), smoothstep(0.0, -0.35, h));
     }
 
-    // ---- veiled sun: a soft warm bloom, no hard disc ----
+    // ---- veiled sun: a TIGHT LOW DISC on the haze band. The camera dollies
+    // straight toward it, so poles and wires cross the disc as silhouettes.
+    // BUILD-P2: core/halo trimmed to pay for the disc (same clip budget as
+    // build P1).
     float sunAmt = max(dot(dir, normalize(uSunDir)), 0.0);
-    sky += vec3(1.0, 0.80, 0.52) * pow(sunAmt, 24.0) * 0.42;   // tight core
-    sky += vec3(1.0, 0.70, 0.38) * pow(sunAmt, 5.0) * 0.10;    // wide halo
+    float disc = smoothstep(0.9996, 0.99985, sunAmt);           // ~1.6° veil
+    sky += vec3(1.0, 0.86, 0.62) * disc * 0.62;
+    sky += vec3(1.0, 0.80, 0.52) * pow(sunAmt, 30.0) * 0.24;   // tight core
+    sky += vec3(1.0, 0.70, 0.38) * pow(sunAmt, 7.0) * 0.06;    // wide halo
+    // two faint ray crossbars hugging the horizon (dusk diffusion) — gated
+    // by height so they never draw full-height streaks through the clouds
+    float bar1 = abs(dot(dir.xz, normalize(vec2(0.94, -0.34))));
+    float bar2 = abs(dot(dir.xz, normalize(vec2(-0.34, 0.94))));
+    sky += vec3(1.0, 0.74, 0.42) * pow(sunAmt, 8.0) * exp(-max(h, 0.0) * 10.0)
+         * (exp(-bar1 * 22.0) + exp(-bar2 * 22.0)) * 0.04;
 
     // ---- clouds --------------------------------------------------------------
     // Project the ray onto a virtual cloud deck (like the ocean scene's
@@ -67,7 +80,9 @@ void main() {
     if (h > 0.015) {
         float deckH = 1.0;
         vec2 cp = dir.xz / h * deckH;
-        vec2 drift = vec2(uTime * 0.006, uTime * 0.0023);
+        vec2 drift = vec2(uTime * 0.006, -uTime * 0.0023);  // wind flows up-
+                                                            // corridor, like
+                                                            // the wires lean
         float n = fbm(cp * 0.85 + drift);
         float n2 = fbm(cp * 1.90 - drift * 1.7 + 31.0);      // second layer
         // carve puffy cells: smooth band of the fbm, second layer breaks it
@@ -89,8 +104,9 @@ void main() {
 
     // horizon haze band: a bright cream strip right at eye level sells the
     // heavy late-afternoon atmosphere the wires silhouette against
+    // (BUILD-P2: 0.20 -> 0.14 — the sun disc now supplies the eye-level glare)
     float band = exp(-abs(h) * 26.0);
-    sky += vec3(1.0, 0.88, 0.66) * band * 0.20;
+    sky += vec3(1.0, 0.88, 0.66) * band * 0.14;
 
     // subtle dither: kills gradient banding on smooth drivers
     float dith = vhash(dir.xy * 1913.7 + fract(uTime) * 17.0);

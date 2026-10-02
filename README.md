@@ -9,7 +9,7 @@ It ships **one** executable that contains **all four** scenes — no second bina
 | **ElectroBench** (the OG) | OpenGL 2.1 / GLSL 1.2, fixed-function pipeline | **110 UZIs** on a shadow-mapped concrete floor, lit by a warm sun |
 | **TideBench** (scene 2) | OpenGL 3.3 core, pixel-shader workloads | An ocean under volumetric clouds (3DMark2001 SE "Nature" recreation) |
 | **PoolBench** (scene 3) | OpenGL 3.3 core, analytic shaders | A white-and-red checkerboard-sky pool room with a hidden light and two waves of falling, splashing teapots (18 total) |
-| **PowerBench** (scene 4) | OpenGL 3.3 core, analytic shaders | A Lain-style power-line corridor at amber dusk: creosote utility poles, a wall of sagging catenary wires, drifting white clouds |
+| **PowerBench** (scene 4) | OpenGL 3.3 core, analytic shaders | A Lain-style power-line corridor at amber dusk: 21 creosote utility poles, a wall of sagging catenary wires tied insulator-top to insulator-top, long dusk shadows, drifting white clouds |
 
 
 
@@ -195,16 +195,18 @@ utility corridor: warm gravel under an amber dusk, two lines of creosote poles m
 horizon, and a wall of wires over your head.
 
 What it renders :
-- **Utility poles** built from pure analytic geometry (no model files): trunk, two crossarms,
-  ceramic insulator bells, and a transformer can on every other pole
+- **Utility poles** built from pure analytic geometry (no model files): trunk with base collar and
+  earth wire, two braced crossarms, ceramic insulator bells, a transformer can with bushings on
+  the heavy poles, and a service spool on the double-attachment poles
 - **Catenary wires** — three conductors per crossarm plus a pole-top wire per span, real sag
-  curves (parabola + cosh tail) swept as 4-sided tubes, with crossing spans between the two lines
-  and a service drop down to a junction box
-- A **dusk sky** rendered directly at full screen resolution: amber-to-cream gradient, a veiled low
-  sun with a tight halo, two layers of drifting value-noise clouds riding a virtual deck, and a
-  warm haze band at the horizon
-- A warm gravel field, **aerial haze** that swallows the far spans into the sky colour, and a
-  filmic knee on the whole frame so the amber rolls off instead of clipping into flat white
+  curves (parabola + cosh tail) swept as 4-sided tubes, every span tied insulator-top to
+  insulator-top, with crossing spans between the two lines and service drops down to junctions
+- A **dusk sky** rendered directly at full screen resolution: amber-to-cream gradient, a low veiled
+  sun disc sitting on the haze band (the dolly walks straight toward it, so poles and wires cross
+  it as silhouettes), two layers of drifting value-noise clouds, and horizon ray crossbars
+- A patchy warm gravel field with **long analytic dusk shadows** raking back from every pole,
+  two-scale **aerial haze** that sinks the far corridor into the sky colour without erasing it,
+  grazing rim glints on the wires, and a filmic knee on the whole frame
 - An **automatic camera** that dollies along line A from pole to pole (wrapping at the end of the
   line) with the wire bundle sliding overhead
 

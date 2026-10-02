@@ -29,6 +29,7 @@
 // --width; scene-specific: --pole-only (run just this scene).
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
@@ -178,9 +179,10 @@ static Program LinkProgram(const char *vsPath, const char *fsPath) {
 static const char *const gName = "ElectroBench - Power Lines";
 static const int WIDTH = 1280, HEIGHT = 720;
 static const float kGroundY = 0.0f;
-// late-afternoon sun: low, warm, slightly off the line axis so the wires
-// catch rim light from the side
-static const Vec3 kSunDir{0.34f, 0.28f, -0.90f};
+// dusk sun: LOW and AHEAD of the dolly camera (up the corridor), slightly
+// left — wires cross the sun disc, poles read as silhouettes, long shadows
+// come back toward the viewer. BUILD-P2 hyper-realism pass.
+static const Vec3 kSunDir{-0.30f, 0.20f, 0.93f};
 
 // ---------------------------------------------------------------- scene state
 static Program gSkyProg, gObjProg, gHudProg;
@@ -224,13 +226,15 @@ static void UpdateAutoCamera(float t) {
   // Dolly along the line: the camera walks the gravel path beside the poles,
   // the wire catenaries sweeping overhead pole after pole. Wrap around so
   // the 45 s bench never leaves the grid.
-  const float span = 58.0f;
+  const float span = 161.0f;   // 13 spans of the 15-pole corridor
   float z = 4.0f + std::fmod(t * 2.6f, span);
-  gCamPos = {1.9f + std::sin(t * 0.05f) * 0.9f,          // gentle weave
-             1.85f + 0.22f * std::sin(t * 0.11f),        // breathing height
+  gCamPos = {2.15f + std::sin(t * 0.05f) * 0.9f,         // gentle weave
+             1.9f + 0.22f * std::sin(t * 0.11f),         // breathing height
              z};
-  // look up the line toward the wires: pitch lifts slowly with each pass
-  Vec3 target{0.0f, 6.4f, z + 13.0f};
+  // BUILD-P2: aim up the corridor with the LOW SUN sitting on the horizon —
+  // poles cross it as dark silhouettes and wires string straight over it
+  // (the money shot of the serial-experiments look).
+  Vec3 target{-0.45f, 5.5f, z + 26.0f};
   Vec3 f = Vec3Norm(Vec3Sub(target, gCamPos));
   gCamYaw = std::atan2(-f.x, -f.z);
   gCamPitch = std::asin(f.y) * -1.0f;   // negative = looking up
@@ -379,17 +383,36 @@ static void AddBox(const Vec3 &center, const Vec3 &half, const Vec3 &color) {
   }
 }
 
-// One utility pole: trunk, two crossarms, insulators, optional transformer.
-struct PoleSpec { float x, z; float height; bool transformer; };
+// One utility pole: trunk, two crossarms with diagonal braces, insulators,
+// an earth wire down the trunk, optional transformer + service spool.
+// BUILD-P2: every wire in the scene ties to a REAL insulator top — these
+// two helpers are the single source of truth for the attachment points.
+struct PoleSpec { float x, z; float height; bool transformer; bool serviceSpool; };
+static Vec3 ArmInsulatorTop(const PoleSpec &p, float off) {
+  // crossarm at height-0.55; its insulator stacks top out 0.35 above it
+  return {p.x + off, p.height - 0.20f, p.z};
+}
+static Vec3 PoleTopInsulatorTop(const PoleSpec &p) {
+  return {p.x, p.height + 0.24f, p.z};
+}
 static void AddPole(const PoleSpec &p) {
   Vec3 base{p.x, kGroundY, p.z};
   Vec3 top{p.x, p.height, p.z};
   AddCylinder(base, top, 0.17f, 0.115f, 10, kWoodDark);
+  // dirt collar kicked up around the base (every real pole sits in one)
+  AddCylinder({p.x, kGroundY - 0.02f, p.z}, {p.x, 0.10f, p.z}, 0.52f, 0.34f, 8,
+              {0.30f, 0.24f, 0.18f});
 
-  // main crossarm near the top + a smaller one below
+  // main crossarm near the top + a smaller one below, with diagonal braces
   float armY = p.height - 0.55f;
   AddBox({p.x, armY, p.z}, {1.25f, 0.055f, 0.075f}, kWoodOld);
   AddBox({p.x, armY - 0.62f, p.z}, {0.85f, 0.05f, 0.07f}, kWoodOld);
+  AddCylinder({p.x - 0.34f, armY - 0.05f, p.z + 0.03f},
+              {p.x - 0.94f, armY - 0.57f, p.z + 0.03f}, 0.030f, 0.030f, 6,
+              kWoodDark);
+  AddCylinder({p.x + 0.34f, armY - 0.05f, p.z + 0.03f},
+              {p.x + 0.94f, armY - 0.57f, p.z + 0.03f}, 0.030f, 0.030f, 6,
+              kWoodDark);
 
   // ceramic insulators: three on the main arm, one atop the pole
   for (float off : {-1.05f, 0.0f, 1.05f}) {
@@ -402,6 +425,16 @@ static void AddPole(const PoleSpec &p) {
   AddCylinder(Vec3Add(top, Vec3{0, 0.18f, 0}), Vec3Add(top, Vec3{0, 0.24f, 0}),
               0.058f, 0.038f, 8, kCeramic);
 
+  // earth wire: a bare cable clipped down the trunk, grounded at the collar
+  AddWire({p.x + 0.115f, 0.12f, p.z}, {p.x + 0.085f, 4.0f, p.z}, 0.05f, 0.014f,
+          6, kMetal);
+
+  if (p.serviceSpool) {
+    // secondary service spool on the other flank (double-attachment poles)
+    AddCylinder({p.x - 0.24f, 5.4f, p.z}, {p.x - 0.34f, 5.4f, p.z}, 0.05f,
+                0.05f, 6, kMetal);
+  }
+
   if (p.transformer) {
     // the can: grey cylinder + cooling fins, bolted below the crossarm
     Vec3 tc{p.x + 0.62f, armY - 1.35f, p.z};
@@ -409,6 +442,14 @@ static void AddPole(const PoleSpec &p) {
                 Vec3Add(tc, Vec3{0.1f, 0.55f, 0}), 0.34f, 0.34f, 10, kMetal);
     AddBox({tc.x, tc.y + 0.30f, tc.z}, {0.40f, 0.16f, 0.16f}, kMetal);
     AddBox({tc.x, tc.y - 0.34f, tc.z}, {0.10f, 0.22f, 0.10f}, kMetal);
+    // two ceramic bushings on the can's crown + their drop leads
+    for (float bz : {-0.12f, 0.12f}) {
+      Vec3 bt{tc.x, tc.y + 0.46f, tc.z + bz};
+      AddCylinder(bt, Vec3Add(bt, Vec3{0, 0.16f, 0}), 0.045f, 0.038f, 6,
+                  kCeramic);
+      AddWire(Vec3Add(bt, Vec3{0, 0.18f, 0}), {tc.x, armY - 0.30f, tc.z + bz},
+              0.08f, 0.011f, 5, kCable);
+    }
   }
 }
 
@@ -428,55 +469,93 @@ static void BuildSceneGeometry() {
     gIdx.push_back(s); gIdx.push_back(s + 2); gIdx.push_back(s + 3);
   }
 
-  // ---- the main pole line the camera walks beside ----
+  // ---- the main pole line the camera walks beside (BUILD-P2: 15 poles,
+  // tighter 12.4 m spacing — real suburban distribution is 10-14 m spans,
+  // and the long vanishing corridor IS the Lain look) ----
   std::vector<PoleSpec> lineA;
-  for (int i = 0; i < 6; i++)
-    lineA.push_back({0.0f, 2.0f + 13.0f * i, 8.6f + 0.35f * ((i * 5) % 3), i == 1 || i == 4});
+  for (int i = 0; i < 15; i++)
+    lineA.push_back({0.0f, 2.0f + 12.4f * i, 8.6f + 0.35f * ((i * 5) % 3),
+                     i == 1 || i == 6 || i == 11, i == 3 || i == 9});
   for (const PoleSpec &p : lineA) AddPole(p);
 
-  // wires along line A: 3 crossarm points + the pole-top wire
+  // wires along line A: 3 crossarm conductors + the pole-top wire. BUILD-P2
+  // FIX: every span ties INSULATOR TOP to INSULATOR TOP (ArmInsulatorTop /
+  // PoleTopInsulatorTop) — the old below-arm offsets left wire ends hanging
+  // in mid-air beside the insulators.
   for (int i = 0; i + 1 < (int)lineA.size(); i++) {
     const PoleSpec &p = lineA[i];
     const PoleSpec &q = lineA[i + 1];
-    float sag = 0.85f + 0.12f * ((i * 3) % 3);
+    float sag = 0.78f + 0.12f * ((i * 3) % 3);
     for (float off : {-1.05f, 0.0f, 1.05f})
-      AddWire({p.x + off, p.height - 0.25f, p.z},
-              {q.x + off, q.height - 0.25f, q.z}, sag, 0.028f, 14, kCable);
-    AddWire({p.x, p.height + 0.24f, p.z},
-            {q.x, q.height + 0.24f, q.z}, sag * 0.8f, 0.032f, 14, kCableOld);
+      AddWire(ArmInsulatorTop(p, off), ArmInsulatorTop(q, off), sag, 0.028f,
+              14, kCable);
+    AddWire(PoleTopInsulatorTop(p), PoleTopInsulatorTop(q), sag * 0.8f, 0.032f,
+            14, kCableOld);
   }
 
-  // ---- a second, farther line: depth + the layered-tangle feel ----
+  // ---- a second, closer line: depth + the layered-tangle feel. BUILD-P2:
+  // the 17 m offset put line B so far off-axis it read as flat wallpaper;
+  // 8 m puts a real second plane of poles in frame. Every wire ties
+  // insulator-top to insulator-top (the old wires floated mid-air — the
+  // "wires hanging out" glitch).
   std::vector<PoleSpec> lineB;
-  for (int i = 0; i < 5; i++)
-    lineB.push_back({-17.0f, 8.0f + 15.0f * i, 7.6f, i == 2});
+  for (int i = 0; i < 6; i++)
+    lineB.push_back({-8.0f, 6.0f + 15.5f * i, 7.6f, false, i == 1});
   for (const PoleSpec &p : lineB) AddPole(p);
   for (int i = 0; i + 1 < (int)lineB.size(); i++) {
     const PoleSpec &p = lineB[i];
     const PoleSpec &q = lineB[i + 1];
     for (float off : {-0.85f, 0.85f})
-      AddWire({p.x + off, p.height - 0.5f, p.z},
-              {q.x + off, q.height - 0.5f, q.z}, 0.95f, 0.026f, 12, kCableOld);
+      AddWire(ArmInsulatorTop(p, off), ArmInsulatorTop(q, off), 0.88f, 0.026f,
+              12, kCableOld);
   }
 
-  // ---- the crossing spans: line B feeds into line A (the tangle) ----
-  for (int i = 0; i < 3; i++) {
+  // ---- the crossing spans: line B feeds into line A (the tangle). BUILD-P2
+  // FIX: crossings now land on real insulator tops of both poles.
+  for (int i = 0; i < 4; i++) {
     const PoleSpec &p = lineB[i];
     const PoleSpec &q = lineA[i + 1];
-    AddWire({p.x + 0.85f, p.height - 0.5f, p.z},
-            {q.x - 1.05f, q.height - 0.25f, q.z}, 1.35f, 0.024f, 16, kCable);
+    AddWire(ArmInsulatorTop(p, 0.85f), ArmInsulatorTop(q, -1.05f), 1.30f,
+            0.024f, 16, kCable);
   }
 
-  // ---- a service drop: from the nearest pole down to a small junction ----
-  {
-    const PoleSpec &p = lineA[1];
-    AddWire({p.x + 1.05f, p.height - 0.7f, p.z},
-            {4.6f, 3.1f, p.z + 3.2f}, 0.55f, 0.020f, 10, kCableOld);
-    AddWire({p.x + 0.4f, p.height - 0.7f, p.z},
-            {4.1f, 3.1f, p.z + 3.4f}, 0.50f, 0.020f, 10, kCableOld);
+  // ---- a service drop: from double-attachment poles down to a small
+  // junction. BUILD-P2 FIX: the drop ties to the real service spool height,
+  // not to a point floating off the pole flank.
+  for (int side = 0; side < 2; side++) {
+    const PoleSpec &p = lineA[side == 0 ? 3 : 9];
+    AddWire({p.x - 0.34f, 5.4f, p.z}, {4.6f, 3.1f, p.z + 3.2f}, 0.55f, 0.020f,
+            10, kCableOld);
+    AddWire(ArmInsulatorTop(p, 1.05f), {4.1f, 3.1f, p.z + 3.4f}, 0.50f, 0.020f,
+            10, kCableOld);
     AddCylinder({4.35f, 3.0f, p.z + 3.3f}, {4.35f, 2.45f, p.z + 3.3f},
                 0.09f, 0.09f, 8, kMetal);
     AddBox({4.35f, 3.05f, p.z + 3.3f}, {0.16f, 0.10f, 0.12f}, kMetal);
+  }
+
+  // ---- BUILD-P2: long dusk shadows. The low sun rakes up the corridor, so
+  // every pole lies down as a long tapered silhouette. Analytic: a quad from
+  // the base extending along the sun ray to 16 m, darkest at the foot,
+  // feathering to nothing — drawn dark and slightly warm (dusk bounce).
+  for (const PoleSpec &p : lineA) {
+    Vec3 sun = Vec3Norm({kSunDir.x, 0.0f, kSunDir.z});
+    Vec3 perp{-sun.z, 0.0f, sun.x};
+    float reach = 16.0f * (1.0f + 0.05f * (float)((int(p.z) % 7)));  // varied
+    Vec3 b{p.x, 0.012f, p.z};
+    Vec3 tip = Vec3Add(b, Vec3Scale(sun, -reach));  // AWAY from the sun
+    float w0 = 0.34f, w1 = 1.15f;                    // widening penumbra
+    Vec3 c0 = Vec3Add(b, Vec3Scale(perp, w0));
+    Vec3 c1 = Vec3Add(b, Vec3Scale(perp, -w0));
+    Vec3 c2 = Vec3Add(tip, Vec3Scale(perp, w1));
+    Vec3 c3 = Vec3Add(tip, Vec3Scale(perp, -w1));
+    Vec3 sc{0.135f, 0.10f, 0.082f};                  // warm dusk shadow
+    unsigned int ss = (unsigned int)gVerts.size();
+    PushVert(c0, {0, 1, 0}, sc);
+    PushVert(c1, {0, 1, 0}, sc);
+    PushVert(c2, {0, 1, 0}, sc);
+    PushVert(c3, {0, 1, 0}, sc);
+    gIdx.push_back(ss); gIdx.push_back(ss + 1); gIdx.push_back(ss + 2);
+    gIdx.push_back(ss); gIdx.push_back(ss + 2); gIdx.push_back(ss + 3);
   }
 
   // upload
@@ -598,7 +677,7 @@ static void RenderHUD() {
   // build tag: on-screen proof of which scene code the exe runs (stale-build
   // screenshots must be detectable at a glance)
   char line1[128];
-  std::snprintf(line1, sizeof(line1), "FPS: %d   build P1   scene 4: power lines", gFps);
+  std::snprintf(line1, sizeof(line1), "FPS: %d   build P2   scene 4: power lines", gFps);
   RenderText(16.0f, 16.0f, line1);
 }
 
@@ -701,8 +780,8 @@ static void RenderScene() {
 
   Mat4 view;
   {
-    // gaze: up the line at the wire bundle, a little above head height
-    Vec3 look{0.0f, 5.6f, gCamPos.z + 13.0f};
+    // gaze: up the line at the wire bundle, toward the sun on the horizon
+    Vec3 look{-0.45f, 5.5f, gCamPos.z + 26.0f};
     Mat4LookAt(view, eye, look, {0, 1, 0});
   }
   float aspect = (float)gWindowWidth / (float)gWindowHeight;

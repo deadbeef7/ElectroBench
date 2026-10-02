@@ -39,19 +39,44 @@ void main() {
     vec3 ambient = vec3(0.30, 0.19, 0.13) + vec3(0.10, 0.05, 0.03);   // warm bounce
 
     vec3 base = vColor;
+    // BUILD-P2 ground patchiness: a flat single-colour quad is the cheapest
+    // CGI tell in the scene. Two smooth world-space octaves modulate the
+    // gravel albedo (dust paths, damp patches); only downward normals.
+    if (N.y > 0.9) {
+        float p1 = sin(vWorld.x * 0.35 + sin(vWorld.z * 0.21) * 1.7)
+                 * sin(vWorld.z * 0.27 + sin(vWorld.x * 0.17) * 2.1);
+        float p2 = sin(vWorld.x * 1.9 + vWorld.z * 1.3)
+                 * sin(vWorld.z * 2.3 - vWorld.x * 0.7);
+        base *= 0.78 + 0.22 * p1 + 0.10 * p2;
+    }
     // soft sheen: tight-ish lobe scaled by material darkness (rubber cables
     // glint, matte wood barely does)
     vec3 H = normalize(L + V);
     float spec = pow(max(dot(N, H), 0.0), 26.0) * (0.30 - 0.22 * clamp(dot(base, vec3(0.333)), 0.0, 1.0));
+    // BUILD-P2 grazing rim glint: with the sun ahead, every wire edge catches
+    // a hair-thin highlight — the single strongest "real cables" tell.
+    float edge = 1.0 - abs(dot(N, V));
+    spec += pow(edge, 8.0) * 0.50;
 
-    vec3 col = base * (ambient + sunTint * wrap * 0.90) + sunTint * spec * 0.9;
+    vec3 col = base * (ambient + sunTint * wrap * 0.90 + vec3(0.16, 0.08, 0.04))
+             + sunTint * spec * 0.9;
 
     // aerial perspective: distance haze toward the horizon cream — far poles
-    // and wires sink into the heat haze, the near tangle stays crisp
+    // and wires sink into the heat haze, the near tangle stays crisp.
+    // BUILD-P2 DETAIL FALLOFF: the old single exp was still eating everything
+    // past ~80 m ("poles not being rendered"). Two-scale haze: slow global
+    // ramp + a modest near-fade so the vanishing corridor reads through.
     float dist = length(uEyePos - vWorld);
-    float haze = 1.0 - exp(-dist * 0.010);
+    float haze = 1.0 - exp(-dist * 0.0042);
+    haze += 0.18 * (1.0 - exp(-dist * 0.028));
     vec3 hazeCol = vec3(0.99, 0.78, 0.52);
-    col = mix(col, hazeCol, haze * 0.55);
+    col = mix(col, hazeCol, clamp(haze * 0.55, 0.0, 0.85));
+
+    // BUILD-P2: analytic touch — poles and wires are THROUGH-SEEN: their
+    // silhouettes carry a faint warm veil of the glowing haze behind them
+    // (thin dark shapes over a bright sky never read as pitch black).
+    float silh = clamp(1.0 - dot(base, vec3(0.333)) * 2.6, 0.0, 1.0);
+    col = mix(col, vec3(0.52, 0.30, 0.14), silh * 0.18);
 
     // gentle highlight knee (only compresses the TOP end; dark values pass)
     col = clamp(col, 0.0, 4.0);
