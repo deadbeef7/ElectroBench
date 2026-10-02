@@ -898,7 +898,7 @@ void renderScene() {
 
     if (gFusedEnabled) {
       // ---- scene 2: the GL 3.3 dusk-ocean scene, same SDL session ----
-      printf("Scene 2/3 : Dusk Ocean (GL 3.3)\n");
+      printf("Scene 2/4 : Dusk Ocean (GL 3.3)\n");
       fflush(stdout);
       SDL_Quit(); // the ocean scene recreates the window with a GL 3.3 core context
       bool gaveUp = false;
@@ -917,7 +917,7 @@ void renderScene() {
       fflush(stdout);
 
       // ---- scene 3: the GL 3.3 pool-room scene (checker sky + water + teapot) ----
-      printf("Scene 3/3 : Pool Room (GL 3.3)\n");
+      printf("Scene 3/4 : Pool Room (GL 3.3)\n");
       fflush(stdout);
       bool gaveUpPool = false;
       int rcPool = RunPoolScene(&gaveUpPool);

@@ -106,8 +106,10 @@ What it renders :
 - High-resolution **environment cubemap** reflections with roughness-matched LOD (the sun smears
   into a glow, never texel squares), fresnel blending, sun-tinted **glitter** path gated to the
   sun's azimuth (bright path down the middle, dark blue-purple water either side),
-  an energy-bounded GGX sparkle core so the path glints richly without firefly artifacts, slope-gated crest foam, sun-path-gated subsurface glow in thin crests, and distance haze that converges into the
-  actual per-azimuth sky colour so the far sea melts into the horizon
+  tight v0.3-style sparkles along the path, slope-gated crest foam, sun-path-gated subsurface glow
+  in thin crests, and distance haze that converges into the actual per-azimuth sky colour so the
+  far sea melts into the horizon. The two cirrus wisps ride the live sky only — the reflection
+  cubemap bakes the 7 base banks, so no hot wisp linings speckle the sea
 - **Cloud shadows on the water**: each sea fragment is projected along its sun ray into the same 620 m
   cloud deck and matched 3D-lobe density field the sky renders — where a cloud blocks the sun the
   direct light dies, foam stops breaking and the sea goes much darker, in coherent moving patches that
@@ -204,9 +206,11 @@ What it renders :
 - A **dusk sky** rendered directly at full screen resolution: amber-to-cream gradient, a low veiled
   sun disc sitting on the haze band (the dolly walks straight toward it, so poles and wires cross
   it as silhouettes), two layers of drifting value-noise clouds, and horizon ray crossbars
-- A patchy warm gravel field with **long analytic dusk shadows** raking back from every pole,
-  two-scale **aerial haze** that sinks the far corridor into the sky colour without erasing it,
-  grazing rim glints on the wires, and a filmic knee on the whole frame
+- A **straight asphalt road with worn centre dashes** running under the auto camera (it drives
+  the right lane; the pole line stands at the road's left shoulder), a patchy warm gravel field,
+  **long analytic dusk shadows** raking back from every pole, two-scale **aerial haze** that
+  sinks the far corridor into the sky colour without erasing it, grazing rim glints on the
+  wires, and a filmic knee on the whole frame
 - An **automatic camera** that dollies along line A from pole to pole (wrapping at the end of the
   line) with the wire bundle sliding overhead
 
@@ -293,7 +297,7 @@ Notes for the direct g++ build :
 - `-march=x86-64 -mtune=generic` is the key: it emits baseline x86-64 code that runs on any 64-bit CPU, so the resulting exe won't illegal-instruction even where the prebuilt MSYS2 tools do.
 - Keep `-lglew32` before `-lSDL2`, and `-lopengl32` last — link order matters on MinGW.
 - Run the exe from the repo root (or copy `SDL2.dll` / `glew32.dll` from `C:\msys64\<env>\bin` next to it) so the DLLs resolve.
-- This was verified end-to-end on a Toshiba Satellite P200 (Core 2 Duo, pre-x86-64-v2) — all three shader programs compiled and linked on hardware.
+- This was verified end-to-end on a Toshiba Satellite P200 (Core 2 Duo, pre-x86-64-v2) — every scene's shader programs compiled and linked on hardware.
 
 Notes :
 - The headless screenshot flags work too — just use a Windows-style path: `./build/ElectroBench.exe --scene-only --width 960 --screenshot shot.ppm --shot-times 6,20,38`

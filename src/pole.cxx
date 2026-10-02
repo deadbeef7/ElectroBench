@@ -228,7 +228,9 @@ static void UpdateAutoCamera(float t) {
   // the 45 s bench never leaves the grid.
   const float span = 161.0f;   // 13 spans of the 15-pole corridor
   float z = 4.0f + std::fmod(t * 2.6f, span);
-  gCamPos = {2.15f + std::sin(t * 0.05f) * 0.9f,         // gentle weave
+  // BUILD-P5: the camera drives the road's right lane (the road is centred
+  // at x = +2.6), hugging the centreline so the poles stream past on the left
+  gCamPos = {2.6f + std::sin(t * 0.05f) * 0.35f,         // gentle weave
              1.9f + 0.22f * std::sin(t * 0.11f),         // breathing height
              z};
   // BUILD-P2: aim up the corridor with the LOW SUN sitting on the horizon —
@@ -593,17 +595,20 @@ static void BuildSceneGeometry() {
             10, kCableOld);
     AddWire(ArmInsulatorTop(p, 1.05f), {4.1f, 3.1f, p.z + 3.4f}, 0.50f, 0.020f,
             10, kCableOld);
-    AddCylinder({4.35f, 3.0f, p.z + 3.3f}, {4.35f, 2.45f, p.z + 3.3f},
+    // junction boxes hang on the pole wall (mounted), NOT floating in the
+    // field — the unmounted cans read as a floating T-bar from the road.
+    AddCylinder({p.x - 0.30f, 3.05f, p.z}, {p.x - 0.30f, 2.45f, p.z},
                 0.09f, 0.09f, 8, kMetal);
-    AddBox({4.35f, 3.05f, p.z + 3.3f}, {0.16f, 0.10f, 0.12f}, kMetal);
+    AddBox({p.x - 0.30f, 3.10f, p.z}, {0.16f, 0.10f, 0.12f}, kMetal);
   }
 
-  // ---- BUILD-P4: THE ROAD. A straight asphalt strip parallel to the poles
-  // (x = +4.5 m, 5.4 m wide) with worn painted centre dashes — the corridor
-  // the auto camera drives beside. Slightly dark, slightly blue-grey against
-  // the warm gravel so it reads instantly.
+  // ---- BUILD-P4/P5: THE ROAD. A straight asphalt strip parallel to the
+  // poles, CENTRED UNDER THE AUTO CAMERA (road centre x = +2.6 m, 5.4 m
+  // wide): the camera drives the right lane, the pole line stands at the
+  // road's left shoulder, and the wires cross the frame overhead — the
+  // classic Japanese-street composition. Worn painted centre dashes.
   {
-    const float rx = 4.5f, halfW = 2.7f;
+    const float rx = 2.6f, halfW = 2.7f;
     Vec3 road{0.16f, 0.155f, 0.165f};
     Vec3 edge{0.20f, 0.19f, 0.19f};
     Vec3 paint{0.62f, 0.58f, 0.50f};
@@ -783,7 +788,7 @@ static void RenderHUD() {
   // build tag: on-screen proof of which scene code the exe runs (stale-build
   // screenshots must be detectable at a glance)
   char line1[128];
-  std::snprintf(line1, sizeof(line1), "FPS: %d   build P4   scene 4: power lines", gFps);
+  std::snprintf(line1, sizeof(line1), "FPS: %d   build P5   scene 4: power lines", gFps);
   RenderText(16.0f, 16.0f, line1);
 }
 

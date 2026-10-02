@@ -31,11 +31,13 @@ CFLAGS="-Ilib -IC:/msys64/mingw32/include/SDL2 -Dmain=SDL_main -DGLEW_STATIC -D_
 g++ $CFLAGS -c src/main.cxx      -o build/static/main.o
 g++ $CFLAGS -c src/tidebench.cxx -o build/static/tidebench.o
 g++ $CFLAGS -c src/pool.cxx      -o build/static/pool.o
+g++ $CFLAGS -c src/pole.cxx      -o build/static/pole.o
 
 g++ -std=c++17 -O2 -m32 \
     -D_WIN32_WINNT=0x0501 \
     -static -static-libgcc -static-libstdc++ \
     build/static/main.o build/static/tidebench.o build/static/pool.o \
+    build/static/pole.o \
     -o build/ElectroBench-static.exe \
     -lmingw32 -mwindows -lSDL2main -lSDL2 -lm \
     -lkernel32 -luser32 -lgdi32 -lwinmm -limm32 -lole32 -loleaut32 \
