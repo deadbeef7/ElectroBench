@@ -309,6 +309,28 @@ static void AddCylinder(const Vec3 &base, const Vec3 &top, float rBase, float rT
   }
 }
 
+static void AddWire(const Vec3 &a, const Vec3 &b, float sag, float radius,
+                    int samples, const Vec3 &color);
+
+// BUILD-P4 TELECOM BUNDLE: a communication cable sags between its two pole
+// brackets, and a bundle of thin DROP WIRES peels off along the span — the
+// drippy ''telephone lines going everywhere'' of every Japanese street.
+// Deterministic (hash of the span index) like everything else in the bench.
+static void AddTelecomBundle(const Vec3 &a, const Vec3 &b, int seed,
+                             float radius, int samples, const Vec3 &color) {
+  AddWire(a, b, 0.55f + 0.10f * ((seed * 7) % 3), radius, samples, color);
+  int drops = 4 + (seed % 3);                    // 4-6 drop wires per span
+  for (int i = 0; i < drops; i++) {
+    float t = 0.18f + 0.62f * (float)((seed * 13 + i * 29) % 100) / 100.0f;
+    float drop = 0.35f + 0.55f * (float)((seed * 17 + i * 41) % 100) / 100.0f;
+    Vec3 p{a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t - drop,
+           a.z + (b.z - a.z) * t};
+    Vec3 q{p.x, p.y - 1.15f - 0.9f * (float)((seed * 23 + i * 13) % 100) / 100.0f,
+           p.z};
+    AddWire(p, q, 0.08f, radius * 0.55f, 5, color);
+  }
+}
+
 // A sagging wire between two attachment points: a real catenary sampled as a
 // swept tube (the Lain look is ALL about the droop of these cables).
 static void AddWire(const Vec3 &a, const Vec3 &b, float sag, float radius,
@@ -435,6 +457,20 @@ static void AddPole(const PoleSpec &p) {
                 0.05f, 6, kMetal);
   }
 
+  // BUILD-P4 TELECOM ARM: a second, lower crossarm carrying the phone/cable
+  // bundles (Japanese poles stack a communications arm under the power arm).
+  float telY = armY - 1.30f;
+  AddBox({p.x, telY, p.z}, {0.95f, 0.05f, 0.06f}, kWoodOld);
+  for (float off : {-0.70f, 0.0f, 0.70f})
+    AddCylinder({p.x + off, telY + 0.05f, p.z},
+                {p.x + off, telY + 0.15f, p.z}, 0.038f, 0.032f, 6, kMetal);
+
+  // a couple of CableTV-style cylindrical boxes bolted to the trunk (some
+  // poles, deterministic)
+  if (((int(p.z * 7.0f)) % 3) == 0)
+    AddCylinder({p.x + 0.20f, 3.9f, p.z}, {p.x + 0.20f, 4.5f, p.z}, 0.11f,
+                0.11f, 8, kMetal);
+
   if (p.transformer) {
     // the can: grey cylinder + cooling fins, bolted below the crossarm
     Vec3 tc{p.x + 0.62f, armY - 1.35f, p.z};
@@ -519,6 +555,35 @@ static void BuildSceneGeometry() {
             0.024f, 16, kCable);
   }
 
+  // ---- BUILD-P4: THE TELECOM TANGLE. Two bundles per span on line A (one
+  // per bracket pair) plus one on line B, and cross-line telecom spans
+  // B->A — this is what makes a Japanese pole street read as a Japanese
+  // pole street: tons and tons of sagging phone wire everywhere.
+  for (int i = 0; i + 1 < (int)lineA.size(); i++) {
+    const PoleSpec &p = lineA[i];
+    const PoleSpec &q = lineA[i + 1];
+    float telY = p.height - 1.85f;
+    float telYq = q.height - 1.85f;
+    AddTelecomBundle({p.x - 0.70f, telY, p.z}, {q.x - 0.70f, telYq, q.z},
+                     i * 2 + 1, 0.022f, 12, kCable);
+    AddTelecomBundle({p.x + 0.70f, telY, p.z}, {q.x + 0.70f, telYq, q.z},
+                     i * 2 + 2, 0.022f, 12, kCable);
+  }
+  for (int i = 0; i + 1 < (int)lineB.size(); i++) {
+    const PoleSpec &p = lineB[i];
+    const PoleSpec &q = lineB[i + 1];
+    AddTelecomBundle({p.x, p.height - 1.85f, p.z}, {q.x, q.height - 1.85f, q.z},
+                     i * 3 + 40, 0.020f, 10, kCableOld);
+  }
+  // slack cross-line telecom loops B -> A (the messy diagonal drips)
+  for (int i = 0; i < 5; i++) {
+    const PoleSpec &p = lineB[i];
+    const PoleSpec &q = lineA[i + 1];
+    AddTelecomBundle({p.x - 0.35f, p.height - 1.85f, p.z},
+                     {q.x - 0.70f, q.height - 1.85f, q.z}, i * 5 + 77,
+                     0.018f, 14, kCable);
+  }
+
   // ---- a service drop: from double-attachment poles down to a small
   // junction. BUILD-P2 FIX: the drop ties to the real service spool height,
   // not to a point floating off the pole flank.
@@ -531,6 +596,47 @@ static void BuildSceneGeometry() {
     AddCylinder({4.35f, 3.0f, p.z + 3.3f}, {4.35f, 2.45f, p.z + 3.3f},
                 0.09f, 0.09f, 8, kMetal);
     AddBox({4.35f, 3.05f, p.z + 3.3f}, {0.16f, 0.10f, 0.12f}, kMetal);
+  }
+
+  // ---- BUILD-P4: THE ROAD. A straight asphalt strip parallel to the poles
+  // (x = +4.5 m, 5.4 m wide) with worn painted centre dashes — the corridor
+  // the auto camera drives beside. Slightly dark, slightly blue-grey against
+  // the warm gravel so it reads instantly.
+  {
+    const float rx = 4.5f, halfW = 2.7f;
+    Vec3 road{0.16f, 0.155f, 0.165f};
+    Vec3 edge{0.20f, 0.19f, 0.19f};
+    Vec3 paint{0.62f, 0.58f, 0.50f};
+    unsigned int s = (unsigned int)gVerts.size();
+    Vec3 n{0, 1, 0};
+    // worn asphalt body
+    PushVert({rx - halfW + 0.35f, 0.008f, -60.0f}, n, road);
+    PushVert({rx + halfW - 0.35f, 0.008f, -60.0f}, n, road);
+    PushVert({rx + halfW - 0.35f, 0.008f, 200.0f}, n, road);
+    PushVert({rx - halfW + 0.35f, 0.008f, 200.0f}, n, road);
+    gIdx.push_back(s); gIdx.push_back(s + 1); gIdx.push_back(s + 2);
+    gIdx.push_back(s); gIdx.push_back(s + 2); gIdx.push_back(s + 3);
+    // gravel-dusted edges either side
+    for (int e = 0; e < 2; e++) {
+      float xo = e ? halfW - 0.35f : -halfW;
+      unsigned int es = (unsigned int)gVerts.size();
+      PushVert({rx + xo, 0.006f, -60.0f}, n, edge);
+      PushVert({rx + xo + (e ? 0.35f : -0.35f), 0.006f, -60.0f}, n, edge);
+      PushVert({rx + xo + (e ? 0.35f : -0.35f), 0.006f, 200.0f}, n, edge);
+      PushVert({rx + xo, 0.006f, 200.0f}, n, edge);
+      gIdx.push_back(es); gIdx.push_back(es + 1); gIdx.push_back(es + 2);
+      gIdx.push_back(es); gIdx.push_back(es + 2); gIdx.push_back(es + 3);
+    }
+    // centre dashes: 3 m paint, 5 m gap, the whole length
+    for (float z = -40.0f; z < 160.0f; z += 8.0f) {
+      unsigned int ds = (unsigned int)gVerts.size();
+      PushVert({rx - 0.09f, 0.012f, z}, n, paint);
+      PushVert({rx + 0.09f, 0.012f, z}, n, paint);
+      PushVert({rx + 0.09f, 0.012f, z + 3.0f}, n, paint);
+      PushVert({rx - 0.09f, 0.012f, z + 3.0f}, n, paint);
+      gIdx.push_back(ds); gIdx.push_back(ds + 1); gIdx.push_back(ds + 2);
+      gIdx.push_back(ds); gIdx.push_back(ds + 2); gIdx.push_back(ds + 3);
+    }
   }
 
   // ---- BUILD-P2: long dusk shadows. The low sun rakes up the corridor, so
@@ -677,7 +783,7 @@ static void RenderHUD() {
   // build tag: on-screen proof of which scene code the exe runs (stale-build
   // screenshots must be detectable at a glance)
   char line1[128];
-  std::snprintf(line1, sizeof(line1), "FPS: %d   build P2   scene 4: power lines", gFps);
+  std::snprintf(line1, sizeof(line1), "FPS: %d   build P4   scene 4: power lines", gFps);
   RenderText(16.0f, 16.0f, line1);
 }
 
