@@ -454,7 +454,16 @@ static void AddTelecomBundle(const Vec3 &a, const Vec3 &b, int seed,
                              float radius, int samples, const Vec3 &color) {
   float sag = 0.55f + 0.10f * ((seed * 7) % 3);
   AddWire(a, b, sag, radius, samples, color, kMatCable);
-  int drops = 4 + (seed % 3);                    // 4-6 drop wires per span
+  // BUILD-P16: was 4 + (seed % 3) = 4-6 drop wires per span. Three bundles a
+  // bay on line A at 4-6 drops each is 12-18 wires crossing open sky per bay,
+  // and near the dolly a span subtends a large screen angle: the strands stop
+  // reading as wires and fuse into a dense parallel-stroke mass. Measured with
+  // the material tag pass, dropping the telecom bundles out of kMatCable took
+  // the class from 10303 to 5713 sky pixels and its largest blob from 71 to 38
+  // px — the telecom tier, not the power conductors, owns the artefact.
+  // Halving the drops lets sky through between the strands, which is the
+  // difference between "wires" and "a row of tubes".
+  int drops = 2 + (seed % 2);                    // 2-3 drop wires per span
   for (int i = 0; i < drops; i++) {
     float t = 0.18f + 0.62f * (float)((seed * 13 + i * 29) % 100) / 100.0f;
     float drop = 0.35f + 0.55f * (float)((seed * 17 + i * 41) % 100) / 100.0f;
@@ -1609,8 +1618,13 @@ static void AddTreeline() {
     // BUILD-P9: the middle bracket was carrying nothing at all. One more
     // bundle per bay turns the telecom tier from two parallel cables into the
     // thick three-deep band every Japanese pole line has.
-    AddTelecomBundle(TelecomBracketTop(p, 0.0f), TelecomBracketTop(q, 0.0f),
-                     i * 2 + 13, 0.020f, 12, kCableOld);
+    // BUILD-P16: that third bundle now runs on every OTHER bay only. A real
+    // pole line is not uniform — some spans carry a third cable and some do
+    // not — and the even/odd split is what stops the tier reading as a solid
+    // three-deep wall of wire from end to end.
+    if ((i % 2) == 0)
+      AddTelecomBundle(TelecomBracketTop(p, 0.0f), TelecomBracketTop(q, 0.0f),
+                       i * 2 + 13, 0.020f, 12, kCableOld);
   }
   for (int i = 0; i + 1 < (int)lineB.size(); i++) {
     const PoleSpec &p = lineB[i];

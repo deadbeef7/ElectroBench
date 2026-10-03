@@ -283,21 +283,29 @@ Realism takeaways applied:
   strands — the 11x19 px blob at (566, 48) is ~60% filled. That is the
   "flying cylinders". P12 added the density on purpose, to make the street read
   as a Japanese pole street, and it is the density that has to give.
-- **The blob COUNT is the wrong acceptance test, and the next attempt must not
-  use it.** Halving the telecom drops per bundle (`4 + seed%3` -> `2 + seed%2`,
-  a 13% cut in `kMatCable` sky pixels at t = 17) made the blob count go **UP,
-  20 -> 23**, not down, while leaving t = 7 unchanged at 27. The reason is
-  structural: the metric counts CONNECTED COMPONENTS, so thinning a dense
-  connected mass fragments it into more, smaller pieces. A count that rises
-  when the thing you are trying to remove gets smaller is not measuring the
-  thing. `scripts/cablebars.py` still reports total `kMatCable` sky pixels and
-  the largest blob's size — both of which move the right way — but the blob
-  count should not be the gate.
-- **What the gate should be.** Density, not component count: `kMatCable` sky
-  pixels above the horizon, and the area of the largest single blob. On the
-  measured frames the 11x19 px blob at (566, 48) is the artifact to kill; a
-  fix is only real if that blob's area falls while the total wire count stays
-  plausible for a street.
+- **THE CYLINDERS WERE THE TELECOM WEB, and the fix is on the right target.**
+  Repurposing `kMatGlow` as a temporary tag id inside `AddTelecomBundle` and
+  re-rendering separates the telecom tier from every other `kMatCable` user:
+  the class falls **10303 -> 5713 sky px** and its largest blob **71 -> 38 px**.
+  Half of the artefact is telecom, not the power conductors.
+- **Shipped: drops per bundle `4 + seed%3` -> `2 + seed%2`, and the third
+  bundle on line A now runs on every OTHER bay.** Three bundles a bay at 4-6
+  drops is 12-18 wires crossing open sky per bay; near the dolly a span
+  subtends a large screen angle and the strands fuse into a parallel-stroke
+  mass. Halving the drops lets sky through between them, and the even/odd
+  third bundle breaks the tier's uniform three-deep wall — real pole lines are
+  not uniform, some spans carry a third cable and some do not.
+- **Measured on the two gates that matter** (`scripts/cablebars.py`, sky pixels
+  and largest-blob area, NOT blob count):
+  - t = 17: sky px **10303 -> 8869 (-14%)**, largest blob **71 -> 49 px (-31%)**
+  - t = 7: sky px **9873 -> 9288 (-6%)**, largest blob 32 -> 32 px
+  The blob COUNT rises 20 -> 22 at t = 17, which is the fragmentation artifact
+  documented above and is not a regression.
+- **The blob count is the wrong acceptance test.** It counts CONNECTED
+  COMPONENTS, so thinning a dense connected mass fragments it into more,
+  smaller pieces. A count that rises when the thing you are removing gets
+  smaller is not measuring the target. Gate on density — `kMatCable` sky
+  pixels and the largest blob's area — and treat the count as diagnostic only.
 
 ## BUILD-P15: three complaints, one pass
 
