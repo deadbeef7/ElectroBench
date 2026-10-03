@@ -179,6 +179,59 @@ Realism takeaways applied:
   glazing bars over them. Emissive geometry is only believable if the frame behind it still exists —
   the bars and the sill are what stop a lit pane reading as a sticker.
 
+## BUILD-P17: the flying cylinders were a tube with no radius
+
+- **The artefact was real, small, and in every frame — and it was NOT the
+  lattice mast.** P14 concluded from a flood fill that "in scene 4 nothing is
+  detached". That fill was seeded from the bottom of the frame and ran at
+  1600x900; at the user's actual 1280x720 window, and with a detector that
+  does not require open sky *underneath* a fragment, there are **3-9 detached
+  objects per frame**, 3-5 px wide and 9-15 px tall, at 9-15 m. Every one of
+  them was the same object: the service-drop termination fitting — a dark
+  metal boot with a pale ceramic cap, drawn in `AddTelecomBundle`'s `else`
+  branch, the case where a drop cannot reach a house anchor.
+- **A threshold test cannot see this class, and neither can "is it attached".**
+  These fittings sit only ~30-80 luma below the sky, so darkness masks miss
+  them; and they hang in front of the *treeline*, so any test demanding sky
+  beneath them misses them too. What identifies them is a material + distance
+  tag pass: `G = vMat*15` (exact, since 17 materials x 15 == 255) and
+  `B = distance in whole metres`. That is what separated a pole fitting at 10 m
+  from a pylon insulator string at 140 m, which have the same silhouette.
+- **The cause was a normalise function lying to its callers.**
+  `Vec3Norm` returns `(0,1,0)` for a zero-length input rather than a zero
+  vector. Every "find an axis at right angles to the wire" guard in the scene
+  was written `if (Vec3Len(cross(wire, up)) < 1e-4f) use a fallback` — and that
+  test **can never fire**, because the substitution hands back a vector of
+  length 1. It is harmless for a horizontal wire, whose cross product is
+  non-zero anyway. For a **vertical** wire `cross(wire, up)` *is* the zero
+  vector, so `s2` came back as `(0,1,0)` — parallel to the wire — `u2` was
+  built from `cross(s2, tang)` and came back `(0,1,0)` too, and every ring
+  vertex was offset along the wire's own axis instead of radially. The tube was
+  built, uploaded, and had **zero area**: 24 vertices, all on the axis, nothing
+  rasterised. `AddCylinder` was untouched, so the fitting drew and the wire that
+  holds it did not. A hanging cylinder, every frame, at corridor distance.
+- **The wire was verified absent, not merely invisible.** It stays invisible at
+  a 0.25 m radius — a 50 cm-thick bar is not something MSAA can hide — and a
+  dump of every built vertex showed all 24 of the ring vertices at *identical*
+  x and z, which is the signature of the collapse and not of a thin tube.
+- **Applied: `Vec3PerpTo(v) = normalize(cross(v, ref))`**, with `ref` chosen by
+  testing `|v.y|` so the result is never shorter than 0.1. One helper, used in
+  `AddWire` and `WirePoint`.
+- **The ORDER of that cross product is load-bearing, and the frame said so.**
+  The first attempt used `cross(ref, v)`, which is the negation of the
+  original, so `cross(side, dir)` flipped, `up` flipped, and `WirePoint`'s
+  `-up*(sag)` turned **every catenary in the scene from a sag into a bow** —
+  visible immediately as a 5.7% pixel change and fittings missing from a crop
+  that should have held them. The corrected version changes 0.25% of the frame.
+  A "safe-looking" vector helper is still a change of behaviour, and the
+  render is the only thing that notices.
+- **Measured, at the user's own 1280x720:** detached fittings at t=7 go from 9
+  (351 px, none carrying cable) to 2, and both of those now carry `CABLE` pixels
+  — they are joined to their drop wire, and remain separate components only
+  because a 1-px wire drops out of the tag mask between the fitting and the
+  pole. At t=32, 2 -> 1, likewise carrying cable. In the shaded frame the wire
+  is now a continuous stroke running down into the top of every boot.
+
 ## BUILD-P16: the sky was yellow, and the tone map was why
 
 - **Hue is a DISPLAYED quantity, and P15 solved it in linear space.** The dome

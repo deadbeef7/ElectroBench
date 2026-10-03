@@ -76,6 +76,39 @@ static inline Vec3 Vec3Norm(const Vec3 &a) {
   float l = Vec3Len(a);
   return l > 1e-8f ? Vec3Scale(a, 1.0f / l) : Vec3{0.0f, 1.0f, 0.0f};
 }
+// BUILD-P17: a unit vector PERPENDICULAR to v, for building a tube around a
+// wire.
+//
+// Why this exists: Vec3Norm does not return a zero vector for a zero input, it
+// returns (0,1,0). Every "pick an axis at right angles to the wire" guard in
+// this file was written as `if (Vec3Len(cross) < 1e-4f) cross = fallback`,
+// which can therefore NEVER fire — the substitution hands back a vector of
+// length 1, and the fallback is skipped.
+//
+// For a HORIZONTAL wire that was harmless, because the substitution only
+// triggers when cross(wire, up) is parallel to up, i.e. when the wire is
+// vertical. For a VERTICAL wire it is fatal: s2 comes back as (0,1,0), which is
+// parallel to the wire, u2 is built from cross(s2, tang) and comes back as
+// (0,1,0) too, so every ring vertex is offset along the wire's own axis by
+// +/-radius instead of radially. All four vertices of a ring land on the axis
+// and every triangle is zero-area: the tube is built, uploaded, and
+// rasterises NOTHING. A service drop with a vertical run therefore rendered its
+// termination fitting (an AddCylinder, which is unaffected) hanging in the sky
+// with no wire holding it up — the "flying cylinders".
+//
+// Choosing the reference axis by testing v.y, and crossing, guarantees a result
+// of length >= 0.1 for any unit v, so it can never collapse.
+//
+// The ORDER of the cross product is part of the contract, not a detail:
+// Vec3PerpTo(v) must equal normalize(cross(v, up)) for a non-vertical v, which
+// is what every call site used before. Crossing the other way returns the
+// negated vector, which flips cross(side, dir) and therefore flips the sign of
+// `up` -- and since WirePoint offsets by -up*(sag), that silently turns every
+// catenary in the scene from a sag into a bow.
+static inline Vec3 Vec3PerpTo(const Vec3 &v) {
+  const Vec3 ref = (std::fabs(v.y) < 0.9f) ? Vec3{0, 1, 0} : Vec3{1, 0, 0};
+  return Vec3Norm(Vec3Cross(v, ref));
+}
 
 using Mat4 = std::array<float, 16>;
 static void Mat4Identity(Mat4 &m) { m.fill(0.0f); m[0] = m[5] = m[10] = m[15] = 1.0f; }
@@ -415,8 +448,11 @@ static Vec3 WirePoint(const Vec3 &a, const Vec3 &b, float sag, float t) {
   float len = Vec3Len(delta);
   if (len < 1e-3f) return a;
   Vec3 dir = Vec3Scale(delta, 1.0f / len);
-  Vec3 side = Vec3Norm(Vec3Cross(dir, Vec3{0, 1, 0}));
-  if (Vec3Len(side) < 1e-4f) side = Vec3{1, 0, 0};
+  // BUILD-P17: same broken guard as in AddWire. Here it was less damaging --
+  // the curve still had the right endpoints -- but `up` came back parallel to
+  // a vertical wire, so the sag was applied ALONG the wire instead of across
+  // it. See Vec3PerpTo.
+  Vec3 side = Vec3PerpTo(dir);
   Vec3 up = Vec3Norm(Vec3Cross(side, dir));
   float halfSpan = len * 0.5f;
   // BUILD-P8 CRITICAL: `x` is measured FROM THE MIDPOINT, so the curve has to
@@ -522,9 +558,13 @@ static void AddWire(const Vec3 &a, const Vec3 &b, float sag, float radius,
   Vec3 delta = Vec3Sub(b, a);
   float len = Vec3Len(delta);
   if (len < 1e-3f) return;
+
   Vec3 dir = Vec3Scale(delta, 1.0f / len);
-  Vec3 side = Vec3Norm(Vec3Cross(dir, Vec3{0, 1, 0}));
-  if (Vec3Len(side) < 1e-4f) side = Vec3{1, 0, 0};
+  // BUILD-P17: Vec3PerpTo, not cross(dir, up) with a length guard. See the
+  // helper: the guard could not fire, so a vertical wire got (0,1,0) as its
+  // side vector -- parallel to itself -- and built a zero-radius tube that
+  // rasterised nothing, leaving its termination fitting hanging in the sky.
+  Vec3 side = Vec3PerpTo(dir);
   Vec3 up = Vec3Norm(Vec3Cross(side, dir));
   float halfSpan = len * 0.5f;
 
@@ -539,8 +579,10 @@ static void AddWire(const Vec3 &a, const Vec3 &b, float sag, float radius,
     Vec3 t0 = centres[i < samples ? i + 1 : i];
     Vec3 t1 = centres[i > 0 ? i - 1 : i];
     Vec3 tang = Vec3Norm(Vec3Sub(t0, t1));
-    Vec3 s2 = Vec3Norm(Vec3Cross(tang, Vec3{0, 1, 0}));
-    if (Vec3Len(s2) < 1e-4f) s2 = side;
+    // BUILD-P17: same reason as above -- this is the vector that decides the
+    // ring's shape, and for a vertical run it was coming back parallel to the
+    // wire.
+    Vec3 s2 = Vec3PerpTo(tang);
     Vec3 u2 = Vec3Norm(Vec3Cross(s2, tang));
     for (int k = 0; k < 4; k++) {
       float a2 = (float)k * 1.5707963f;
