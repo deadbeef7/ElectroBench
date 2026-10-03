@@ -222,6 +222,20 @@ Realism takeaways applied:
   Japanese distribution line is a far more characteristic sight than a cell
   mast, and it carries the scale P12 wanted without needing to be legible
   member by member.
+- **A detector that cannot see the old artifact cannot certify the new one.**
+  Every threshold-based sweep run over the new frames reported zero floating
+  bars — and then reported zero over the OLD frames too, which visibly had
+  them. The old panels sat only ~30 luma below the sky, so any mask with an
+  absolute darkness floor is blind to exactly the artifact under investigation.
+  What settles it is P14's threshold-free method: force the sky shader to a
+  constant, treat every non-constant pixel as geometry, and flood-fill that
+  mask from the bottom edge. Measured at t = 2 s and t = 17 s (the two ends of
+  the shipped loop) at 760x428: geometry 167,655 / 158,615 px, detached
+  4,275 / 3,466 px = 2.6% / 2.2%, and **every** detached component is either a
+  HUD glyph (identical 13-15 px cells on an exact 16 px pitch at y 16..30) or
+  a conductor leaving frame (h/w 0.29-0.56 — wide and flat). The tallest
+  detached thing in either frame has h/w 1.71 and is clipped by the top edge.
+  Not one detached component is cylinder-shaped.
 
 ### "Make the sky orange"
 
