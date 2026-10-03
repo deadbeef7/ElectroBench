@@ -1281,8 +1281,18 @@ static void AddHouse(float x, float z, float w, float d, float h, float face) {
                 8, tank, kMatMetal);
   }
   {   // TV aerial: a mast with two crossbars
-    float ax = x + w * 0.28f, az = z - d * 0.22f;
-    AddCylinder({ax, yRidge - 0.40f, az}, {ax, yRidge + 0.95f, az}, 0.028f,
+    // BUILD-P16: this read as a floating mast. The roof pitches from the ridge
+    // DOWN to the eaves, so anything parked d*0.22 off the ridge stands on a
+    // surface already rh*0.22*d/(d/2+ov) lower than the ridge line, and the
+    // visible base then ran out exactly ON the roof's top silhouette with sky
+    // beside it and nothing of the mast below the outline. The fix is
+    // placement, not gauge: park it where the water tank parks — close in to
+    // the ridge, with the foot sunk to the same yRidge-0.45 the tank legs use,
+    // so the base disappears INTO the roof instead of stopping on its edge.
+    // The x offset is along the ridge, where the roof does not slope, so it is
+    // left alone.
+    float ax = x + w * 0.28f, az = z - d * 0.06f;
+    AddCylinder({ax, yRidge - 0.45f, az}, {ax, yRidge + 0.95f, az}, 0.028f,
                 0.020f, 4, {0.120f, 0.118f, 0.115f}, kMatMetal);
     for (int k = 0; k < 2; k++)
       AddBox({ax, yRidge + 0.62f + 0.24f * k, az}, {0.30f, 0.016f, 0.016f},

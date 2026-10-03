@@ -307,6 +307,51 @@ Realism takeaways applied:
   smaller is not measuring the target. Gate on density — `kMatCable` sky
   pixels and the largest blob's area — and treat the count as diagnostic only.
 
+### The floating mast: a TV aerial parked on the wrong slope of the roof
+
+- **The artefact had to be looked for at the resolution of the artefact.** The
+  still is 1600x900 and the loop is 760x428; every earlier sweep that missed
+  this one had been run on loop frames, where the mast is 2 px of mush instead
+  of a 3 px shaft with two 22-25 px crossbars. Matching the committed still
+  against the four committed loop frames (luma correlation 0.927 vs 0.45 for
+  its neighbours) also pins the still to `t = 7`, which is what made an
+  exact before/after pixel diff possible at all: same frame, so a changed-pixel
+  count of 926 out of 1 440 000 is meaningful instead of noise.
+- **A material-tag pass named it.** `kMatMetal` (7) is the only class with an
+  isolated 2-3 x 54 px fragment in open sky at x1543-1560, y330-383 — a shaft
+  with two crossbars. Tagging that class green and `kMatRoof` red in the
+  object shader, then projecting `AddHouse`'s roof maths, put it on the
+  `AddHouse` TV aerial: 1.35 m of mast, 0.028 -> 0.020 m taper, two 0.60 m
+  bars — the only 2 x 54 px object in the scene with that profile.
+- **The cause is that the aerial was parked by the HOUSE, not by the RIDGE.**
+  `AddHouse` builds a roof whose ridge runs along **x** at `yRidge`, with two
+  planes sloping away in **z** down to the eaves. The aerial was at
+  `az = z - d * 0.22f`, which puts it a fifth of the way down the near slope,
+  where the surface it stands on is already `rh * 0.22 * d / (d/2 + ov)` lower
+  than the ridge. Measured on the tag render, that put its foot level with the
+  top of the wall in front of it: the visible mast ended *on* the roof's
+  silhouette line with no roof plane around it, which is the shape the eye
+  reads as detached. The water tank, 1.5 m away on the same roof, did not have
+  this problem because it parks at `z + d * 0.10f` with its legs based at
+  `yRidge - 0.45f` — close in to the ridge and sunk well below the surface.
+- **The fix is placement, not gauge.** The mast moved to `az = z - d * 0.06f`,
+  the foot to `yRidge - 0.45f` — the same treatment the tank legs already get.
+  Nothing about its size, its bars or the roof changed. Tag render, before and
+  after, same frame:
+  - before: `kMatMetal` at x1530-1560, y330-383; the roof's top edge is FLAT
+    across x1536-1589 at y384 and the mast's last pixel sits exactly on that
+    line, with open sky immediately to the right of the foot at x1552-1553.
+  - after: `kMatMetal` at x1487-1515, y343-385; the roof edge now descends to
+    the left of the foot (y386 from x1499, y387 from x1481), so the mast's base
+    runs 8 px DOWN INTO the roof mass instead of stopping on its outline, and
+    `kMatRoof` is continuous on both sides of and directly beneath the foot.
+- **The lesson is the one P8 already paid for.** A leg based at `yRidge` hovered
+  in the air; the tank legs were fixed by sinking them to `yRidge - 0.45`. An
+  aerial is a leg with a crossbar on it, and it had been given the ridge
+  coordinate without the ridge's sink. Anything mounted on a pitched surface has
+  to be measured off that surface, and on this roof "that surface" is a
+  function of `z`, not a constant.
+
 ## BUILD-P15: three complaints, one pass
 
 ### "There are still some cylinders in the air"
