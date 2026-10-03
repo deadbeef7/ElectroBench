@@ -259,13 +259,35 @@ Realism takeaways applied:
   into the x/y plane would present the loop face to the camera and turn the
   same pixels from an ambiguous tube into an unambiguous ring. This is the
   same shape-versus-gauge lesson as P13 and P14, one plane deeper.
-- **NOT YET APPLIED.** This pass did not have the render budget left to change
-  the geometry and regenerate the still and the loop, and shipping an
-  unverified shape change with stale screenshots is how P14 shipped the bug in
-  the first place. The measurement above is reproducible (tag the shader by
-  `vMat`, render, count tall blobs per colour), so the next step is a bounded
-  experiment: rotate the two slack features into x/y, re-run this same tag
-  pass, and accept the change only if the `kMatCable` blob count falls.
+- **IMPLEMENTED, AND THE VERIFICATION FAILED.** Both sweeps were rotated out of
+  the view axis: `AddSlackLoop` now sweeps in x/y instead of z/y, and
+  `AddSlackCoil`'s helix now winds along the corridor (circle in x/y) instead
+  of circling horizontally around a vertical axis. Both are correct — a circle
+  whose plane contains the view direction always projects to its narrow axis —
+  but re-running the identical tag pass gives **`kMatCable` cylinder blobs
+  20 -> 20 at t = 17 and 27 -> 27 at t = 7, with sky-pixel counts identical
+  to within 1 px.** The change is real (it moved pixels) and it changed nothing
+  the metric counts.
+- **Why, and it is not a rounding error.** Projecting only the poles that
+  actually spawn a slack feature — `(((int)(z*0.5))%3)==0` for the coil and
+  `(((int)(z*0.7))%4)==1` for the loop — puts every slack object at t = 17 on
+  screen at (421, 204) and in the band x 354-366, y 257-268. The measured
+  blobs are at (566, 48), (563, 51), (606, 12), (472, 139), (497, 107). They
+  do not overlap. An earlier attempt to check this compared against poles that
+  have no slack feature at all and appeared to confirm the same conclusion; it
+  only reached the right answer by accident, which is why the spawn conditions
+  are now part of the check.
+- **So the cylinders are the TELECOM WEB.** Three bundles per bay on line A
+  (P9), each carrying 4-6 drop wires, plus cross-line spans, is 12-18 wires per
+  bay crossing open sky. Near the camera that is a dense weave of 1-2 px
+  strands — the 11x19 px blob at (566, 48) is ~60% filled. That is the
+  "flying cylinders". P12 added the density on purpose, to make the street read
+  as a Japanese pole street, and it is the density that has to give.
+- **The next change is to the web, not the slack features**, and it should be
+  gated on the same measurement: thin the near-field drops (fewer per bundle,
+  or skip bundles whose bay is within ~25 m of the dolly path, where a span
+  subtends a large screen angle and the strands stop reading as wires).
+  `scripts/cablebars.py` is the check.
 
 ## BUILD-P15: three complaints, one pass
 

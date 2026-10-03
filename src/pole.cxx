@@ -700,18 +700,31 @@ static void AddSlackCoil(const PoleSpec &p, float h, float side, int turns,
   Vec3 a = PoleAxisAt(p, h);
   float cx = a.x + side * (r0 + radius);
   const int steps = turns * 12;
+  // BUILD-P16: the helix now runs ALONG the corridor instead of stacking
+  // vertically, so consecutive turns need somewhere to go. Turn spacing is a
+  // little over the coil's own cross-section radius, which is what keeps the
+  // windings from touching and reading as one fat tube.
+  const float coilRun = (float)turns * radius * 0.62f;
   // the bracket the coil hangs from — the coil is ATTACHED, not floating
   AddCylinder({a.x + side * (r0 - 0.02f), h + pitch * 0.5f, a.z},
               {cx, h + pitch * 0.5f, a.z}, 0.022f, 0.022f, 5, kSteelArm,
               kMatSteel);
-  Vec3 prev{cx + radius, h + pitch * 0.5f, a.z};
+  Vec3 prev{cx + radius * 0.28f, h + pitch * 0.5f, a.z};
   for (int i = 1; i <= steps; i++) {
     float t = (float)i / (float)steps;
     float ang = t * (float)turns * 6.28318f;
     // the coil flattens as it hangs: a wound cable under its own weight is an
     // ellipse, not a circle seen side-on
-    Vec3 cur{cx + radius * 0.28f * std::cos(ang), h + pitch * 0.5f - t * pitch,
-             a.z + radius * std::sin(ang)};
+    // BUILD-P16: the helix circled in the x/z plane, i.e. HORIZONTALLY, with a
+    // vertical axis — and a horizontal circle viewed from a camera looking
+    // down the corridor is seen exactly edge-on. It projected to a 1.15 m tall
+    // bar 8 cm wide: a hanging cylinder. The winding axis is now the corridor
+    // itself, so the circle lies in the x/y screen plane and the coil reads as
+    // a coil. The x extent is deliberately kept at 0.28r: a coil of real cable
+    // is wider across the pole than it is along it.
+    Vec3 cur{cx + radius * 0.28f * std::cos(ang),
+             h + pitch * 0.5f + radius * std::sin(ang),
+             a.z + coilRun * t};
     // BUILD-P12 BUG: at five samples per turn and 17 mm radius each segment of
     // this helix was a 38 cm long, 3.4 cm thick STUBBY TUBE with a visible joint
     // to the next one — a row of beads hanging off the pole, which read as
@@ -724,7 +737,7 @@ static void AddSlackCoil(const PoleSpec &p, float h, float side, int turns,
   // and the tail, running back up to the shaft: a coil whose cable simply
   // stops is the same "floating cylinder" mistake as an unterminated stub
   AddWire(prev, {a.x + side * (r0 + 0.03f), h + pitch * 0.5f + 0.06f, a.z},
-          0.05f, 0.0115f, 6, kCable, kMatCable);
+          0.05f, 0.0115f, 8, kCable, kMatCable);
 }
 
 // BUILD-P12: SLACK LOOP. The big circular bight of service cable left hanging
@@ -739,10 +752,17 @@ static void AddSlackLoop(const PoleSpec &p, float h, float side, float radius) {
   for (int i = 1; i <= steps; i++) {
     float t = (float)i / (float)steps;
     float ang = 3.14159f * t;
-    // hangs in the z/y plane, hanging off the road side of the shaft
-    Vec3 cur{a.x + side * (r0 + 0.10f + 0.16f * std::sin(ang)),
+    // BUILD-P16: the sweep plane was z/y, and the corridor camera looks DOWN
+    // z. A circle in the z/y plane viewed along z projects to its NARROW AXIS,
+    // so a bight built to read as a loop rendered as a vertical bar — one of
+    // the "flying cylinders". Rotating the circle into x/y presents the bight
+    // face to the camera, which is the whole difference between a service loop
+    // and a hanging tube. This is the P13/P14 shape-not-gauge lesson again,
+    // one plane deeper: the object was correctly sized and correctly detailed
+    // and still could not be read, because it was edge-on to the lens.
+    Vec3 cur{a.x + side * (r0 + 0.10f + radius * std::sin(ang) * 0.85f),
              h - radius * (1.0f - std::cos(ang)) * 0.5f,
-             a.z + radius * std::sin(ang) * 0.85f};
+             a.z};
     AddWire(prev, cur, 0.0f, 0.0115f, 2, kCable, kMatCable);
     prev = cur;
   }
