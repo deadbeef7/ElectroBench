@@ -307,8 +307,18 @@ void main() {
         base *= 0.72 + 0.46 * n;
         rough = 1.0;
     } else if (m == kMatCable) {
-        rough = 0.42;
-        sheen = 0.45;
+        // BUILD-P18: PEERLESS POLYETHYLENE, not a matte hose. An aerial cable
+        // is a smooth black extruded sheath, so it keeps a tight GGX lobe and
+        // most of its grazing glint. With the strands finally thick enough to
+        // hold a pixel (see the 16-strand web in BuildSceneGeometry), that
+        // highlight is what separates "a web of wires" from "a lot of dark
+        // stains": each span picks up a warm filament down its sun-raked side.
+        // Kept modest -- rim scales with 1-NoV, and on a 2 px strand almost
+        // every fragment IS an edge, so an aggressive sheen would lighten the
+        // whole cable and cost it exactly the silhouette contrast that made it
+        // read in the first place.
+        rough = 0.33;
+        sheen = 0.48;
     } else if (m == kMatCeramic) {
         rough = 0.22;
         sheen = 0.30;
@@ -337,7 +347,11 @@ void main() {
         float rust = smoothstep(1.80, 0.25, P.y) * smoothstep(0.42, 0.86, rustN);
         base = mix(base, vec3(0.135, 0.060, 0.030), rust * 0.70);
         rough = mix(0.62, 0.34, smoothstep(0.25, 0.85, streak)) + rust * 0.25;
-        sheen = 0.42;
+        // BUILD-P18: was 0.42, the strongest rim in the scene. On a vertical
+        // cylinder against a bright sky a big grazing term lights the two
+        // long edges and leaves the middle dark -- the shafts read as bright
+        // outlined sticks, which is the opposite of letting them recede.
+        sheen = 0.24;
     } else if (m == kMatConcrete) {
         // BUILD-P12: WEATHERED PRECAST CONCRETE. The reference pole is a
         // concrete shaft, and the things that say "concrete" rather than
@@ -346,7 +360,19 @@ void main() {
         // mould, spalled patches showing darker aggregate, and a dirt line
         // where rain has washed the street's dirt up the first two metres.
         float streak = vnoise(vec2((P.x + P.z * 0.45) * 2.10, P.y * 0.10));
-        base *= 0.84 + 0.28 * streak;
+        // BUILD-P18: TWO FIXES FOR "THE SHAFTS STAND OUT". The amplitude is
+        // roughly doubled and skewed dark (0.62-1.14 about a 0.88 mean, was
+        // 0.84-1.12 about 0.98), because a near-uniform ramp is what makes a
+        // shaft read as a clean extruded tube rather than as weathered
+        // concrete. And a second, much slower octave joins it: the 2.1 c/m
+        // streak is a 48 cm feature, so past ~60 m it falls under a pixel,
+        // integrates away, and every distant pole returns to being one flat
+        // bright vertical. The 0.35 c/m band is a 2.9 m feature -- it
+        // survives all the way to the far pole and carries visible dark and
+        // light runs up the whole shaft, which is what breaks the line.
+        float band = vnoise(vec2((P.x + P.z * 0.45) * 0.35, P.y * 0.045));
+        base *= 0.62 + 0.52 * streak;
+        base *= 0.80 + 0.34 * band;
         // form-board seams: the mould leaves a faint horizontal line every
         // 0.6 m, and they are what make the shaft read as CAST rather than as
         // turned
@@ -366,6 +392,12 @@ void main() {
                    smoothstep(2.4, 0.10, P.y) * 0.42);
         base = mix(base, base * 0.82,
                    smoothstep(0.55, 0.95, streak) * 0.30);
+        // BUILD-P18: the form-board lifts also carry a slow vertical term, so
+        // the shaft has value structure that is NOT horizontal at all. Real
+        // precast shafts are stained in long vertical runs; a purely
+        // horizontal feature set is a lathe-turned cue.
+        float board2 = abs(fract(P.y * 1.62 + band * 0.35) - 0.5) * 2.0;
+        base *= mix(0.95, 1.04, smoothstep(0.04, 0.26, board2));
         rough = 0.90 - 0.10 * streak;
         sheen = 0.06;
     } else if (m == kMatGlow) {
@@ -396,7 +428,11 @@ void main() {
     // BUILD-P9: galvanized steel is a polished cylinder, so the sun wraps
     // around it — without this the shafts read as flat cut-outs wherever the
     // sun is behind them, which is most of the run.
-    if (m == kMatSteel) wrap = 0.22;
+    // BUILD-P18: ...but P18 wants the shafts to recede, and a wrap term lifts
+    // the SHADOW side of a cylinder toward the light, so on a backlit shaft it
+    // is a second edge brightening stacked on top of the rim. 0.22 -> 0.13,
+    // down with the steel sheen: line B is now allowed to go dark.
+    if (m == kMatSteel) wrap = 0.13;
     float diff = clamp((dot(N, L) + wrap) / (1.0 + wrap), 0.0, 1.0);
     vec3 sunTint = vec3(1.00, 0.66, 0.34);
 

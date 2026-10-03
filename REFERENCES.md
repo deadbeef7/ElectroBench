@@ -179,6 +179,94 @@ Realism takeaways applied:
   glazing bars over them. Emissive geometry is only believable if the frame behind it still exists —
   the bars and the sill are what stop a lit pane reading as a sticker.
 
+## BUILD-P18: the shafts were too fat, and the web was below a pixel
+
+Two complaints about scene 4 at once — "make the pole shafts not stand out" and
+"make the wires more evident" — and neither of them turned out to be a shading
+bug. Both were measurements.
+
+Reference framing (informational — nothing is fetched at runtime; see the
+no-runtime-fetch note under BUILD-P10):
+
+- Japanese aerial cable, why the sky stays obscured, and why the wires are
+  insulated rather than bare:
+  - https://unseen-japan.com/whats-with-the-chaos-of-japanese-power-lines/
+  - "Dense black cables are strung from utility pole to utility pole,
+    crisscrossing the areas above streets and obscuring views of the sky."
+- Pole shaft gauge — precast concrete distribution shafts run roughly
+  190-260 mm across at the base and 120-170 mm at the top; a 6" galvanized HSS
+  line is 152 mm at the base and ~110 mm at the top.
+
+- **The shafts were a TRUNK, not a pole.** `TrunkRadius` ran 170 mm at the foot
+  to 115 mm at the top: 340 mm across at the base, which is wider than the pole
+  is tall in the frame's upper half and roughly 1.3x a real shaft at every
+  height. It was also written out a second time, as a bare `0.17f, 0.115f`, in
+  `AddPole`'s `AddCylinder` call — so the taper existed twice in the file and
+  could drift apart, which is the same class of mistake as P8's duplicated
+  stand-off offsets. Both numbers now live in `kShaftRBase`/`kShaftRTop` and
+  the shaft mesh is built from them. Measured on the material tag pass at
+  1280x720, t=7: **CONCRETE 7645 -> 5681 px (-25.7%)**, STEEL 22501 -> 20299 px
+  (-9.8%; less than the shaft alone because STEEL also carries every crossarm,
+  bracket, clamp and step bolt on both lines).
+- **"Standing out" was not brightness — it was silhouette.** On the shaded frame
+  the concrete shaft's median luma is 114.5 against a local sky of 186.4: it was
+  already a *dark* vertical against a bright sky, so "darken it" was never the
+  lever. What made it read as a hard-edged line was (a) the width, (b) a
+  near-uniform value ramp that survives all the way to the horizon, and (c) the
+  strongest rim term in the scene sitting on a vertical cylinder. So: the
+  concrete staining amplitude roughly doubled and was skewed dark
+  (`0.62 + 0.52*streak` against the old `0.84 + 0.28*streak`), and a second,
+  much slower 0.35 c/m octave was added. The old streak is a 48 cm feature, so
+  past ~60 m it falls under a pixel and every distant pole integrates back into
+  one flat bright vertical; the new band is a 2.9 m feature and survives to the
+  far pole. Steel lost its rim (sheen 0.42 -> 0.24) and its sun wrap
+  (0.22 -> 0.13) — a wrap term lifts the *shadow* side of a cylinder toward the
+  light, so on a backlit shaft it is a second edge brightening stacked on top of
+  the rim, and together they meant line B was never allowed to go dark.
+- **A warm-biased grey reads as timber.** `kConcreteGrey` was
+  (0.300, 0.293, 0.278) — R above B. The dusk sun tint is (1.00, 0.66, 0.34) and
+  the grade warms highlights, so that bias compounds and the corridor reads as
+  a row of wooden sticks. It is now (0.212, 0.216, 0.218): 27% darker and
+  neutral-to-cool, so the blue channel leads.
+- **The wire web was never a density problem. It was a GAUGE problem.** Sixteen
+  strands a bay is the densest cable run in the corridor and it had been there
+  since P12 — but each strand was `0.010f + 0.007f * u3`, i.e. **10-17 mm
+  radius**. At 1280x720 and a 52-degree FOV that is 0.26 px at 60 m and 0.79 px
+  at 20 m: below the 4x-MSAA coverage floor everywhere except the nearest span,
+  where the samples quantise to 0, 1/4, 1/2, 3/4, 1 and the wire spends its
+  length flickering between a quarter-covered grey hair and nothing at all —
+  which the aerial-perspective mix then lifts toward the haze. The density the
+  scene was built for was in the geometry and absent from the image. Adding
+  more strands would only have produced a mass of them. At 21-32 mm radius
+  (42-64 mm cable, which is also the honest number for sixteen gathered
+  cross-connects) the strands hold a core. Measured: **CABLE 30730 -> 39142 px
+  (+27.4%)**, at a cost of 1.05 percentage points of frame (sky 51.05% ->
+  50.47%). Samples went 7 -> 10 as well, for P13's reason: at 2x the gauge a
+  1.77 m long segment would have started showing its joints. Every other gauge
+  in the corridor moved with it (conductors 0.024-0.032 -> 0.028-0.037, telecom
+  bundles 0.018-0.022 -> 0.022-0.027), because the conductors are what the eye
+  scales the thinner tiers against; leaving them put the web back to looking
+  like string.
+- **P16's artefact is a sky-through test, and it was re-run, not assumed.** The
+  guard was "does the web still let the sky through?", measured by labelling
+  the sky and counting trapped holes: **1343 -> 1163 trapped sky components,
+  145274 -> 146474 px of trapped sky (flat), largest single hole 17941 ->
+  14512**. Total trapped sky unchanged is the number that matters — a fused
+  wall would collapse it. The web is a slightly coarser mesh, not a wall.
+- **Thinning the shaft detached nothing.** Every fitting already measures its
+  stand-off off `TrunkRadius`, which is the reason P8 made it a function. The
+  regression pass ran the P16/P17 detached-component check on both binaries:
+  detached components >= 8 px **73 -> 53**, detached pixels **4367 -> 3180**,
+  and every remaining blob is still `CABLE` — 1-px wire runs that drop out of
+  the tag mask between two crossings, not floating geometry. No METAL, CERAMIC,
+  STEEL or CONCRETE blob appeared. Step bolts dropped from 140 mm of stand-off
+  to 100 mm, which was the one offset sized against the old shaft.
+- **A cable is smooth black PE, not a matte hose** — roughness 0.42 -> 0.33 and
+  a touch more sheen, so each span carries a warm filament down its sun-raked
+  side. Deliberately modest: `rim` scales with `1 - NoV`, and on a 2 px strand
+  nearly every fragment is an edge, so an aggressive sheen would lighten the
+  whole cable and cost it exactly the silhouette contrast that made it read.
+
 ## BUILD-P17: the flying cylinders were a tube with no radius
 
 - **The artefact was real, small, and in every frame — and it was NOT the

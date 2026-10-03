@@ -357,7 +357,16 @@ static const float kMatKerb = 15.0f;
 // not timber and not steel — a round shaft with a weathered grey skin, which
 // is what the reference photograph actually shows.
 static const float kMatConcrete = 16.0f;
-static const Vec3 kConcreteGrey{0.300f, 0.293f, 0.278f};
+// BUILD-P18: the shaft was reading as a bright, warm, clean-edged vertical --
+// which is to say, as TIMBER, and as the most prominent object in the frame
+// after the sky. Two things were wrong with it. The albedo was too high
+// (0.29 mean), so every shaft sat close to the sky in value, and it was
+// warm-biased (R > B), which the dusk sun tint and the warm highlight grade
+// then pushed further into orange. A weathered precast concrete shaft in the
+// shade of its own crossarm is a mid-dark NEUTRAL grey, and the blue channel
+// must be allowed to lead or the whole corridor reads as a row of wooden
+// sticks. Down 27%, and cool.
+static const Vec3 kConcreteGrey{0.212f, 0.216f, 0.218f};
 
 static const Vec3 kWoodDark{0.165f, 0.115f, 0.085f};   // creosote (treeline)
 static const Vec3 kWoodOld{0.230f, 0.180f, 0.140f};   // weathered timber
@@ -365,7 +374,10 @@ static const Vec3 kCeramic{0.780f, 0.760f, 0.700f};   // insulator glaze
 static const Vec3 kCable{0.055f, 0.050f, 0.055f};    // rubber wire
 static const Vec3 kCableOld{0.085f, 0.075f, 0.070f};
 static const Vec3 kMetal{0.190f, 0.195f, 0.200f};    // transformer can
-static const Vec3 kSteelGalv{0.345f, 0.356f, 0.368f}; // hot-dip zinc, trunk
+// BUILD-P18: same correction as kConcreteGrey, on line B's shafts. Zinc is
+// bright, and the steel branch also carried the largest rim sheen in the
+// scene, so the second line of poles was the brightest vertical of the two.
+static const Vec3 kSteelGalv{0.252f, 0.261f, 0.273f}; // hot-dip zinc, trunk
 static const Vec3 kSteelArm{0.265f, 0.272f, 0.282f};  // angle iron, brackets
 static const Vec3 kSteelPlate{0.560f, 0.545f, 0.505f};// pole number plate
 static const Vec3 kGravel{0.330f, 0.272f, 0.205f};   // BUILD-P8: dry dirt is
@@ -644,9 +656,22 @@ static Vec3 PoleAxisAt(const PoleSpec &p, float h) {
 // BUILD-P8: one source of truth for the trunk radius, so anything mounted on
 // the bark can be measured off it instead of guessing a fixed offset (which is
 // how the service spool and the junction cans ended up hanging in mid air).
+// BUILD-P18: and now it is the SOURCE for the shaft mesh too. AddPole used to
+// spell 0.17f/0.115f out again at its AddCylinder call, so the taper existed
+// twice in the file and could drift apart.
+//
+// The gauge itself came down from 170/115 mm to 132/86 mm. Both numbers were
+// too fat: a Japanese precast distribution shaft is about 190-260 mm across at
+// the base and 120-170 mm at the top, and a 6" galvanized HSS line is 152 mm at
+// the base and ~110 mm at the top. 340 mm at the foot was a trunk, not a pole,
+// and a trunk that size is also the largest silhouette the camera ever puts in
+// frame. Every fitting already measures its stand-off off this function, so the
+// thinner shaft carried its hardware with it.
+static const float kShaftRBase = 0.132f;
+static const float kShaftRTop  = 0.086f;
 static float TrunkRadius(const PoleSpec &p, float h) {
   float f = h / p.height;
-  return 0.17f + (0.115f - 0.17f) * f;
+  return kShaftRBase + (kShaftRTop - kShaftRBase) * f;
 }
 // BUILD-P8: the telecom arm sits 1.30 m under the power arm and its three
 // bracket stubs stand 0.15 m proud of the wood. The telecom spans used to
@@ -707,7 +732,10 @@ static void AddStepBolts(const PoleSpec &p, float from, float to, float side) {
     float s = (i & 1) ? -side : side;
     Vec3 a = PoleAxisAt(p, h);
     float r = TrunkRadius(p, h);
-    AddCylinder({a.x + s * (r - 0.02f), h, a.z}, {a.x + s * (r + 0.14f), h, a.z},
+    // BUILD-P18: 140 mm of stand-off was sized against the old 170 mm shaft.
+    // On a 132 mm shaft the same protrusion is a spike longer than the shaft's
+    // own radius. Real step bolts stand ~100 mm proud.
+    AddCylinder({a.x + s * (r - 0.02f), h, a.z}, {a.x + s * (r + 0.10f), h, a.z},
                 0.024f, 0.019f, 5, kSteelArm, kMatSteel);
   }
 }
@@ -1009,9 +1037,9 @@ static void AddPole(const PoleSpec &p, bool concrete = false) {
   // street has both, and the material contrast is what stops fifteen identical
   // shafts reading as one repeated prop.
   if (concrete)
-    AddCylinder(base, top, 0.17f, 0.115f, 10, kConcreteGrey, kMatConcrete);
+    AddCylinder(base, top, kShaftRBase, kShaftRTop, 10, kConcreteGrey, kMatConcrete);
   else
-    AddCylinder(base, top, 0.17f, 0.115f, 10, kSteelGalv, kMatSteel);
+    AddCylinder(base, top, kShaftRBase, kShaftRTop, 10, kSteelGalv, kMatSteel);
   // welded base flange standing in the ring of dirt kicked up around it
   AddCylinder({base.x, kGroundY - 0.02f, base.z}, {base.x, 0.10f, base.z},
               0.52f, 0.34f, 8, {0.30f, 0.24f, 0.18f}, kMatGround);
@@ -1538,10 +1566,15 @@ static void AddTreeline() {
     const PoleSpec &p = lineA[i];
     const PoleSpec &q = lineA[i + 1];
     float sag = 0.78f + 0.12f * ((i * 3) % 3);
+    // BUILD-P18: every gauge in the corridor moved together. These are the
+    // conductors closest to the lens and they were already legible, so they
+    // take the smallest lift of the three tiers -- but they set the scale the
+    // eye reads the thinner tiers against, so leaving them at the old gauge
+    // would have made the telecom web below them look like string.
     for (float off : {-1.05f, 0.0f, 1.05f})
-      AddWire(ArmInsulatorTop(p, off), ArmInsulatorTop(q, off), sag, 0.028f,
+      AddWire(ArmInsulatorTop(p, off), ArmInsulatorTop(q, off), sag, 0.032f,
               14, kCable, kMatCable);
-    AddWire(PoleTopInsulatorTop(p), PoleTopInsulatorTop(q), sag * 0.8f, 0.032f,
+    AddWire(PoleTopInsulatorTop(p), PoleTopInsulatorTop(q), sag * 0.8f, 0.037f,
             14, kCableOld, kMatCable);
     // BUILD-P9: two more tiers — the lower-arm conductors. Line A now carries
     // six spans of wire per bay (3 top arm + pole top + 2 lower arm) instead of
@@ -1549,7 +1582,7 @@ static void AddTreeline() {
     // distribution corridor.
     for (float off : {-0.55f, 0.55f})
       AddWire(Arm2InsulatorTop(p, off), Arm2InsulatorTop(q, off), sag * 0.74f,
-              0.024f, 12, kCable, kMatCable);
+              0.028f, 12, kCable, kMatCable);
   }
 
   // ---- BUILD-P12: THE CABLE WEB. This is what the reference photograph is
@@ -1572,9 +1605,29 @@ static void AddTreeline() {
       float u3 = fk * 0.83f;  u3 -= std::floor(u3);
       Vec3 a = TelecomBracketTop(p, -0.66f + 1.32f * u0);
       Vec3 b = TelecomBracketTop(q, -0.66f + 1.32f * u1);
-      float r = 0.010f + 0.007f * u3;
+      // BUILD-P18: THIS IS THE WEB, AND IT WAS THE ONE THING IN THE SCENE
+      // THAT COULD NOT BE SEEN. Sixteen strands a bay is the densest cable
+      // run in the corridor, and every one of them was 10-17 mm RADIUS --
+      // a 20-34 mm tube. At 1280x720 and a 52-degree FOV that is 0.26 px at
+      // 60 m and 0.79 px at 20 m, i.e. below the 4x-MSAA coverage floor
+      // everywhere except the nearest span: the samples quantise to 0, 1/4,
+      // 1/2, 3/4, 1 and the wire spends its length flickering between a
+      // quarter-covered grey hair and nothing at all, which the aerial-
+      // perspective mix then lifts toward the haze. So the density the
+      // corridor was built for was in the geometry and absent from the
+      // image -- the "the wires do not show" complaint was a GAUGE bug,
+      // not a density bug, and adding more strands would only have made a
+      // mass of them.
+      //
+      // 21-32 mm radius (42-64 mm cable) is also the honest number. These are
+      // sixteen gathered cross-connects on one bracket, and the Japanese
+      // aerial cable the Lain corridor is named for is insulated
+      // polyethylene-sheathed, not bare: 40-60 mm is a normal span cable.
+      // Samples went 7 -> 10 for the P13 reason: at 2x the gauge a 1.77 m
+      // long segment would have started showing its joints.
+      float r = 0.021f + 0.011f * u3;
       float sag = 0.18f + 0.62f * u2;
-      AddWire(a, b, sag, r, 7, kCableOld, kMatCable);
+      AddWire(a, b, sag, r, 10, kCableOld, kMatCable);
     }
   }
 
@@ -1611,15 +1664,15 @@ static void AddTreeline() {
     const PoleSpec &p = lineB[i];
     const PoleSpec &q = lineB[i + 1];
     for (float off : {-1.05f, 1.05f})
-      AddWire(ArmInsulatorTop(p, off), ArmInsulatorTop(q, off), 0.88f, 0.026f,
+      AddWire(ArmInsulatorTop(p, off), ArmInsulatorTop(q, off), 0.88f, 0.030f,
               12, kCableOld, kMatCable);
     // BUILD-P9: line B was the sparse one — top-of-pole plus the two lower-arm
     // spans give it the same tiered look as the main line, which is what turns
     // the second row from wallpaper into a second plane of poles.
-    AddWire(PoleTopInsulatorTop(p), PoleTopInsulatorTop(q), 0.70f, 0.030f, 12,
+    AddWire(PoleTopInsulatorTop(p), PoleTopInsulatorTop(q), 0.70f, 0.035f, 12,
             kCableOld, kMatCable);
     for (float off : {-0.55f, 0.55f})
-      AddWire(Arm2InsulatorTop(p, off), Arm2InsulatorTop(q, off), 0.62f, 0.024f,
+      AddWire(Arm2InsulatorTop(p, off), Arm2InsulatorTop(q, off), 0.62f, 0.028f,
               12, kCableOld, kMatCable);
   }
 
@@ -1629,7 +1682,7 @@ static void AddTreeline() {
     const PoleSpec &p = lineB[i];
     const PoleSpec &q = lineA[i + 1];
     AddWire(ArmInsulatorTop(p, 1.05f), ArmInsulatorTop(q, -1.05f), 1.30f,
-            0.024f, 16, kCable, kMatCable);
+            0.028f, 16, kCable, kMatCable);
   }
 
   // ---- BUILD-P6/P7: THE SUBURB, built BEFORE the telecom tangle so the drop
@@ -1664,9 +1717,9 @@ static void AddTreeline() {
     const PoleSpec &p = lineA[i];
     const PoleSpec &q = lineA[i + 1];
     AddTelecomBundle(TelecomBracketTop(p, -0.70f), TelecomBracketTop(q, -0.70f),
-                     i * 2 + 1, 0.022f, 12, kCable);
+                     i * 2 + 1, 0.027f, 12, kCable);
     AddTelecomBundle(TelecomBracketTop(p, 0.70f), TelecomBracketTop(q, 0.70f),
-                     i * 2 + 2, 0.022f, 12, kCable);
+                     i * 2 + 2, 0.027f, 12, kCable);
     // BUILD-P9: the middle bracket was carrying nothing at all. One more
     // bundle per bay turns the telecom tier from two parallel cables into the
     // thick three-deep band every Japanese pole line has.
@@ -1676,20 +1729,20 @@ static void AddTreeline() {
     // three-deep wall of wire from end to end.
     if ((i % 2) == 0)
       AddTelecomBundle(TelecomBracketTop(p, 0.0f), TelecomBracketTop(q, 0.0f),
-                       i * 2 + 13, 0.020f, 12, kCableOld);
+                       i * 2 + 13, 0.024f, 12, kCableOld);
   }
   for (int i = 0; i + 1 < (int)lineB.size(); i++) {
     const PoleSpec &p = lineB[i];
     const PoleSpec &q = lineB[i + 1];
     AddTelecomBundle(TelecomBracketTop(p, 0.0f), TelecomBracketTop(q, 0.0f),
-                     i * 3 + 40, 0.020f, 10, kCableOld);
+                     i * 3 + 40, 0.024f, 10, kCableOld);
   }
   // slack cross-line telecom loops B -> A (the messy diagonal drips)
   for (int i = 0; i < 5; i++) {
     const PoleSpec &p = lineB[i];
     const PoleSpec &q = lineA[i + 1];
     AddTelecomBundle(TelecomBracketTop(p, -0.70f), TelecomBracketTop(q, -0.70f),
-                     i * 5 + 77, 0.018f, 14, kCable);
+                     i * 5 + 77, 0.022f, 14, kCable);
   }
 
   // ---- service drops: from the pole service spool down to the NEAREST house
@@ -1708,8 +1761,8 @@ static void AddTreeline() {
     }
     if (best >= 0) {
       const Vec3 &a = gDropAnchors[best];
-      AddWire(PoleAxisAt(p, 5.4f), a, 0.55f, 0.020f, 12, kCableOld, kMatCable);
-      AddWire(ArmInsulatorTop(p, 1.05f), a, 0.48f, 0.020f, 12, kCableOld,
+      AddWire(PoleAxisAt(p, 5.4f), a, 0.55f, 0.024f, 12, kCableOld, kMatCable);
+      AddWire(ArmInsulatorTop(p, 1.05f), a, 0.48f, 0.024f, 12, kCableOld,
               kMatCable);
     }
     // junction cans stay mounted on the pole wall — BUILD-P8: braced against
@@ -1733,10 +1786,10 @@ static void AddTreeline() {
                 8, kMetal, kMatMetal);   // weatherhead boot
     if (best >= 0) {
       AddWire({stubEnd.x - 0.04f, 2.24f, stubEnd.z}, gDropAnchors[best], 0.42f,
-              0.016f, 8, kCableOld, kMatCable);
+              0.019f, 8, kCableOld, kMatCable);
     } else {
       AddWire({stubEnd.x - 0.04f, 2.24f, stubEnd.z},
-              {ja.x - jr - 0.02f, 2.86f, ja.z}, 0.16f, 0.016f, 8, kCableOld,
+              {ja.x - jr - 0.02f, 2.86f, ja.z}, 0.16f, 0.019f, 8, kCableOld,
               kMatCable);
     }
   }
