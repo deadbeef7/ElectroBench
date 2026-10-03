@@ -105,8 +105,11 @@ float octaveRes(float foot, float freq) {
 const vec3  kBetaR = vec3(0.058, 0.135, 0.331);
 const float kBetaM = 0.0092;
 const float kSunI  = 330.0;
-const float kSunPath = 9.8;
-const float kRayGain = 4.35;
+// BUILD-P16: kept in step with sky_frag.glsl. The wet road and the window
+// reflections mirror this dome, so if these two drift the road reflects a
+// different sky than the one it is standing under.
+const float kSunPath = 14.0;
+const float kRayGain = 13.0;
 
 vec3 atmosphere(vec3 dir, vec3 sun) {
     float h = dir.y;

@@ -81,17 +81,26 @@ const vec3  kBetaR = vec3(0.058, 0.135, 0.331);
 // washed-out yellow one.
 const float kBetaM = 0.0092;
 const float kSunI  = 330.0;       // scaled solar radiance
-// BUILD-P15: 8.0 -> 9.8. The sun-path optical depth is the reddest knob in the
-// model — it is the extinction the sunlight suffers crossing the whole
-// atmosphere, so it decides how much blue is gone by the time the light
-// reaches the scene. Deepening it keeps the amber's red channel and burns
-// more of its blue, which is the difference between orange and yellow.
-const float kSunPath = 9.8;       // sun-path optical depth multiplier
-// BUILD-P15: 3.95 -> 4.35. The dome was measuring a hue of ~48 deg (yellow-
-// amber). Raising the single-scatter gain puts more of the red end of the
-// surviving spectrum into the frame without lifting the clipped-pixel count,
-// because the shoulder in encodeSky() absorbs the extra.
-const float kRayGain = 4.35;      // single-scatter Rayleigh gain
+// BUILD-P16: 9.8 -> 14.0, and the gain below 4.35 -> 13.0 to hold brightness.
+// THE TONE MAP WAS THE PROBLEM, NOT THE PALETTE. P15's own comment claimed
+// the airlight had been moved "from 35 deg to 24 deg, i.e. from amber to a
+// proper sunset orange", and the shipped frame still measured 41 deg. The
+// reason is that hue was being computed on the LINEAR value: this dome is
+// authored at hue 11 deg — deeply orange, ratio 1.00 : 0.20 : 0.024 — and
+// ACES + gamma 1/2.2 lifts the near-black green and blue channels far more
+// than the bright red, displaying it at hue 36 deg. Gamma moves saturated
+// reds toward yellow on the way to the screen, so a linear fix that looks
+// right on paper reads amber on screen. Solving on the DISPLAYED value (see
+// scripts/skytune.py, which reproduces the shipped frame to within 2 deg)
+// moves the sun-path depth 9.8 -> 14.0 and the gain 4.35 -> 13.0, taking the
+// frame from a measured 41.2 deg to a modelled 29.7 deg: orange. Hue 45 deg
+// is where yellow starts, and the old dome was above it at every elevation
+// the camera frames.
+const float kSunPath = 14.0;      // sun-path optical depth multiplier
+// The gain rises with the depth because deepening the extinction darkens the
+// dome (mean displayed value 0.585 -> 0.555); this puts the red back without
+// touching the green. Peak channel reaches 0.973, so nothing clips.
+const float kRayGain = 13.0;      // single-scatter Rayleigh gain
 
 // One analytic atmosphere evaluation. Also used by the object shader (wet road
 // and window reflections mirror the real sky, not a guess at it) — the copy in

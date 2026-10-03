@@ -881,13 +881,44 @@ static void AddPylon(float x, float z, float height) {
   crossarm(lowerY, height * 0.265f);
 
   // ---- insulator strings: the detail that says "transmission", not "cell" --
-  // Each hangs off a boom tip on a visible yoke, so nothing is free-floating.
+  // BUILD-P16: THESE WERE THE USER'S "FLYING CYLINDERS", and build P15 shipped
+  // them. Each string was ONE smooth 2.29 m cylinder of pale glaze hung off a
+  // 0.26 m yoke — a capsule dangling from a bar, five per pylon and two
+  // pylons, i.e. ten of them. At 110-170 m a 0.31 m tube is about 2 px wide
+  // and a string is 12-16 px tall, so the eye reads a row of little vertical
+  // pipes with sky between them and the crossarm: precisely the P14 artifact,
+  // rebuilt on a new object.
+  //
+  // Two things are wrong with that, and thinning the tube fixes neither:
+  //   * THE SHAPE. An insulator string is not a cylinder. It is a stack of
+  //     sheds on a core, and the serrated silhouette is the entire reason the
+  //     eye reads ceramic instead of pipe. This is the P13 coil lesson again:
+  //     a swept feature needs its own structure, not just a smaller gauge.
+  //   * THE VALUE. kCeramic is a 0.78 near-white glaze, which is correct for
+  //     a pole insulator six metres from the lens. At 110 m the aerial ramp
+  //     pulls that up to within a few levels of the sky, and a PALE object on
+  //     a BRIGHT sky is exactly the artifact we are chasing. Real HV strings
+  //     at dusk are a dark beaded line. The pole-top insulators keep the
+  //     glaze; only the distant pylon strings go dark.
+  const Vec3 shed{0.300f, 0.288f, 0.262f};   // reads as a silhouette at range
   auto insulator = [&](float ix, float iy) {
-    AddBox({ix, iy + 0.14f, z}, {0.26f, 0.20f, 0.26f}, galv, kMatSteel);
-    AddCylinder({ix, iy - 0.06f, z}, {ix, iy - 2.35f, z}, 0.155f, 0.135f, 6,
-                kCeramic, kMatCeramic);
-    AddCylinder({ix, iy - 2.35f, z}, {ix, iy - 2.62f, z}, 0.135f, 0.105f, 6,
-                galv, kMatSteel);
+    AddBox({ix, iy + 0.13f, z}, {0.24f, 0.19f, 0.24f}, galv, kMatSteel);
+    const float drop = 1.55f;               // string length, was 2.29 m
+    // the core: thin, dark, and continuous so the string still reads as one
+    // hanging object even where the sheds drop below a pixel
+    AddCylinder({ix, iy - 0.05f, z}, {ix, iy - drop - 0.05f, z}, 0.055f,
+                0.046f, 5, steel, kMatSteel);
+    const int sheds = 7;
+    for (int i = 0; i < sheds; i++) {
+      float t = (float)(i + 1) / (float)(sheds + 1);
+      float y = iy - 0.05f - drop * t;
+      float rr = 0.150f - 0.052f * t;      // tapers toward the conductor
+      AddCylinder({ix, y - 0.042f, z}, {ix, y + 0.042f, z}, rr, rr, 6,
+                  shed, kMatCeramic);
+    }
+    // the conductor stub the string actually carries
+    AddCylinder({ix, iy - drop - 0.04f, z}, {ix, iy - drop - 0.34f, z},
+                0.050f, 0.040f, 6, steel, kMatSteel);
   };
   {
     const float uh = height * 0.345f, lh = height * 0.265f;
@@ -1821,7 +1852,7 @@ static void RenderHUD() {
   // build tag: on-screen proof of which scene code the exe runs (stale-build
   // screenshots must be detectable at a glance)
   char line1[128];
-  std::snprintf(line1, sizeof(line1), "FPS: %d   build P15   scene 4: LainBench", gFps);
+  std::snprintf(line1, sizeof(line1), "FPS: %d   build P16   scene 4: LainBench", gFps);
   RenderText(16.0f, 16.0f, line1);
 }
 

@@ -179,6 +179,64 @@ Realism takeaways applied:
   glazing bars over them. Emissive geometry is only believable if the frame behind it still exists —
   the bars and the sill are what stop a lit pane reading as a sticker.
 
+## BUILD-P16: the sky was yellow, and the tone map was why
+
+- **Hue is a DISPLAYED quantity, and P15 solved it in linear space.** The dome
+  is authored in linear HDR and displayed through ACES + gamma 1/2.2. P15's
+  comment claimed the airlight had been moved "from 35 deg to 24 deg, i.e. from
+  amber to a proper sunset orange" — and the shipped frame still measured
+  **41.2 deg**. The reason is that hue had been computed on the LINEAR value.
+  This dome is authored at hue 11 deg — deeply orange, ratio 1.00 : 0.20 :
+  0.024 — and gamma lifts the near-black green and blue channels far more than
+  the bright red, so it arrives on screen at 36 deg. **Gamma moves saturated
+  reds toward yellow on the way to the monitor.** A linear fix that looks
+  right on paper reads amber on screen, which is exactly how P15 shipped a sky
+  that was still yellow.
+- **Solve on the output, not the input.** `scripts/skytune.py` reimplements
+  `atmosphere()` plus `encodeSky()` and reproduces the shipped frame's mean
+  hue to within 2 deg (39.3 modelled vs 41.2 measured), which is close enough
+  to tune on. It found that `kSunPath` is the whole story: at 9.8 the dome
+  measured 39-50 deg at every elevation the camera frames, at 14.0 it drops
+  to 20-30 deg, and by 18 it is a 14 deg salmon and getting darker every step.
+- **Applied: `kSunPath` 9.8 -> 14.0 and `kRayGain` 4.35 -> 13.0**, in BOTH pole
+  shaders (the object shader mirrors this dome in the wet road, so if the two
+  drift the road reflects a different sky than the one it stands under). The
+  gain rises with the depth because deepening the extinction darkens the dome;
+  measured, mean displayed value 0.585 -> 0.555, peak channel 0.973.
+- **Result: hue 41.2 -> 29.6 deg on the 1600x900 still, and 26.0-31.6 deg
+  across the four loop frames**, deepening through the loop as the sun sinks.
+  Mean green channel dropped 34 levels (174 -> 140) while saturation ROSE
+  (0.789 -> 0.799) and clipping fell to 0.01-0.18% with zero black pixels. The
+  frame's yellow was mostly green that the tone curve was resurrecting.
+
+### The cylinders: one real defect found and fixed, NOT confirmed as the cause
+
+- **Five pale smooth capsules per pylon, hung off the crossarms.** P15's
+  `AddPylon` drew each insulator string as ONE smooth 2.29 m cylinder of
+  `kCeramic` (albedo 0.78 — a near-white glaze) from a 0.26 m yoke: a capsule
+  dangling from a bar, five per pylon and two pylons. That is the P14 artifact
+  rebuilt on a new object, and it is now a disc stack on a dark core, 1.55 m,
+  0.30 albedo, with the pole-top insulators keeping their glaze because they
+  are 6 m from the lens. This is the P13 coil lesson again: a swept feature
+  needs its own structure, not just a smaller gauge.
+- **But projecting the strings to screen coordinates says they were too small
+  to be the artifact.** At the 80-132 m these pylons actually sit at, a
+  string is 5-11 px tall and 1-2 px wide, and sampling the render at the
+  projected positions gives a minimum luma of 106-114 in BOTH the P15 and P16
+  builds — i.e. the darkest pixel at every insulator location is the lattice
+  steel around it, not the string. The pale insulators were measurably not
+  what the eye was catching.
+- **What IS ruled out**, by the threshold-free flat-sky flood fill run at all
+  four shipped loop times (t = 2, 7, 12, 17): nothing detached is
+  cylinder-shaped. Every unanchored component in every frame is a HUD glyph or
+  a conductor leaving frame.
+- **So this one is NOT closed.** The fix is real and an improvement, but the
+  remaining "flying cylinders" are something this pass has not identified. The
+  next step is not another threshold sweep — that method has now been shown to
+  be blind to the artifact twice — but a magenta-tag render of the remaining
+  pylon members and pole-top hardware, one object at a time, to find which
+  object owns the pixels the eye is actually catching.
+
 ## BUILD-P15: three complaints, one pass
 
 ### "There are still some cylinders in the air"
