@@ -72,10 +72,26 @@ const vec3  kBetaR = vec3(0.058, 0.135, 0.331);
 // saturated, which is exactly what a high clean-air sunset looks like. The
 // first pass of this shader used 0.0245 with a 1.25 gain and the whole sky
 // came back cream: the aureole had swallowed the entire frame.
-const float kBetaM = 0.0125;
+//
+// BUILD-P15: 0.0125 -> 0.0092. This is the single most effective lever on
+// "make the sky orange", because Mie is the ONLY grey in the model: every
+// unit of it subtracted from the dome is saturation the airlight cannot buy
+// back. Cutting it 26% moves the frame's mean saturation up without
+// touching its brightness, which is what stops a warm sky from reading as a
+// washed-out yellow one.
+const float kBetaM = 0.0092;
 const float kSunI  = 330.0;       // scaled solar radiance
-const float kSunPath = 8.0;       // sun-path optical depth multiplier
-const float kRayGain = 3.95;      // single-scatter Rayleigh gain
+// BUILD-P15: 8.0 -> 9.8. The sun-path optical depth is the reddest knob in the
+// model — it is the extinction the sunlight suffers crossing the whole
+// atmosphere, so it decides how much blue is gone by the time the light
+// reaches the scene. Deepening it keeps the amber's red channel and burns
+// more of its blue, which is the difference between orange and yellow.
+const float kSunPath = 9.8;       // sun-path optical depth multiplier
+// BUILD-P15: 3.95 -> 4.35. The dome was measuring a hue of ~48 deg (yellow-
+// amber). Raising the single-scatter gain puts more of the red end of the
+// surviving spectrum into the frame without lifting the clipped-pixel count,
+// because the shoulder in encodeSky() absorbs the extra.
+const float kRayGain = 4.35;      // single-scatter Rayleigh gain
 
 // One analytic atmosphere evaluation. Also used by the object shader (wet road
 // and window reflections mirror the real sky, not a guess at it) — the copy in
@@ -106,10 +122,15 @@ vec3 atmosphere(vec3 dir, vec3 sun) {
     // third-order scattering, so this is where the blue at altitude comes
     // from, ramped in with height rather than present at the horizon.
     // BUILD-P12: the blue at altitude was creeping down into the visible band
-    // and greying the amber out. The ramp now starts higher and much lower in
-    // gain, so the frame the camera actually sees is orange all the way up to
-    // about 25 degrees, and only the unshot zenith goes blue.
-    float multiK = 0.005 + 0.30 * smoothstep(0.55, 1.00, h);
+    // and greying the amber out.
+    // BUILD-P15: the ramp is pushed to 0.78..1.06. sin(0.78) = 48 deg, so the
+    // frame the camera actually sees (about 20 deg above the horizon) has
+    // ZERO multiple-scattering blue in it — the sky stays orange right up to
+    // the top edge of the image, and the zenith still goes blue if the user
+    // ever looks straight up. The previous 0.55 start put 10% of the blue
+    // floor into the top of the visible frame, which is exactly the yellow
+    // cast the complaint is about.
+    float multiK = 0.005 + 0.30 * smoothstep(0.78, 1.06, h);
     vec3 multi  = kBetaR * phR * 0.80 * Tview * multiK;
     return (single + mie + multi) * kSunI;
 }
@@ -144,10 +165,16 @@ void main() {
         // It is also the surface the corridor silhouettes against, so its
         // colour and level are the two numbers the whole scene reads from.
         float hz = exp(-max(h, 0.0) * 7.0);
-        // hotter and more saturated than the P10 values: this band is what the
-        // whole corridor silhouettes against, and it is the frame's identity
-        sky += (vec3(0.40, 0.140, 0.036)
-              + vec3(0.42, 0.185, 0.058) * pow(max(mu, 0.0), 3.0)) * hz;
+        // BUILD-P15: hotter and LESS GREEN. The P13 airlight was (0.40, 0.14,
+        // 0.036) — a ratio whose green channel is still 35% of the red, and
+        // that green is what the eye reads as "yellow". Pulling green down to
+        // 27% of red while lifting red 12% moves the horizon band from 35 deg
+        // to 24 deg, i.e. from amber to a proper sunset orange. The band also
+        // reaches a little further up the dome (falloff 7.0 -> 5.6) so the
+        // orange does not stop abruptly a few degrees above the poles.
+        sky += (vec3(0.450, 0.121, 0.031)
+              + vec3(0.480, 0.147, 0.038) * pow(max(mu, 0.0), 3.0))
+             * exp(-max(h, 0.0) * 5.6);
     } else {
         // below the horizon the dome is only ever seen past the edge of the
         // ground quad: dark warm ground haze, matched to the aerial
@@ -194,14 +221,19 @@ void main() {
         // The crown is PINK-gold, not white: at this sun elevation the tops are
         // lit by light that has already crossed the whole atmosphere, so a
         // neutral-white cumulus is the same mistake as a neutral-white sky.
-        vec3 crown = vec3(1.30, 0.96, 0.62);
-        vec3 belly = vec3(0.34, 0.130, 0.085);
+        // BUILD-P15: warmer still (green 0.96 -> 0.84). A cloud is the largest
+        // single area of non-sky in a dusk frame, so its colour sets the
+        // frame's white balance as surely as the dome does; leaving the crowns
+        // creamy put pale yellow blobs over an orange sky, which reads as haze
+        // rather than as cloud.
+        vec3 crown = vec3(1.36, 0.845, 0.475);
+        vec3 belly = vec3(0.40, 0.106, 0.058);
         float lift = pow(clamp(cover, 0.0, 1.0), 0.55);
         cloudCol = mix(belly, crown, lift);
         float silver = pow(max(mu, 0.0), 14.0) * (1.0 - cover) * 1.35;
-        cloudCol += vec3(1.00, 0.72, 0.42) * silver;
+        cloudCol += vec3(1.00, 0.62, 0.30) * silver;
         // a touch of sky in the thin skirt so the cloud does not read as paint
-        cloudCol += vec3(0.20, 0.13, 0.10) * (1.0 - lift) * max(mu, 0.0);
+        cloudCol += vec3(0.22, 0.105, 0.062) * (1.0 - lift) * max(mu, 0.0);
     }
 
     // ---- the sun: a TIGHT disc with limb darkening, plus the aureole the
@@ -216,7 +248,10 @@ void main() {
     // instead of punching a white hole in it
     vec3 sunTrans = exp(-kBetaR * (1.0 / (max(sun.y, 0.0) + 0.14)) * kSunPath
                         - vec3(kBetaM * 1.15));
-    sky += vec3(1.0, 0.90, 0.74) * sunTrans * disc * limb * 1.05;
+    // BUILD-P15: the disc itself is orange, not warm white — it is the same
+    // sunlight as the airlight band, just concentrated, so it has to agree
+    // with it or the brightest point in the frame reads as a different light.
+    sky += vec3(1.0, 0.72, 0.42) * sunTrans * disc * limb * 1.05;
 
     sky = mix(sky, cloudCol, clamp(cover, 0.0, 1.0));
 

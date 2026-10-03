@@ -29,8 +29,24 @@ void main() {
     vec3 body = mix(vec3(0.62, 0.68, 0.70), uWaterB, core * 0.35);
     vec3 col = mix(body, vec3(0.90, 0.94, 0.96), core * 0.55)
              + uLightTint * (0.10 + core * 0.10);
+    // BUILD-P15: A WATER DROP IS A LENS, NOT A COTTON BALL. The old profile
+    // was one soft gaussian, so every strand read as the same fuzzy smudge at
+    // every size — which is most of why the spray curtain looked painted
+    // rather than thrown. A real airborne drop has (a) a DARK limb where the
+    // surface curves away from the light and total-internal-reflection sends
+    // the ray back down, and (b) a hard off-centre glint, the same caustic
+    // hotspot every photograph of thrown water shows. Those two features are
+    // what make a few hundred small sprites read as water.
+    float limb = smoothstep(0.55, 0.98, r) * (1.0 - smoothstep(0.98, 1.0, r));
+    col *= 1.0 - 0.42 * limb;
+    // the hotspot rides the upper-left of the strand, as the sun is high
+    // and behind the camera in this room
+    float hx = vUV.x * 0.55 + 0.42, hy = vUV.y * 0.55 - 0.40;
+    float glint = exp(-dot(vec2(hx, hy), vec2(hx, hy)) * 26.0);
+    col += uLightTint * glint * 0.85 * vBright;
+    alpha += glint * 0.35 * vBright;
     // hard clamp below clip: no amount of sprite overlap can mint a
     // saturated white mass (the "plastic dome" artifact)
     col = min(col, vec3(0.97, 0.96, 0.95));
-    fragColor = vec4(col, alpha);
+    fragColor = vec4(col, clamp(alpha, 0.0, 1.0));
 }

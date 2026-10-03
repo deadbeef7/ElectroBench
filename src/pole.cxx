@@ -754,97 +754,147 @@ static void AddSlackLoop(const PoleSpec &p, float h, float side, float radius) {
 // scale, and its open truss silhouette is legible at 80 m where a solid box
 // would be a smear. Four legs plus zigzag bracing, 24 m.
 //
-// BUILD-P14: this mast WAS the "4-6 hanging cylinders in the sky".
+// BUILD-P14 got this wrong TWICE, and BUILD-P15 replaces it outright.
 //
-// A flood fill of the flat-sky debug render, seeded from the bottom of the
-// frame, proves the point: in this scene NOTHING is detached. Every silhouette
-// either reaches the ground or runs off the top edge of the frame. So the
-// complaint was never about a floating object -- it was about a real object
-// drawn so thinly that its parts stopped reading as a structure.
+// P13 blamed a slack coil (a real object, swept too coarsely); P14 blamed the
+// lattice cell mast's legs (also real, drawn too thin at the time). Both fixes
+// were correct about the geometry and neither changed the READ, because both
+// were still asking one object to do a job whose silhouette is a row of thin
+// verticals. Three separate passes thickening members and clustering whips
+// did not converge, and that is the signal: the shape itself is wrong, not
+// its gauge.
 //
-// At 50 m the old truss braced with 26 mm members: about 0.6 px, and after 4x
-// MSAA it simply vanished. What survived on screen was the four 0.17 m legs
-// plus the whip strokes -- six vertical tubes tapering against the sky,
-// hanging in it. The legs were WIDER on screen than the members that make a
-// mast a mast, so the only thing the eye could assemble was a row of
-// cylinders. Thicker legs would have made it worse.
+// The measurement that settled it: a debug render with the sky flattened and
+// the mast's radome panels recoloured magenta. The panels -- 0.42 m wide and
+// TEN METRES tall, hung 0.46 m off a truss whose 0.11 m stand-offs are
+// sub-pixel at the 120-160 m these masts actually sit at -- were 4 pale
+// 1-2 px bars per mast with visible sky between them and the truss. That IS
+// "cylinders in the air", verbatim. P14 introduced them.
 //
-// Three changes, all of them about legibility at corridor distance:
-//   1. every member is fat enough to clear a pixel at 60 m -- legs 125 mm,
-//      diagonals 70 mm, belts 58 mm, all well over double the old gauge;
-//   2. the bracing steps every 1.9 m, which at 60-90 m is ~12 px between
-//      levels: fat enough that no member falls below a pixel and vanishes,
-//      sparse enough that sky still shows through the truss. Gauging and
-//      spacing pull in opposite directions and both matter -- thickening
-//      alone just welds the mast into a solid wedge, which is the same
-//      silhouette with a worse story;
-//   3. vertical panel antennas on the upper third -- the single feature that
-//      makes a cell mast unmistakable, and the thing that stops the
-//      silhouette from being four sticks with a fork on top.
-static void AddLatticeMast(float x, float z, float height) {
-  const Vec3 steel{0.290f, 0.292f, 0.300f};
-  const Vec3 radome{0.760f, 0.765f, 0.775f};
-  const float halfBase = 1.55f, halfTop = 0.42f;
-  // the leg taper, shared by the bracing and the panels so the whole assembly
-  // follows one profile instead of each part guessing its own width
-  auto halfAt = [=](float h) {
-    return halfBase + (halfTop - halfBase) * (h / height);
-  };
+// So the answer is not another thickness pass. It is to replace the object
+// with one whose silhouette cannot be mistaken for a tube at any distance:
+//
+//   * a SPLAYED A-FRAME base, 2 x height * 0.175 half-width (9 m of feet on
+//     a 26 m pylon). At 60 m that is 24 px of foot, tapering to 6 px at the
+//     shoulder: an unmistakable triangle, and the single strongest "this is
+//     a transmission pylon" cue there is;
+//   * TWO LONG HORIZONTAL CROSSARMS, 0.34 x height half-length. 18 m of
+//     horizontal at 60 m is ~46 px across the frame. A horizontal bar is the
+//     one shape a vertical tube can never be confused with, and insulator
+//     strings hanging from the tips finish the read;
+//   * no pale radome panels and no whip cluster -- they were the artifact.
+//
+// It is also the more truthful object: a lattice transmission pylon standing
+// behind a Japanese distribution line is a far more characteristic sight than
+// a cell mast, and it carries the scale P12 wanted without needing to be
+// legible member by member.
+static void AddPylon(float x, float z, float height) {
+  // BUILD-P15: dark galvanised lattice steel. A pylon 110-170 m out is behind
+  // the aerial-perspective ramp, which pulls everything toward the haze
+  // colour, so a mid-grey (0.30) member arrives at the eye only a few levels
+  // below the sky and the whole tower reads as a faint smudge. Real
+  // galvanised steelwork silhouettes against a dusk sky as a DARK lattice:
+  // dropping the albedo to 0.17 is what makes the crossarm an actual bar
+  // rather than a slightly-cloudier patch of sky.
+  const Vec3 steel{0.170f, 0.172f, 0.180f};
+  const Vec3 galv{0.215f, 0.220f, 0.232f};
+  const float footHalf = height * 0.175f;   // splayed feet
+  const float kneeY = height * 0.34f;       // where the A-frame closes
+  const float kneeHalf = footHalf * 0.46f;
+  const float topHalf = height * 0.048f;
+
+  // concrete pad footings, so the legs land on something
   for (int c = 0; c < 4; c++) {
     float sx = (c == 0 || c == 3) ? -1.0f : 1.0f;
     float sz = (c < 2) ? -1.0f : 1.0f;
-    AddCylinder({x + sx * halfBase, 0.0f, z + sz * halfBase},
-                {x + sx * halfTop, height, z + sz * halfTop}, 0.125f, 0.085f,
-                4, steel, kMatSteel);
+    AddBox({x + sx * footHalf, 0.16f, z + sz * footHalf},
+           {0.78f, 0.16f, 0.78f}, {0.255f, 0.250f, 0.238f}, kMatConcrete);
   }
-  const float kStep = 1.9f;
-  for (float h = 1.9f; h < height - 0.5f; h += kStep) {
-    float hb0 = halfAt(h), hb1 = halfAt(h + kStep);
+  // the splayed lower legs: fat enough to survive 4x MSAA at 60 m
+  for (int c = 0; c < 4; c++) {
+    float sx = (c == 0 || c == 3) ? -1.0f : 1.0f;
+    float sz = (c < 2) ? -1.0f : 1.0f;
+    AddCylinder({x + sx * footHalf, 0.12f, z + sz * footHalf},
+                {x + sx * kneeHalf, kneeY, z + sz * kneeHalf}, 0.195f,
+                0.145f, 5, steel, kMatSteel);
+  }
+  // the near-vertical upper legs, carrying on the same taper
+  for (int c = 0; c < 4; c++) {
+    float sx = (c == 0 || c == 3) ? -1.0f : 1.0f;
+    float sz = (c < 2) ? -1.0f : 1.0f;
+    AddCylinder({x + sx * kneeHalf, kneeY, z + sz * kneeHalf},
+                {x + sx * topHalf, height, z + sz * topHalf}, 0.145f, 0.095f,
+                5, steel, kMatSteel);
+  }
+  // a wide horizontal knee tie closing the A-frame: more horizontal, and it
+  // sits right at the height the corridor silhouettes against
+  for (int s = 0; s < 4; s++) {
+    float ax = (s == 0 || s == 3) ? -kneeHalf : kneeHalf;
+    float az = (s < 2) ? -kneeHalf : kneeHalf;
+    AddCylinder({x + ax, kneeY, z + az}, {x - ax, kneeY, z + az}, 0.105f,
+                0.105f, 4, steel, kMatSteel);
+    AddCylinder({x + ax, kneeY, z + az}, {x + ax, kneeY, z - az}, 0.105f,
+                0.105f, 4, steel, kMatSteel);
+  }
+  // lattice web on the splayed section only: this is the one place a real
+  // pylon's bracing is wide enough on screen to be worth drawing, and the
+  // diagonals are the second cue that reads "lattice" rather than "post"
+  for (float t = 0.0f; t < 0.94f; t += 0.235f) {
+    float h = kneeY * (t + 0.118f);
+    float hb = footHalf + (kneeHalf - footHalf) * ((t + 0.118f));
     for (int s = 0; s < 4; s++) {
-      float a0x = (s == 0 || s == 3) ? -hb0 : hb0;
-      float a0z = (s < 2) ? -hb0 : hb0;
       int n = (s + 1) & 3;
-      float a1x = (n == 0 || n == 3) ? -hb1 : hb1;
-      float a1z = (n < 2) ? -hb1 : hb1;
-      AddCylinder({x + a0x, h, z + a0z}, {x + a1x, h + kStep, z + a1z},
-                  0.070f, 0.070f, 3, steel, kMatSteel);
-      // the horizontal belt at each level closes the truss
-      AddCylinder({x + a0x, h, z + a0z}, {x - a0x, h, z + a0z}, 0.058f, 0.058f,
-                  3, steel, kMatSteel);
-      AddCylinder({x + a0x, h, z + a0z}, {x + a0x, h, z - a0z}, 0.058f, 0.058f,
-                  3, steel, kMatSteel);
+      float a0x = (s == 0 || s == 3) ? -hb : hb;
+      float a0z = (s < 2) ? -hb : hb;
+      float a1x = (n == 0 || n == 3) ? -hb : hb;
+      float a1z = (n < 2) ? -hb : hb;
+      AddCylinder({x + a0x, h, z + a0z}, {x + a1x, h + kneeY * 0.235f,
+                                         z + a1z}, 0.085f, 0.085f, 3, steel,
+                  kMatSteel);
     }
   }
-  // BUILD-P14: the panel antennas. Two on each of the two broad faces, hung
-  // off the truss on short stand-offs, running from just under the shoulder
-  // to just under the top. These are what the eye recognises as "cell site",
-  // and they give the mast a solid core so the truss reads as a structure
-  // with panels on it rather than as four empty legs.
-  {
-    const float pBot = height * 0.46f, pTop = height * 0.88f;
-    const float pLen = (pTop - pBot) * 0.5f, pMid = (pBot + pTop) * 0.5f;
-    for (int face = 0; face < 2; face++) {
-      float fz = face ? 1.0f : -1.0f;
-      for (int k = 0; k < 2; k++) {
-        float px = x + (k ? 0.70f : -0.70f);
-        // the stand-off: a short bracket tying the panel back to the truss,
-        // otherwise the panel is a slab floating beside the mast, which is
-        // the same class of bug as a hanging cylinder
-        AddCylinder({px, pMid, z + fz * halfAt(pMid)},
-                    {px, pMid, z + fz * (halfAt(pMid) + 0.34f)}, 0.055f,
-                    0.055f, 3, steel, kMatSteel);
-        AddBox({px, pMid, z + fz * (halfAt(pMid) + 0.46f)},
-               {0.21f, pLen, 0.16f}, radome, kMatPaint);
+
+  // ---- the two crossarms: the horizontal that settles the silhouette -----
+  // Each is a real lattice boom built as a chord pair with verticals between
+  // them. At corridor distance the pair reads as one 1.4 m deep bar, which is
+  // exactly what a pylon boom looks like at 60 m, and the verticals keep it
+  // honest when the dolly gets close.
+  auto crossarm = [&](float y, float halfLen) {
+    AddBox({x, y + 0.38f, z}, {halfLen, 0.38f, 0.42f}, steel, kMatSteel);
+    AddBox({x, y - 0.34f, z}, {halfLen, 0.34f, 0.38f}, steel, kMatSteel);
+    int bays = (int)(halfLen / 1.9f);
+    for (int b = -bays; b <= bays; b++) {
+      float bx = b * 1.9f;
+      AddCylinder({x + bx, y - 0.34f, z}, {x + bx, y + 0.38f, z}, 0.105f,
+                  0.105f, 4, steel, kMatSteel);
+      // the knee brace back to the shaft at the inboard ends
+      if (std::fabs(bx) > topHalf + 0.4f && std::fabs(bx) < halfLen - 1.0f) {
+        float sgn = bx < 0.0f ? -1.0f : 1.0f;
+        AddCylinder({x + bx, y - 0.34f, z},
+                    {x + bx - sgn * 1.9f, y - 1.45f, z}, 0.085f, 0.085f, 3,
+                    steel, kMatSteel);
       }
     }
-  }
-  // the whip antennas on top: short, and clustered so they read as one
-  // fixture rather than three more free-floating verticals
-  for (int i = 0; i < 3; i++) {
-    float ax = x + (i - 1) * 0.26f;
-    AddCylinder({ax, height - 0.15f, z},
-                {ax, height + 1.55f - 0.35f * (float)(i & 1), z}, 0.052f,
-                0.022f, 4, steel, kMatSteel);
+  };
+  const float upperY = height * 0.735f, lowerY = height * 0.545f;
+  crossarm(upperY, height * 0.345f);
+  crossarm(lowerY, height * 0.265f);
+
+  // ---- insulator strings: the detail that says "transmission", not "cell" --
+  // Each hangs off a boom tip on a visible yoke, so nothing is free-floating.
+  auto insulator = [&](float ix, float iy) {
+    AddBox({ix, iy + 0.14f, z}, {0.26f, 0.20f, 0.26f}, galv, kMatSteel);
+    AddCylinder({ix, iy - 0.06f, z}, {ix, iy - 2.35f, z}, 0.155f, 0.135f, 6,
+                kCeramic, kMatCeramic);
+    AddCylinder({ix, iy - 2.35f, z}, {ix, iy - 2.62f, z}, 0.135f, 0.105f, 6,
+                galv, kMatSteel);
+  };
+  {
+    const float uh = height * 0.345f, lh = height * 0.265f;
+    for (float f : {0.94f, 0.66f, 0.38f})
+      insulator(x + uh * f, upperY + 0.02f);
+    for (float f : {0.90f, 0.58f})
+      insulator(x - lh * f, lowerY + 0.02f);
   }
 }
 
@@ -1416,19 +1466,23 @@ static void AddTreeline() {
     }
   }
 
-  // ---- BUILD-P12: two cell masts behind the corridor. Pure scale cue, but a
-  // street with no tall thin thing in the far distance has no distance.
+  // ---- BUILD-P12: something tall beyond the pole line. Pure scale cue, but
+  // a street with no vertical past the distribution poles has no distance.
   //
-  // BUILD-P14: moved out of the corridor. The dolly runs z = 4..121 m along
-  // x = +2, so a mast at (17.5, 101) was 15 m off the lens at one point in
-  // the loop -- a 24 m truss filling the frame, legs smeared past the edge
-  // and bracing too close to resolve, which is the worst possible way to
-  // draw the one object that has to read as a truss. Both now sit ahead of
-  // the dolly's whole range at a similar bearing (|dx| ~ 0.78 * dz, which is
-  // where they were on screen before), so they hold their framing while the
-  // nearest approach relaxes from 15 m to 52 m and 34 m.
-  AddLatticeMast(34.0f, 162.0f, 24.0f);
-  AddLatticeMast(-42.0f, 178.0f, 27.5f);
+  // BUILD-P14 moved the cell masts out of the corridor (the dolly runs
+  // x = +2, z = 4..165, so a mast at (17.5, 101) passed 15 m off the lens).
+  // BUILD-P15 replaces the object outright -- see the long note on AddPylon:
+  // three passes of thickening members had not fixed the read, so the shape
+  // had to change. Placement is now tuned to the dolly's ACTUAL working
+  // range rather than its whole loop: the still and the GIF are shot at
+  // t = 2..17 s, i.e. z = 9..48 m, and at z = 212 the pylons were 190-230 m
+  // out — a 44 px crossarm washed almost to the haze. At z = 140/172 they are
+  // 103-173 m away across the shot window, which puts the crossarm at 46-62 px
+  // and the whole tower at 100-133 px: large enough to read as a pylon, small
+  // enough to stay a scale cue. Both still clear the corridor laterally
+  // (x = +48 and -60 against pole lines at -3.4 and +8.6).
+  AddPylon(48.0f, 140.0f, 26.0f);
+  AddPylon(-60.0f, 172.0f, 31.0f);
 
   // ---- a second, closer line: depth + the layered-tangle feel. BUILD-P2:
   // the 17 m offset put line B so far off-axis it read as flat wallpaper;
@@ -1767,7 +1821,7 @@ static void RenderHUD() {
   // build tag: on-screen proof of which scene code the exe runs (stale-build
   // screenshots must be detectable at a glance)
   char line1[128];
-  std::snprintf(line1, sizeof(line1), "FPS: %d   build P14   scene 4: LainBench", gFps);
+  std::snprintf(line1, sizeof(line1), "FPS: %d   build P15   scene 4: LainBench", gFps);
   RenderText(16.0f, 16.0f, line1);
 }
 

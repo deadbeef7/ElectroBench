@@ -697,7 +697,9 @@ struct CrownSplash {
   float age = 0.0f;
   float radius = 0.0f;
   float height = 0.0f;
+  float height0 = 0.0f; // the height the rim RALLIES to (set at spawn)
   float spike = 0.0f;   // spike amplitude 0..1
+  float spike0 = 0.0f;  // peak tearing amplitude (set at spawn)
   float life = 1.0f;    // fades the sheet out
   float scale = 1.0f;   // pot scale — radius growth must stay pot-proportional
 };
@@ -726,6 +728,10 @@ struct Droplet {
   float radius;
   float life;     // seconds remaining
   float maxLife;
+  float delay;    // BUILD-P15: seconds before this strand is released. A real
+                  // crown does not eject all its water at once — it tears
+                  // progressively as the lip pinches, so the spray builds
+                  // from the first finger to the last over ~0.3 s.
   int owner;      // fleet pot that spawned it (owns the micro-ring window)
 };
 static std::vector<Droplet> gDroplets;
@@ -781,40 +787,94 @@ static void SpawnSplash(int pot, float x, float z, float impactSpeed, float scal
   crown.scale = scale;
   crown.radius = 0.68f * scale;   // ≈ 1.3x the pot's footprint: the sheet
                                   // hugs the cavity rim and RISES from there
-  crown.height = std::fmin((0.85f + 1.20f * s) * scale * (waveTwo ? 1.10f : 1.0f),
-                           3.6f); // steep cap: height ≈ 2.5x the radius — the
-                                  // water points UP and TOWERS (reference
-                                  // crowns are tall narrow sheets, never wide
-                                  // domes)
-  crown.spike = std::fmin(1.0f, 0.45f + 0.4f * s);
+  // BUILD-P15: THE CROWN NOW *BUILDS* INSTEAD OF APPEARING.
+  //
+  // This is the single largest realism defect left in the scene and it is a
+  // TIMING bug, not a shape bug. `height` was written once at spawn and
+  // `spike` at full amplitude, so the very first frame a splash existed it
+  // was already a fully-formed, fully-torn star at full height.
+  //
+  // High-speed footage of a real Worthington crown says otherwise. The rim
+  // at t=0 is a SMOOTH, almost perfectly circular collar of water thrown
+  // radially outward by the displaced volume. It rises as a clean cylinder
+  // for the first 60-100 ms. The spikes do not exist yet: they appear only
+  // when the cavity underneath pinches off and the collapsing sheet loses its
+  // support, roughly 150-250 ms in, and they grow over the next 100 ms. Then
+  // the fingers thin, bead, and fly apart.
+  //
+  // So the crown now runs a four-stage timeline driven from `age`:
+  //   0 .. 0.09 s   smooth collar rises to full height, no tearing
+  //   0.09 .. 0.30 s pinch-off: spikes ramp in, lip flares
+  //   0.30 .. life   fingers decay and the sheet thins to nothing
+  // The vertex shader gets `age` as a uniform and does the shaping, so the
+  // per-frame CPU cost is the same four multiplies it already had.
+  crown.height0 = std::fmin((0.85f + 1.20f * s) * scale * (waveTwo ? 1.10f : 1.0f),
+                            3.6f); // steep cap: height ≈ 2.5x the radius — the
+                                   // water points UP and TOWERS (reference
+                                   // crowns are tall narrow sheets, never wide
+                                   // domes)
+  crown.height = crown.height0;
+  crown.spike0 = std::fmin(1.0f, 0.45f + 0.4f * s);
+  crown.spike = 0.0f;   // a smooth rim is all there is at t = 0
   crown.life = waveTwo ? 1.1f : 1.0f;
 
   // ---- droplets: torn from the crown spikes, STEEP ballistic strands.
   // Mostly vertical launch with a small inward-biased lateral bleed so the
   // spray falls back near the crown instead of painting a halo across the
   // pool (the literal source of the horizon bank on build D3).
-  int n = (46 + (int)(20.0f * s)) * (waveTwo ? 2 : 1);
+  //
+  // BUILD-P15 DROPLET SIZE. The old radii were 36-80 mm, i.e. 7-16 cm
+  // ACROSS. That is not spray, that is a hailstone: a 16 cm ball of water
+  // hanging over a 1 m crown reads as a balloon, and there were only 46-66 of
+  // them so the eye counted every one. Real Worthington ejecta is 4-25 mm
+  // across and there are HUNDREDS of it, distributed as a power law (many
+  // tiny, a few large) rather than uniformly. So: radius 5-26 mm, a power-
+  // law size draw, and roughly twice the count. The count is affordable
+  // because the strands are 2-5 px at pool scale once they are the right
+  // size — the old ones were large AND numerous, which is the worst of both.
+  int n = (86 + (int)(46.0f * s)) * (waveTwo ? 2 : 1);
   for (int i = 0; i < n; i++) {
     // fixed pseudo-random spread (deterministic across runs like the rest
     // of the bench)
     float a = (float)((i * 137 + pot * 61) % 360) * 3.14159265f / 180.0f;
     float r01 = ((i * 89 + pot * 37) % 100) / 100.0f;
+    float u01 = ((i * 53 + pot * 19) % 100) / 100.0f;
     bool fragment = waveTwo && ((i * 31 + pot * 17) % 7) == 0; // torn sheet chunk
     Droplet d;
     d.owner = pot;
     float rimR = crown.radius + 0.06f + 0.07f * r01;   // tight rim anchor
-    d.pos = {x + std::cos(a) * rimR,
-             kWaterLevel + 0.15f + 0.55f * crown.height * r01,
-             z + std::sin(a) * rimR};
+    // BUILD-P15: ejecta leaves from the RISING SHEET, not from a fixed band.
+    // Position on the sheet tracks how far up the crown the strand tore off,
+    // so the crown visibly sheds as it climbs instead of erupting pre-formed.
+    float onSheet = 0.18f + 0.78f * r01;
+    d.pos = {x + std::cos(a) * rimR * (1.0f - 0.22f * onSheet),
+             kWaterLevel + 0.10f + onSheet * crown.height0 * 0.92f,
+             z + std::sin(a) * rimR * (1.0f - 0.22f * onSheet)};
     // STEEP ejecta: strong vertical kick, small lateral component that air
-    // drag eats quickly (see the drag term in UpdatePhysics)
+    // drag eats quickly (see the drag term in UpdatePhysics). The launch
+    // speed now RISES with height on the sheet (the fastest, biggest drops
+    // come off the lip), which is what gives a real crown its graded corona
+    // instead of a uniform shrapnel burst.
     float out = (0.45f + 0.80f * s * (0.30f + 0.70f * r01)) * scale;
-    float up = 3.6f + 5.2f * s * r01;      // taller crowns throw harder
+    float up = (3.2f + 4.6f * s * (0.35f + 0.65f * onSheet));
     d.vel = {std::cos(a) * out, up, std::sin(a) * out};
-    d.radius = (0.036f + 0.044f * ((i * 13) % 7) / 7.0f) * scale;
-    if (fragment) d.radius *= 1.5f; // torn sheet chunk, no cloud ballooning
-    d.maxLife = d.life = (0.75f + 0.45f * ((i * 29) % 5) / 5.0f) *
+    // POWER-LAW SIZE. u^3 clusters the population toward the small end with
+    // a long thin tail of big drops, which is what a real splash curtain is:
+    // a haze of fine mist plus a handful of fat beads near the axis.
+    float sz = 0.0050f + 0.0210f * (u01 * u01 * u01);
+    // the fattest drops are the ones torn from the highest, fastest part of
+    // the sheet, so size correlates with launch height
+    sz *= 0.72f + 0.85f * onSheet;
+    d.radius = sz * scale;
+    if (fragment) d.radius *= 1.6f; // torn sheet chunk, no cloud ballooning
+    d.maxLife = d.life = (0.62f + 0.52f * ((i * 29) % 5) / 5.0f) *
                          (waveTwo ? 1.10f : 1.0f);
+    // BUILD-P15: staggered release. The lip thins and pinches FIRST, so the
+    // highest strands on the sheet leave first and the base tears last; the
+    // release time therefore tracks height on the sheet. Without this the
+    // whole corona appears in one frame at impact, which is the same
+    // "already finished" tell as the pre-formed crown.
+    d.delay = 0.11f + 0.30f * onSheet + 0.05f * u01;
     gDroplets.push_back(d);
   }
 
@@ -903,6 +963,8 @@ static void UpdatePhysicsStep(double now, float dt) {
   // while the vertical arc stays clean.
   std::vector<Droplet> pending;   // BUILD-D7 secondary ejecta staging
   for (Droplet &d : gDroplets) {
+    if (d.delay > 0.0f) { d.delay -= dt; continue; }   // BUILD-P15: staged
+                                                            // ejection
     float sp = std::sqrt(d.vel.x * d.vel.x + d.vel.y * d.vel.y + d.vel.z * d.vel.z);
     float cd = std::fmin(0.55f * sp * dt, 0.9f);   // quadratic-ish air drag
     d.vel.x -= d.vel.x * cd;
@@ -912,16 +974,24 @@ static void UpdatePhysicsStep(double now, float dt) {
     d.pos = Vec3Add(d.pos, Vec3Scale(d.vel, dt));
     d.life -= dt;
     if (d.pos.y < kWaterLevel && d.vel.y < 0.0f) {
+      // BUILD-P15: the landing gates used to be `radius > 0.03f`, which was
+      // sized to the old 36-80 mm drops. With realistic 5-26 mm ejecta that
+      // test can NEVER pass, so every micro-ring AND every secondary droplet
+      // this scene is famous for would have silently switched off. The
+      // threshold is now 0.009 m — the size at which one drop actually
+      // punches a visible ring — and it is stated against the new size
+      // distribution rather than inherited from it.
+      const float kRingDrop = 0.0090f;
       // landing droplet raises a micro-ring in its owner's window
-      if (d.radius > 0.03f)
+      if (d.radius > kRingDrop)
         SpawnRing(d.owner, d.pos.x, d.pos.z,
                   0.14f + 0.3f * std::fmin(-d.vel.y / 6.0f, 1.0f));
       // BUILD-D7 SECONDARY EJECTA: a fast droplet throws a couple of tiny
       // kids back up (real rain-on-water behaviour). Collected out-of-loop
       // (no push_back during iteration) and hard-capped so a droplet storm
       // can never avalanche.
-      if (d.radius > 0.03f && gDroplets.size() + pending.size() < 3200 &&
-          ((d.owner * 7 + (int)(d.pos.x * 13.0f)) % 3) == 0) {
+      if (d.radius > kRingDrop && gDroplets.size() + pending.size() < 4200 &&
+          ((d.owner * 7 + (int)(d.pos.x * 13.0f)) % 2) == 0) {
         for (int k = 0; k < 2; k++) {
           Droplet s;
           s.owner = d.owner;
@@ -933,8 +1003,11 @@ static void UpdatePhysicsStep(double now, float dt) {
                    1.4f + 0.9f * (float)((k * 53) % 5) / 5.0f +
                        0.15f * std::fmin(-d.vel.y, 6.0f),
                    std::sin(aa) * sp2};
-          s.radius = d.radius * 0.5f;
-          s.maxLife = s.life = 0.45f;
+          // children are much finer than their parent — a splash-back crown
+          // is mist, not a shrunken copy of the drop that made it
+          s.radius = d.radius * 0.45f;
+          s.maxLife = s.life = 0.42f;
+          s.delay = 0.0f;
           pending.push_back(s);
         }
       }
@@ -973,11 +1046,29 @@ static void UpdatePhysicsStep(double now, float dt) {
       // BUILD-P2: the sheet hugs the pot's footprint but breathes outward
       // a little further as the lip unfurls (0.68 -> 0.82 of scale)
       float t = crown.age;
-      crown.radius = std::fmin(0.68f + 0.20f * t, 0.82f) * crown.scale;
-      crown.height *= 1.0f - std::fmin(0.92f * dt, 0.9f);   // the lip falls back
-      crown.spike *= 1.0f - std::fmin(0.55f * dt, 0.9f);
+      // BUILD-P15: THE WORTHINGTON TIMELINE. The rim RALLIES over the first
+      // 90 ms (smooth, untilted), tears over the next 210 ms as the cavity
+      // pinches off, and only then starts falling. `height0`/`spike0` are the
+      // peaks; these two shapes are the whole animation.
+      float rise = std::fmin(t / 0.09f, 1.0f);
+      rise = rise * rise * (3.0f - 2.0f * rise);        // smoothstep
+      float pinch = std::fmin(t / 0.30f, 1.0f);
+      pinch = pinch * pinch * (3.0f - 2.0f * pinch);
+      crown.height = crown.height0 * rise *
+                     (1.0f - std::fmin(0.55f * std::fmax(0.0f, t - 0.30f), 0.85f));
+      crown.spike = crown.spike0 * pinch;
+      // the lip unfurls outward late, which is when the sheet is fastest and
+      // most aerated — not linearly from the first frame as it used to
+      crown.radius = (0.68f + 0.20f * std::fmin(t, 0.42f)) * crown.scale;
       crown.life = 1.0f - t / 1.18f;      // bigger crowns linger a beat longer
-      if (crown.life <= 0.0f || crown.height < 0.04f) {
+      // BUILD-P15: the collapse test must NOT run during the rise. The sheet
+      // is deliberately near-zero height for its first 90 ms (it is a collar
+      // of water leaving the surface, not yet a crown), so testing
+      // `height < 0.04` unconditionally retires every crown on its FIRST
+      // 1/120 s physics step — the rise ramp and the collapse test were
+      // fighting each other. The sheet may only be declared collapsed once it
+      // has actually had a chance to rise.
+      if (crown.life <= 0.0f || (t > 0.10f && crown.height < 0.04f)) {
         crown.active = false;
         // jet launches as the crown collapses — a real Rayleigh jet fires on
         // the cavity's inertial collapse; bigger pots cavitate deeper and
@@ -1262,7 +1353,7 @@ static void RenderHUD() {
   // look changed massively across commits — stale-build screenshots must be
   // detectable at a glance)
   char line1[128];
-  std::snprintf(line1, sizeof(line1), "FPS: %d   build D8", gFps);
+  std::snprintf(line1, sizeof(line1), "FPS: %d   build D9", gFps);
   RenderText(16.0f, 16.0f, line1);
 }
 
@@ -1619,6 +1710,11 @@ static void DrawDroplets(const Mat4 &view, const Vec3 &eye) {
   static std::vector<float> buf;
   buf.clear();
   for (const Droplet &d : gDroplets) {
+    // BUILD-P15: a strand still in its staging delay has NOT been torn off
+    // the sheet yet. Drawing it would stamp a frozen blob at the release
+    // point — i.e. exactly the "cylinders hanging in the air" class of bug,
+    // in a different uniform. Staged strands are simply not submitted.
+    if (d.delay > 0.0f) continue;
     float bright = std::fmin(1.0f, d.life / d.maxLife * 1.4f);
     const float corners[4][2] = {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}};
     const int quadIdx[6] = {0, 1, 2, 0, 2, 3};

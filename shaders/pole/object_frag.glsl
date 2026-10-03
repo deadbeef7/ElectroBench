@@ -80,6 +80,15 @@ vec3 hazeColFor(vec3 base, vec3 L, vec3 V) {
     return mix(vec3(0.70, 0.52, 0.37), vec3(0.98, 0.75, 0.50), pow(toSun, 3.0));
 }
 
+// BUILD-P15: how well THIS PIXEL can resolve an octave of spatial frequency
+// `freq` (cycles per metre), given the fragment's world-space footprint.
+// 1.0 = fully resolved, 0.0 = below one pixel, i.e. would alias. Called with
+// the single per-fragment footprint computed in main(), so every octave in
+// the shader shares one footprint.
+float octaveRes(float foot, float freq) {
+    return 1.0 - smoothstep(0.35, 1.10, foot * freq);
+}
+
 // ---------------------------------------------------------------------------
 // BUILD-P10: the atmosphere, copied BYTE-IDENTICALLY from sky_frag.glsl (the
 // same rule the pool scene follows with its checker: one file cannot include
@@ -94,10 +103,10 @@ vec3 hazeColFor(vec3 base, vec3 L, vec3 V) {
 // pass already spends, over the road's share of the frame.
 // ---------------------------------------------------------------------------
 const vec3  kBetaR = vec3(0.058, 0.135, 0.331);
-const float kBetaM = 0.0125;
+const float kBetaM = 0.0092;
 const float kSunI  = 330.0;
-const float kSunPath = 8.0;
-const float kRayGain = 3.95;
+const float kSunPath = 9.8;
+const float kRayGain = 4.35;
 
 vec3 atmosphere(vec3 dir, vec3 sun) {
     float h = dir.y;
@@ -112,7 +121,7 @@ vec3 atmosphere(vec3 dir, vec3 sun) {
               / max(pow(1.0 + gg - 2.0 * g * mu, 1.5), 1e-3);
     vec3 single = kBetaR * phR * kRayGain * Tview * Tsun;
     vec3 mie    = vec3(kBetaM * phM * 0.25) * Tview * Tsun;
-    float multiK = 0.005 + 0.30 * smoothstep(0.55, 1.00, h);
+    float multiK = 0.005 + 0.30 * smoothstep(0.78, 1.06, h);
     vec3 multi  = kBetaR * phR * 0.80 * Tview * multiK;
     return (single + mie + multi) * kSunI;
 }
@@ -142,6 +151,26 @@ void main() {
     vec3 P = vWorld;
     float near = 1.0 - smoothstep(16.0, 64.0, dist);   // detail fade
 
+    // BUILD-P15 THE DETAIL FILTER. The old gate was pure DISTANCE: `near`
+    // reached zero at 64 m, so every fine octave switched off and the whole
+    // far half of the corridor — road, verges, house walls, the near field of
+    // the next pole down — rendered as a flat wash of unmodulated albedo.
+    // That is the "pixellated, no detail" complaint, and it was a gate, not a
+    // lack of detail: the octaves existed, they were just being told to stop.
+    //
+    // Distance is the wrong test anyway. Whether an octave is usable depends
+    // on whether ONE PIXEL can resolve it, and the driver already knows that
+    // exactly: fwidth() gives the fragment's world-space footprint. A 20 m
+    // ground feature is still resolvable at 250 m; a 2 cm aggregate speckle
+    // is not resolvable at 8 m. So each octave is now gated by
+    //     res(freq) = 1 - smoothstep(0.35, 1.10, footprint * freq)
+    // which keeps it alive exactly as long as the pixel it lands in can
+    // resolve it, kills it one octave before it would alias into shimmer, and
+    // costs ONE footprint computation for every octave in the shader.
+    // The practical result is that texture now runs all the way to the
+    // horizon instead of stopping dead at 64 m.
+    float foot = fwidth(P.x) + fwidth(P.z) + 0.0015;
+
     vec3 base = vColor;
     float rough = 0.85;     // 0 = mirror, 1 = chalk
     float sheen = 0.0;      // extra grazing term (cables, glass)
@@ -155,8 +184,16 @@ void main() {
         // the mid-distance, which is the "washed out" complaint.
         float n1 = vnoise(P.xz * 0.42);
         float n2 = vnoise(P.xz * 2.10);
-        float n3 = near > 0.02 ? vnoise(P.xz * 7.5) : 0.5;
-        base *= 0.66 + 0.52 * n1 + 0.26 * n2 + 0.14 * n3 * near;
+        // BUILD-P15: the near-field-only grit octave is now GATED BY RESOLUTION,
+        // not by distance, and a new broad octave sits UNDER it. The verges are
+        // the largest flat area in the frame and they were reading as paper:
+        // one 7 m mottling octave that is resolvable from the camera to the
+        // horizon gives the ground a feature size, and the 7.5 c/m grit rides
+        // on top of it for as long as a pixel can actually see it.
+        float n0 = vnoise(P.xz * 0.135 + 3.7);
+        float g3 = octaveRes(foot, 7.5);
+        float n3 = g3 > 0.02 ? vnoise(P.xz * 7.5) : 0.5;
+        base *= 0.58 + 0.30 * n0 + 0.38 * n1 + 0.26 * n2 + 0.14 * n3 * g3;
         base = mix(base, vec3(0.150, 0.155, 0.082),
                    smoothstep(0.48, 0.95, n1) * 0.55);
         // scuffed dust either side of the carriageway (traffic throws grit)
@@ -174,8 +211,9 @@ void main() {
         // aggregate speckle — near field ONLY. The branch is coherent across
         // the whole far field, so on a pre-SSE CPU it skips a whole value
         // noise for most of the frame (and stops the speckle aliasing).
-        if (near > 0.02)
-            base += (vnoise(P.xz * 11.0) - 0.5) * 0.09 * near;
+        float gRoad = octaveRes(foot, 11.0);
+        if (gRoad > 0.02)
+            base += (vnoise(P.xz * 11.0) - 0.5) * 0.09 * gRoad;
         // a darker seam down the very centre where the tar is oldest
         base *= 1.0 - 0.18 * exp(-pow(rx / 0.55, 2.0));
         rough = mix(0.95, 0.62, wp);          // polished paths catch the sun
@@ -201,16 +239,18 @@ void main() {
         wet = damp;
     } else if (m == kMatLine) {
         // worn road paint: chipped at the edges, dirty in the middle
-        float wear = near > 0.02 ? vnoise(P.xz * 6.0) : 0.5;
-        base *= 0.78 + 0.34 * wear * near + 0.18 * (1.0 - near);
+        float wear = octaveRes(foot, 6.0);
+        float wearN = wear > 0.02 ? vnoise(P.xz * 6.0) : 0.5;
+        base *= 0.78 + 0.34 * wearN * wear + 0.18 * (1.0 - near);
         rough = 0.85;
     } else if (m == kMatWood) {
         // grain runs ALONG the trunk: squash x/z, stretch y
         float along = P.y * 1.15 + (P.x + P.z) * 0.06;
         float g1 = vnoise(vec2((P.x + P.z) * 6.5, along));
-        float g2 = near > 0.02 ? vnoise(vec2((P.x + P.z) * 19.0, along * 2.6))
-                               : 0.5;
-        base *= 0.80 + 0.28 * g1 + 0.16 * g2 * near;
+        float gGrain = octaveRes(foot, 19.0);
+        float g2 = gGrain > 0.02 ? vnoise(vec2((P.x + P.z) * 19.0, along * 2.6))
+                                 : 0.5;
+        base *= 0.80 + 0.28 * g1 + 0.16 * g2 * gGrain;
         // creosote soaked darker in the first metre off the ground
         base *= mix(0.70, 1.0, smoothstep(0.0, 1.20, P.y));
         rough = 0.95;
@@ -243,11 +283,12 @@ void main() {
         float agg = vnoise(vec2(P.x * 41.0, P.z * 9.0));
         float cement = vnoise(vec2(P.x * 3.1, P.z * 0.85));
         base *= 0.80 + 0.30 * cement;
-        if (near > 0.02) {
-            // aggregate only resolves up close; fading it out is also what
-            // stops it from aliasing into a shimmering band at 60 m
+        float gKerb = octaveRes(foot, 41.0);
+        if (gKerb > 0.02) {
+            // aggregate resolves while a pixel can still see a stone, and
+            // dies exactly one octave before it would shimmer at distance
             float stones = smoothstep(0.62, 0.86, agg);
-            base = mix(base, base * 1.85 + vec3(0.020), stones * near * 0.75);
+            base = mix(base, base * 1.85 + vec3(0.020), stones * gKerb * 0.75);
         }
         // dirt in the gutter and splashed up the vertical face
         float gz = 1.0 - clamp(P.y / 0.16, 0.0, 1.0);
@@ -278,9 +319,15 @@ void main() {
         // of the base plate. One of the three noise taps is gated by `near`, so
         // the far corridor — which is most of the frame — pays for two.
         float streak = vnoise(vec2((P.x + P.z * 0.35) * 1.60, P.y * 0.22));
-        float spangle = near > 0.02 ? vnoise(vec2((P.x + P.z) * 26.0, P.y * 3.0))
-                                   : 0.5;
-        base *= 0.80 + 0.30 * streak + 0.20 * spangle * near;
+        // BUILD-P15: zinc spangle is a 3-6 cm feature, so gating it on DISTANCE
+        // meant every shaft past 64 m had no surface at all and read as a bare
+        // tube. Gating it on RESOLUTION keeps the spangle on a pole at 40 m
+        // and still lets it die cleanly one octave before it would alias.
+        float gSpangle = octaveRes(foot, 26.0);
+        float spangle = gSpangle > 0.02
+                            ? vnoise(vec2((P.x + P.z) * 26.0, P.y * 3.0))
+                            : 0.5;
+        base *= 0.80 + 0.30 * streak + 0.20 * spangle * gSpangle;
         base = mix(base, base * 1.24 + vec3(0.028, 0.029, 0.029),
                    smoothstep(0.55, 1.0, streak) * 0.55);
         float rustN = vnoise(vec2((P.x + P.z) * 2.60, P.y * 0.90));
@@ -303,11 +350,12 @@ void main() {
         float board = abs(fract(P.y * 1.62) - 0.5) * 2.0;
         base *= mix(0.94, 1.05, smoothstep(0.04, 0.26, board));
         // spalling — chipped patches revealing the darker coarse aggregate,
-        // near field only or it aliases at distance
-        if (near > 0.02) {
+        // kept while a pixel can resolve a 13 cm spall patch
+        float gSpall = octaveRes(foot, 7.5);
+        if (gSpall > 0.02) {
             float spall = smoothstep(0.70, 0.93,
                                      vnoise(vec2((P.x + P.z) * 7.5, P.y * 1.7)));
-            base = mix(base, vec3(0.180, 0.172, 0.162), spall * 0.55 * near);
+            base = mix(base, vec3(0.180, 0.172, 0.162), spall * 0.55 * gSpall);
         }
         // grime washed up the foot, and rain streaks strongest just under the
         // hardware where the water always runs off
@@ -450,8 +498,12 @@ void main() {
               smoothstep(0.52, 1.00, lum) * 0.45);          // warm highlights
     col = clamp(mix(vec3(lum), col, 1.12), 0.0, 1.0);
     // tiny dither: the haze gradient is a wide smooth ramp and 8-bit output
-    // bands visibly on the corridor floor
-    col += (hash21(gl_FragCoord.xy + fract(uTime) * 13.0) - 0.5) * (1.2 / 255.0);
+    // bands visibly on the corridor floor. BUILD-P15: 1.2 -> 3.0 levels. A
+    // 3-level triangular dither is below the visible banding threshold on a
+    // smooth ramp but is enough to break the 8-bit contour lines that made
+    // the sky and the haze read as "pixellated" rather than as film grain.
+    col += (hash21(gl_FragCoord.xy + fract(uTime) * 13.0)
+            + hash21(gl_FragCoord.xy * 1.7 + 41.0) - 1.0) * (1.5 / 255.0);
     col = pow(max(col, vec3(0.0)), vec3(1.0 / 2.2));
     fragColor = vec4(col, 1.0);
 }

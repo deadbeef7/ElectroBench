@@ -66,13 +66,30 @@ void main() {
     float ang = aAngleH.x * 6.2831853;
     float hp = aAngleH.y; // 0 base .. 1 rim
 
+    // BUILD-P15: THE CROWN IS A TRUMPET BEFORE IT IS A STAR.
+    //
+    // The rim of a Worthington crown is a smooth, near-circular collar of
+    // water thrown clear of the impact. The tearing into fingers happens
+    // AFTER, when the cavity beneath it pinches off and the sheet loses its
+    // support — it does not spring into existence spikes-first.
+    //
+    // So the tearing amplitude is now weighted by height on the sheet, not
+    // applied uniformly: the base of the collar (hp -> 0) is the last solid
+    // part of the sheet and stays smooth, while the free lip (hp -> 1) tears
+    // first and hardest. Multiplied by uSpike, which the CPU now ramps 0 ->
+    // peak over the 210 ms after the rim rallies, the crown therefore reads
+    // as a clean cylinder of water first and a crown of fingers second,
+    // which is the order a real splash happens in.
+    float tear = smoothstep(0.10, 0.92, hp);
+    tear = tear * tear;                       // the base is emphatically smooth
+
     // spikes grow toward the rim; the ring wobbles as it expands. The last
     // term adds HIGH-frequency tearing that grows with the spike amplitude:
     // the sheet disintegrates into fingers rather than wobbling smoothly.
     float spikes = spikeField(aAngleH.x, uTime + uPhase);
     spikes += uSpike * 0.35 * sin(aAngleH.x * 6.2831853 * 26.0 +
                                   uTime * 2.3 + uPhase * 1.3);
-    float hMul = 1.0 + uSpike * spikes * hp;
+    float hMul = 1.0 + uSpike * spikes * hp * tear;
     // radius wobble is part of the ring shape now (not just spike height):
     // the crown bulges asymmetrically as it tears, like real high-speed
     // footage — this is the "not CGI" geometry cue.
@@ -80,7 +97,8 @@ void main() {
     // mid-sheet (the cavity drags the film inward) and then the LIP FLARES
     // outward as it unfurls — a trumpet, not a cone. (1 - 0.30hp + 0.38hp²)
     // necks to ~0.94 at hp=0.4 and flares to ~1.08 at the rim.
-    float rMul = (1.0 + uSpike * 0.30 * spikes * hp)
+    float rMul = (1.0 + uSpike * 0.30 * spikes * hp * tear)
+               * (1.0 - uSpike * 0.18 * hp)
                * radiusWobble(aAngleH.x, uTime + uPhase, uPhase)
                * (1.0 - 0.30 * hp + 0.38 * hp * hp);   // necked sheet, flared lip
 
@@ -95,7 +113,7 @@ void main() {
     float s1 = spikeField(aAngleH.x - e, uTime + uPhase);
     float s2 = spikeField(aAngleH.x + e, uTime + uPhase);
     float grad = (s2 - s1) / (2.0 * e * 6.2831853);
-    vec3 tang = normalize(vec3(-sin(ang), grad * uSpike * hp, cos(ang)));
+    vec3 tang = normalize(vec3(-sin(ang), grad * uSpike * hp * tear, cos(ang)));
     vec3 n = normalize(cross(radial, tang));
 
     vWorld = pos;

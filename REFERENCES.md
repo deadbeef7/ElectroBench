@@ -179,6 +179,152 @@ Realism takeaways applied:
   glazing bars over them. Emissive geometry is only believable if the frame behind it still exists —
   the bars and the sill are what stop a lit pane reading as a sticker.
 
+## BUILD-P15: three complaints, one pass
+
+### "There are still some cylinders in the air"
+
+- **When three consecutive passes fix the same complaint without changing
+  the read, the SHAPE is wrong, not its gauge.** P13 thickened the slack
+  coil. P14 thickened the cell mast's legs, diagonals and belts and added
+  panel antennas. Both were correct about the geometry. Neither changed what
+  the eye could assemble, and that is the signal to stop adjusting and
+  change the object.
+- **P14's own fix created the artifact it was fixing.** The panel antennas it
+  added were 0.42 m wide and TEN METRES tall, hung 0.46 m off a truss whose
+  0.11 m stand-offs are sub-pixel at the 120-160 m these masts actually sit
+  at. A debug render (flat sky + magenta radomes) put four pale 1-2 px bars
+  per mast on screen with visible sky between them and the structure holding
+  them. That IS "cylinders in the air", verbatim — P14 shipped it.
+- **Placement has to be tuned to the shot window, not the whole loop.** The
+  dolly runs z = 4..165 m, but the still and the loop are shot at t = 2..17
+  s, i.e. z = 9..48 m. The pylons were originally placed for the loop's
+  worst case and consequently sat 190-230 m away through the entire shot
+  window, where a 44 px crossarm is washed almost into the haze. Re-placed
+  against the shot window, the same objects are 103-173 m out: 46-62 px
+  crossarms, 100-133 px towers.
+- **Silhouette class beats member thickness.** The replacement is a lattice
+  TRANSMISSION PYLON, not a re-gauged cell mast, and the reason is entirely
+  about what the shape is made of:
+  - a SPLAYED A-FRAME base (9 m of feet on a 26 m tower) tapers to 6 px at
+    the shoulder — an unmistakable triangle;
+  - TWO LONG HORIZONTAL CROSSARMS. 18 m of horizontal at 100 m is ~60 px
+    across the frame. A horizontal bar is the one shape a vertical tube can
+    never be confused with;
+  - insulator strings on visible yokes at the boom tips;
+  - the pale radomes and the whip cluster are simply gone.
+  Measured on the new render, each crossarm darkens the sky by 55-87 luma
+  levels along its whole length (it was ~30 before, i.e. a smudge).
+- **Lattice steelwork at dusk is DARK.** The first pass used the same 0.30
+  albedo as the poles; behind the aerial-perspective ramp that arrives at the
+  eye only a few levels below the sky, and the whole tower read as a faint
+  smudge. Dropped to 0.17, the crossarm is an actual bar.
+- It is also the more truthful object: a lattice transmission pylon behind a
+  Japanese distribution line is a far more characteristic sight than a cell
+  mast, and it carries the scale P12 wanted without needing to be legible
+  member by member.
+
+### "Make the sky orange"
+
+- **The frame was at hue 49.9 deg — yellow-amber, not orange.** Orange lives
+  near 30 deg, and the gap is almost entirely the GREEN channel: the airlight
+  band was (0.40, 0.14, 0.036), whose green is 35% of its red, and green that
+  strong is exactly what the eye reads as "yellow". Measured on the shot
+  window after the change: **hue 49.9 -> 41.6 deg, saturation 0.749 -> 0.768,
+  mean green channel 203.8 -> 176.0.**
+- **Mie is the only grey in the model, so it is the cheapest saturation
+  lever.** Cutting kBetaM 0.0125 -> 0.0092 (26%) moves the frame's saturation
+  without touching its brightness — the one change that cannot wash the sky
+  out, which is the failure mode of every other "make it hotter" attempt.
+- **The sun-path optical depth is the reddest knob.** kSunPath 8.0 -> 9.8
+  decides how much blue is gone by the time the light reaches the scene, and
+  deepening it keeps the red while burning the blue: orange, not yellow.
+- **Multiple-scattering blue was creeping into the visible band.** Its ramp
+  now starts at 0.78 (48 deg) instead of 0.55, so the frame the camera
+  actually sees carries none of the blue floor while the zenith still goes
+  blue if the user ever looks straight up.
+- Clouds were the largest non-sky area in a dusk frame, so their colour sets
+  the frame's white balance as surely as the dome does: crown
+  (1.30, 0.96, 0.62) -> (1.36, 0.845, 0.475), belly pulled to a red-shifted
+  shadow, and the sun disc itself made orange so the brightest point in the
+  frame agrees with the band behind it.
+
+### "The scene looks pixellated without detail"
+
+- **The detail was not missing — it was being switched off.** Every fine
+  octave in the object shader was gated on `near = 1 - smoothstep(16, 64,
+  dist)`, pure DISTANCE, so the entire far half of the corridor — road,
+  verges, house walls, the next pole down — rendered as a flat wash of
+  unmodulated albedo. That is a gate, not a shortage of detail.
+- **Distance is the wrong test.** Whether an octave is usable depends on
+  whether ONE PIXEL can resolve it, and the driver already knows that
+  exactly: `fwidth()` gives the fragment's world-space footprint. A 20 m
+  ground feature is still resolvable at 250 m; a 2 cm aggregate speckle is not
+  resolvable at 8 m. So each octave is now gated by
+  `octaveRes(foot, freq) = 1 - smoothstep(0.35, 1.10, footprint * freq)`,
+  which keeps it alive exactly as long as the pixel it lands in can resolve
+  it and kills it one octave before it would alias into shimmer. One
+  footprint serves every octave in the shader, so it is also cheaper.
+- **A surface with no feature size has no scale.** A new 7 m ground mottling
+  octave sits UNDER the grit: the verges are the largest flat area in the
+  frame and were reading as paper, and a feature that survives from the camera
+  to the horizon is what gives the plane a size.
+- Zinc spangle, concrete spalling and timber grain are 3-20 cm features that
+  the old distance gate switched off at 64 m, which is why every shaft past
+  the second pole read as a bare tube. All three now run on resolution.
+- 8-bit banding on the wide, smooth haze ramp was the other half of
+  "pixellated": a two-tap triangular dither at 3 levels instead of a single
+  1.2-level one.
+
+### Scene 3 splashes: the timeline, not the shape
+
+The splash shaders were already physically careful — GGX glints, Fresnel
+film, Beer-Lambert thickness, crawling tear fields. What was wrong was
+**when** things happened, and it is the same class of error as a crown drawn
+pre-formed:
+
+- **The crown was already finished at t = 0.** `height` and `spike` were both
+  written once at spawn, so the first frame a splash existed it was a
+  fully-formed, fully-torn star at full height. High-speed footage of a real
+  Worthington crown says otherwise: the rim at t=0 is a SMOOTH, almost
+  circular collar thrown clear of the displaced volume; it rises as a clean
+  cylinder for 60-100 ms; the fingers only appear when the cavity underneath
+  pinches off and the sheet loses its support, 150-250 ms in. The crown now
+  runs that four-stage timeline, and the tearing amplitude is weighted by
+  HEIGHT ON THE SHEET so the base stays a solid collar while the free lip
+  tears first.
+- **Traced and confirmed** (pot 5, instrumented run):
+  `t=0.008 h=0.09 spike=0.00 droplets live 0 / staged 159` ->
+  `t=0.10 h=3.60 spike=0.26 live 0` -> `t=0.30 h=3.60 spike=1.00 live 74 /
+  staged 85` -> `t=0.51 h=3.19 live 159 / staged 0` -> `t=1.11 h=2.00`.
+  The live droplet count climbing 0 -> 10 -> 74 -> 148 -> 159 is the staged
+  release working.
+- **The droplets were 7-16 cm ACROSS.** Radii of 36-80 mm are not spray, they
+  are hailstones: a 16 cm ball of water hanging over a 1 m crown reads as a
+  balloon, and there were only 46-66 of them, so the eye counted every one.
+  Real Worthington ejecta is 4-25 mm and there are hundreds of it, distributed
+  as a power law rather than uniformly. Now 5-26 mm on a `u^3` draw (a haze
+  of fine mist plus a few fat beads near the axis), roughly twice the count,
+  with size correlated with launch height so the corona is graded rather than
+  uniform.
+- **A gate inherited from the old sizes would have silently switched off two
+  whole effects.** The landing code gated its micro-ring AND its secondary
+  ejecta on `radius > 0.03f` — a threshold sized for the old 36 mm drops.
+  With 5-26 mm ejecta that test can never pass, so every splash-back droplet
+  the scene is known for would have vanished with no error anywhere. The
+  threshold is now stated against the new distribution (0.009 m) rather than
+  inherited from the old one.
+- **Ejection is staggered, and a staged strand is not drawn.** The lip thins
+  and pinches first, so the highest strands leave first and the base tears
+  last; release time tracks height on the sheet over ~0.3 s. Submitting a
+  strand still inside its staging delay would stamp a frozen blob at the
+  release point — the same "object hanging in the air" class of bug, in a
+  different uniform.
+- **A water drop is a lens, not a cotton ball.** The droplet fragment was one
+  soft gaussian, so every strand read as the same fuzzy smudge at every size.
+  It now has a dark limb where the surface curves away and total internal
+  reflection sends the ray back down, plus an off-centre caustic hotspot —
+  the two features that make a few hundred small sprites read as water.
+
 ## BUILD-P14: the hanging cylinders were a lattice mast, drawn too thin
 
 - **"Cylinders in the sky" did not mean a floating object — it meant a real
