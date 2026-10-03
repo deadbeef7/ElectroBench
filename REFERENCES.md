@@ -283,11 +283,21 @@ Realism takeaways applied:
   strands — the 11x19 px blob at (566, 48) is ~60% filled. That is the
   "flying cylinders". P12 added the density on purpose, to make the street read
   as a Japanese pole street, and it is the density that has to give.
-- **The next change is to the web, not the slack features**, and it should be
-  gated on the same measurement: thin the near-field drops (fewer per bundle,
-  or skip bundles whose bay is within ~25 m of the dolly path, where a span
-  subtends a large screen angle and the strands stop reading as wires).
-  `scripts/cablebars.py` is the check.
+- **The blob COUNT is the wrong acceptance test, and the next attempt must not
+  use it.** Halving the telecom drops per bundle (`4 + seed%3` -> `2 + seed%2`,
+  a 13% cut in `kMatCable` sky pixels at t = 17) made the blob count go **UP,
+  20 -> 23**, not down, while leaving t = 7 unchanged at 27. The reason is
+  structural: the metric counts CONNECTED COMPONENTS, so thinning a dense
+  connected mass fragments it into more, smaller pieces. A count that rises
+  when the thing you are trying to remove gets smaller is not measuring the
+  thing. `scripts/cablebars.py` still reports total `kMatCable` sky pixels and
+  the largest blob's size — both of which move the right way — but the blob
+  count should not be the gate.
+- **What the gate should be.** Density, not component count: `kMatCable` sky
+  pixels above the horizon, and the area of the largest single blob. On the
+  measured frames the 11x19 px blob at (566, 48) is the artifact to kill; a
+  fix is only real if that blob's area falls while the total wire count stays
+  plausible for a street.
 
 ## BUILD-P15: three complaints, one pass
 
