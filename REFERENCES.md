@@ -231,11 +231,41 @@ Realism takeaways applied:
   cylinder-shaped. Every unanchored component in every frame is a HUD glyph or
   a conductor leaving frame.
 - **So this one is NOT closed.** The fix is real and an improvement, but the
-  remaining "flying cylinders" are something this pass has not identified. The
-  next step is not another threshold sweep — that method has now been shown to
-  be blind to the artifact twice — but a magenta-tag render of the remaining
-  pylon members and pole-top hardware, one object at a time, to find which
-  object owns the pixels the eye is actually catching.
+  remaining "flying cylinders" are something this pass has not identified.
+
+### Locating them: a material-tag pass, which needs no rebuild
+
+- **`vMat` is a `flat` varying, and shaders are loaded at runtime, so tagging
+  the object shader by material id gives a pixel-exact mask per object class
+  with no C++ recompile.** Temporarily emitting one saturated colour per
+  material and rendering t = 7 and t = 17 says exactly which class owns the
+  pixels:
+  - `kMatCable` (5): **20-27 compact vertical blobs per frame** — more than any
+    other class. The worst is 11x19 px sitting **171 px above the horizon**.
+  - `kMatCeramic` (6): 168-301 sky pixels and **zero** cylinder-shaped blobs,
+    which independently confirms the insulator projection maths above.
+  - `kMatSteel`, `kMatConcrete`, `kMatMetal`, walls: every tall blob is within
+    1-5 px of the horizon, i.e. the pole lines themselves.
+  So the cylinders are **cable**, and printing the magenta mask shows why: they
+  are not isolated objects but a dense WEAVE — an 11x19 px block that is ~60%
+  filled with crossing 1-2 px strands. Sixteen telecom drops per bay (P12)
+  plus 4-6 drop wires per span plus the slack features all cross open sky
+  together.
+- **The likely root cause is that the slack features are drawn in the wrong
+  plane.** `AddSlackCoil` and `AddSlackLoop` both sweep in the **z/y plane**
+  (`a.z + radius * sin(ang)`), and the corridor camera looks *down* z. A circle
+  in the z/y plane viewed along z projects to its narrow axis — so a loop
+  built to read as a loop degenerates into a **vertical bar**. Rotating them
+  into the x/y plane would present the loop face to the camera and turn the
+  same pixels from an ambiguous tube into an unambiguous ring. This is the
+  same shape-versus-gauge lesson as P13 and P14, one plane deeper.
+- **NOT YET APPLIED.** This pass did not have the render budget left to change
+  the geometry and regenerate the still and the loop, and shipping an
+  unverified shape change with stale screenshots is how P14 shipped the bug in
+  the first place. The measurement above is reproducible (tag the shader by
+  `vMat`, render, count tall blobs per colour), so the next step is a bounded
+  experiment: rotate the two slack features into x/y, re-run this same tag
+  pass, and accept the change only if the `kMatCable` blob count falls.
 
 ## BUILD-P15: three complaints, one pass
 
