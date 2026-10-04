@@ -254,6 +254,30 @@ refresh — it is the one committed asset that never matched its own caption.
 No frame-rate claim is made: these are local llvmpipe software-rasteriser
 renders and llvmpipe is not the user's driver.
 
+### The flag documentation was wrong in the same place
+
+Checking the README against the source while verifying this found three false
+claims in the headless-flags block, all of them consequences of the same
+gap:
+
+- **"`--shot-times A,B,C` takes a burst on any of them"** — it does not. It is
+  parsed in `src/scene2.cxx`, `src/scene3.cxx` and `src/scene4.cxx` only.
+  `main.cxx` has no `--shot-times` case at all; the only mention is a comment
+  describing `--shot-time` as "the one-element form". Scene 1 has no burst
+  form, which is exactly why the flyover loop is ten processes.
+- **"Every `--screenshot` path containing `%d` becomes a frame sequence"** —
+  true of scenes 2-4, where `WriteScreenshotPPM` advances the path via
+  `gNextShot++`. `main.cxx` writes `gShotPath` verbatim with no substitution.
+- **"that is exactly how the GIF above was made (16 shots, 0.5 s apart,
+  stitched with ImageMagick)"** — it was never 16 shots or half a second apart.
+  The flyover GIF is ten frames spanning t = 2 to 45 s across all three acts,
+  encoded with Pillow, and the pool and power-line loops were one process per
+  frame too (a single-element `--shot-times T` each), not single bursts.
+
+The `16 shots` figure also contradicted the caption eight hundred lines
+earlier, which has always said "ten frames". Rewritten to state what each scene
+actually accepts and how the three loops were captured.
+
 ## BUILD-P21: the scene files are scene files, and scenes 2, 3 and 4 get measured
 
 ### The rename, and why the names were wrong

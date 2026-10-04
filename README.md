@@ -202,12 +202,24 @@ Headless visual-test flags (used to verify the render output in CI-like environm
 ./build/ElectroBench --pole-only  --width 960 --screenshot /tmp/shot.ppm --shot-times 2,9
 ```
 
-`--shot-time S` takes ONE frame at second S and works on all four scenes;
-`--shot-times A,B,C` takes a burst on any of them. Every `--screenshot` path
-containing `%d` becomes a **frame sequence**: each time entry writes the next
-numbered frame (`frames/f-%03d.ppm` → `f-000.ppm`, `f-001.ppm`, …), so a timed
-burst assembles straight into an animation — that is exactly how the GIF above
-was made (16 shots, 0.5 s apart, stitched with ImageMagick).
+`--shot-time S` takes ONE frame at second S and works on all four scenes.
+`--shot-times A,B,C` takes a burst, and is **scenes 2-4 only** — scene 1 has no
+burst form, so a multi-frame scene 1 sequence is one process per shot with
+different `--shot-time` values. On scenes 2-4 a `--screenshot` path containing
+`%d` becomes a **frame sequence**: each time entry writes the next numbered
+frame (`frames/f-%03d.ppm` → `f-000.ppm`, `f-001.ppm`, …), so a timed burst
+assembles straight into an animation.
+
+All three loops in this README were captured one process per frame rather than
+as a single multi-shot burst, so each frame could be checked for a clean render
+log before it was encoded. The scene 3 and scene 4 loops pass a single-element
+`--shot-times T`, and the flyover loop is **ten scene 1 runs** at
+t = 2, 5, 7.5, 12, 17, 22, 27, 34.5, 40 and 45 s — spread across all three acts
+of the camera move, not half a second apart — encoded into
+`docs/screenshots/uzi_flyover.gif` at 760x428, 1200 ms a frame. `--width` and
+`--height` are independent on scene 1, so both are passed to pin the
+framebuffer; scenes 2-4 derive their height from the width instead, which is why
+`--width 760` yields 428 rows on scene 4 and 427 on scene 3.
 
 
 # Scene 4 — Power lines
