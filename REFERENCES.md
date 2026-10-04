@@ -382,15 +382,40 @@ gradient this pass just removed. 0.382 is still well inside the range P13
 established as "decisively amber" (that build went 0.367 -> 0.439), and the
 texture gain is 3x to 11x per band against it.
 
-### Not re-rendered here
+### The two loops were refreshed too
 
-`docs/screenshots/lain_lines.gif` and `pool_splash.gif` are 760-wide loops of
-four frames each. They predate this pass and were left alone rather than
-half-refreshed; the stills (`lain_lines.png`, `pool_teapot.png`,
-`ps14_dusk_t36.png`) were re-rendered at 720p from the new shaders and do match.
-Every number above is from a local llvmpipe software rasteriser at 760 px wide.
-llvmpipe is not the user's driver and no frame-rate claim is made anywhere in
-this section.
+`lain_lines.gif` and `pool_splash.gif` are 760-wide loops of four frames each,
+and both predate this pass, so leaving them stale would have meant the README
+showed the cloudless sky this section set out to fix. Both were re-rendered
+from the new shaders — scene 4 at t = 2/7/12/17 s, scene 3 at t = 2/6/11/15 s,
+760 px wide, one scene per invocation — and rebuilt at the parameters the files
+already carried: 256-colour adaptive palette, Floyd-Steinberg dither on frames
+2-4, 900 ms a frame, `loop=0`. `lain_lines.gif` is 760x428 and `pool_splash.gif`
+is 760x427; the one-row difference is not a mistake, the two scenes derive
+their framebuffer height from different formulas and it was not worth forcing
+one of them to lie.
+
+All eight renders were checked for `failed:` / `error:` / `GL_INVALID` in the
+render log before encoding: clean, 8 of 8 frames written. The loops do not
+merely re-run the old pixels — measured on the scene 4 render at 760 px and
+t = 12 s, which is the same frame, the same width and the same clock as the
+"before" column above, the upper sky bands moved from
+
+| band | before | after |
+| --- | --- | --- |
+| y40-80 median local SD | 0.0029 (66.9% flat) | 0.0080 (45.5% flat) |
+| y80-120 | 0.0029 (59.7% flat) | 0.0205 (26.5% flat) |
+| y120-160 | 0.0032 (55.4% flat) | 0.0360 (10.5% flat) |
+
+while every band below the horizon line is bit-identical (y240-280 0.0633,
+y280-320 0.0336, y320-360 0.0117 before and after), which is the check that
+confirms only `sky_frag.glsl` moved and the geometry did not.
+
+`docs/screenshots/lain_lines.png`, `pool_teapot.png`, `ps14_dusk_t36.png`,
+`uzi_wide.png` and `uzi_close.png` were re-rendered at 720p from the new
+shaders and do match. Every number above is from a local llvmpipe software
+rasteriser at 760 px wide. llvmpipe is not the user's driver and no frame-rate
+claim is made anywhere in this section.
 
 ## BUILD-P20: scenes are numbered 1-4, the bench presents at 720p fullscreen, and scene 3 can finally be A/B'd
 
