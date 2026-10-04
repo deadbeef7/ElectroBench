@@ -477,6 +477,14 @@ static int gXOld = 0, gYOld = 0;
 static int gCurrentScroll = 10;
 
 static double gStartTime = 0.0;
+// BUILD-P23: the SCENE clock, in seconds since the scene started. The camera
+// has always used (now - gStartTime), but the sea and sky shaders were handed
+// raw NowSeconds() — the performance counter since boot. So water and clouds
+// animated against wall-clock while the camera animated against scene time,
+// and two identical runs at the same --shot-time produced DIFFERENT frames
+// (0.63 max per-pixel difference in the sky). Scenes 1, 3 and 4 were already
+// scene-relative; this puts scene 2 in step.
+static double gSceneTime = 0.0;
 
 // Results screen: when the run ends the scene is cleared and the final score
 // is drawn on the window for a few seconds (ESC skips the wait).
@@ -587,7 +595,7 @@ static void BindSkyUniforms(const Mat4 &vp) {
   glUseProgram(gSkyProg.handle);
   glUniformMatrix4fv(gSkyProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
   glUniform3f(gSkyProg.loc("uSunDir"), gSunDir.x, gSunDir.y, gSunDir.z);
-  glUniform1f(gSkyProg.loc("uTime"), (float)NowSeconds());
+  glUniform1f(gSkyProg.loc("uTime"), (float)gSceneTime);
   // Dusk palette (HDR, linear): deep blue-black zenith shading into a warm
   // horizon band around the setting sun (3DMark Nature look).
   glUniform3f(gSkyProg.loc("uZenithColor"), 0.012f, 0.016f, 0.048f);  // deep blue-black overhead
@@ -885,6 +893,7 @@ static void RenderScene() {
   }
 
   float t = (float)(now - gStartTime); // camera time is benchmark-relative so --shot-times are deterministic
+  gSceneTime = (double)t;                // BUILD-P23: shaders get the SAME clock as the camera
   UpdateCloudAzim(t);
 
   // ---- camera ----
@@ -918,7 +927,7 @@ static void RenderScene() {
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
   DrawSkyScreen(view, eye);
-  DrawSea(view, now, eye);
+  DrawSea(view, gSceneTime, eye);
   RenderHUD();
 
     // Visual-test captures: read the framebuffer back before the swap so the

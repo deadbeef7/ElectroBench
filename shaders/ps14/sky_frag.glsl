@@ -42,28 +42,19 @@ out vec4 fragColor;
 const float PI = 3.14159265359;
 
 // BUILD-P21: ONE DISPLAY TRANSFORM, SHARED WITH THE SEA.
-// Kept byte-identical in shaders/ps14/sea_frag.glsl, for the same reason the
-// pool and pole scenes keep byte-identical copies: the sea reflects this dome
-// out of the HDR cubemap and then runs the result through the same function
-// ITSELF, so any difference between the two curves shows up immediately as a
-// reflection that does not match the thing it is reflecting.
-//
-// Before this pass the dome tone mapped with per-channel Reinhard PLUS a warm
-// highlight roll-off and the sea tone mapped with per-channel Reinhard and NO
-// roll-off, so the horizon band and the sun path came back out of the water
-// visibly different from the sky directly above them - which is the one thing
-// a mirror cannot get wrong and still look like a mirror.
+// MUST stay byte-identical in shaders/ps14/sea_frag.glsl: the sea reflects this
+// dome out of the HDR cubemap and runs the result through this function ITSELF,
+// so any difference between the two curves shows up as a reflection that does
+// not match the thing it reflects. Before P21 the dome used Reinhard plus a
+// warm roll-off and the sea Reinhard without one, so the sun path came back
+// visibly different from the sky above it.
 vec3 encodeScene(vec3 hdr, float dith) {
-    // ACES (Narkowicz) shoulder: rolls the sun disc and the glitter path off
+    // ACES (Narkowicz) shoulder: rolls the sun disc and glitter path off
     // instead of letting them clip into flat paper.
     const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
-    // EXPOSURE. ACES is not a like-for-like replacement for Reinhard: at a
-    // scene value of 0.2 it returns 0.30 where Reinhard returned 0.17, so
-    // swapping the curve in with no compensating stop lifted this frame's
-    // mean luma from 0.299 to 0.375 and pushed p95 from 0.653 to 0.833. The
-    // dusk sea is the DARKEST thing in a dusk frame and has to stay that way,
-    // so the curve change is paid for here, once, in one place both passes
-    // share, rather than by walking every radiance in the scene.
+    // Exposure. ACES is not a like-for-like swap for Reinhard (at 0.2 it
+    // returns 0.30 vs Reinhard's 0.17), so the curve change is paid for here,
+    // once, rather than by walking every radiance in the scene.
     hdr *= 0.70;
     vec3 x = clamp(max(hdr, vec3(0.0)), 0.0, 8.0);
     x = clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
@@ -83,14 +74,11 @@ vec3 encodeScene(vec3 hdr, float dith) {
 
     vec3 g = pow(max(x, vec3(0.0)), vec3(1.0 / 2.2));
 
-    // ---- THE GRADE, and it is applied in DISPLAY space on purpose. Gamma
-    // encoding roughly HALVES apparent saturation: a 0.52 channel ratio in
-    // linear arrives near 0.28 on screen. A lift applied BEFORE the gamma is
-    // therefore mostly cancelled by it, which is why the whole dusk-ocean
-    // frame measured a mean saturation of 0.130 - a brown-grey mush rather
-    // than a sunset - while the same lift applied post-gamma is worth roughly
-    // twice as much. (The pole scene grades pre-gamma against a much hotter
-    // palette and gets away with it; this palette cannot.)
+    // ---- THE GRADE, applied in DISPLAY space on purpose. Gamma encoding
+    // roughly HALVES apparent saturation (a 0.52 linear channel ratio arrives
+    // near 0.28 on screen), so a lift applied before the gamma is mostly
+    // cancelled by it. Pre-gamma, this frame measured a mean saturation of
+    // 0.130 — a brown-grey mush rather than a sunset.
     float lum = dot(g, vec3(0.2126, 0.7152, 0.0722));
     g = mix(g, g * vec3(0.93, 0.98, 1.13),
             (1.0 - smoothstep(0.02, 0.34, lum)) * 0.50);   // cool shadows

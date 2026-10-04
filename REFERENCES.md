@@ -179,6 +179,124 @@ Realism takeaways applied:
   glazing bars over them. Emissive geometry is only believable if the frame behind it still exists —
   the bars and the sill are what stop a lit pane reading as a sticker.
 
+## BUILD-P23: the glitter path was a razor lobe on aliased noise, and the scene clock was wall-clock
+
+Three things the user saw in scene 2 — the sun path in the sea was pixellated
+rather than smooth, it was too bright, and there were light blue spots in the
+water — plus a reproducibility bug found while trying to A/B the fix.
+
+### Measured first, and the measurement contradicted the obvious guess
+
+The first useful number was not in the sun path at all. Taking the committed
+still and asking which water pixels are **isolated bright points** — brighter
+than their own 15x15 background by more than 0.06 — gave **24.97% of the
+water**. One pixel in four was a dot with no neighbours. That is the
+pixellation, and it is a property of the whole surface, not of the highlight.
+
+| region | isolated bright px, % of water |
+| --- | --- |
+| sun column (brightest 10% of columns) | block-to-block luma step mean **0.084**, p99 **0.411**, 53% of adjacent 4x4 block pairs differing by >0.06 |
+| whole water | **24.97%** isolated bright pixels |
+| blue-leading isolated pixels, 3 frames | **45** |
+
+The obvious suspect was the GGX roughness, and it was partly right, but the
+bigger cause was two lines away from it:
+
+- **The sparkle multiplier was an aliased texture fetch.** `chaos` samples a
+  **190x** tile and drove `sparkleGate = 0.55 + 0.90 * chaos` — a 2.6x swing —
+  on top of a lobe whose roughness was `0.085 + foot * 0.016`, i.e. barely off
+  mirror at any distance. Past the near field one pixel covers more than one
+  texel of that tile, so the fetch minified into noise, and aliased noise
+  multiplied into a razor lobe is precisely a pixellated highlight. The tile is
+  now faded on its own footprint, in texture units, exactly like every other
+  octave, and the gate narrowed to `0.70 + 0.55 * chaos`.
+
+- **The lobe never learned how rough the pixel actually was.** `foot * 0.016`
+  widens roughness with DISTANCE, which says nothing about the slope spread
+  inside one pixel. The same three finite-difference taps that build the normal
+  also give `|laplacian(h)|` for free; times the footprint that is the slope
+  range the pixel covers, and it now goes straight into alpha as
+  normal-variance (Toksvig/LEAN) roughening. Many facets inside one pixel then
+  average into a smooth glare, which is what real water does.
+
+### Too bright, and the fix that first made it worse
+
+The roll-off ceiling was `1/0.235 = 4.26`, which drove the whole column onto a
+plateau — **10.14% of the sun column sat above 0.80 luma** and the peak was
+0.84. Bright but flat. Lowering the ceiling to `1/0.46 = 2.17` fixed that, but
+widening the lobe spreads the sun's energy over more water, and `pathGate` had
+a **0.04 floor** that put 4% of it everywhere: measured as a **16% lift in mean
+water luma**, i.e. the dusk sea going pale, which is its own kind of wrong.
+Glitter is the sun's own specular reflection and belongs in the path, so the
+floor is now 0.015 and the gain came down from 0.42 to 0.36.
+
+### The light blue spots were three separate leaks
+
+- The **subsurface crest term** gated on `smoothstep(0.55, 1.25, hC)` — a
+  narrow band with hard shoulders — so it landed as small hard-edged patches,
+  not a broad translucent lift, and on water that is already blue-purple those
+  patches tipped blue. Widened to `(0.35, 1.45)`, halved, shifted off cyan.
+- The **fresnel lift** `fresnel * 1.25 + 0.045` overrides the physical 2%
+  *everywhere*, including for near-flat facets aimed at the blue upper sky. On a
+  faceted surface that paints a bright blue dot wherever one facet happens to
+  sit flat. It now fades out off-path.
+- The **teal subsurface colour** `(0.05, 0.18, 0.14)` is green-dominant, so it
+  was never itself the blue — it was the sum with an already blue body.
+
+Isolated blue-leading points across three frames: **45 -> 0**.
+
+### Result, measured over three animation phases per variant
+
+Scene 2 cannot be compared pixel-for-pixel here — `--shot-time` captures the
+first frame whose clock crosses the requested second, and on a software
+rasteriser frames take ~2 s, so each run lands on a slightly different phase
+(~16 ms on a real GPU). These are therefore summary statistics over t = 32, 36
+and 40 s, which are phase-insensitive.
+
+| metric | before | after |
+| --- | --- | --- |
+| sun column % above 0.80 luma | 10.14% | **0.00%** |
+| sun column p99 luma | 0.8233 | **0.7095** |
+| sun column max luma | 0.8403 | **0.7721** |
+| block-to-block luma step, mean | 0.0836 | **0.0598** (-28%) |
+| block-to-block luma step, p99 | 0.4112 | **0.2846** (-31%) |
+| isolated bright px, % of water | 18.22% | **17.44%** |
+| isolated blue spots (3 frames) | 45 | **0** |
+| water mean luma | 0.2495 | 0.2730 (+9.4%) |
+| water mean saturation | 0.4733 | 0.4827 |
+
+The water is 9.4% brighter, which is the honest cost of spreading a blown
+highlight over more surface instead of clipping it: the glitter path lost 14%
+of its p99 while the sea kept its saturation. Every reported defect is gone and
+no other metric regressed.
+
+### The reproducibility bug this exposed
+
+A/B needed a matched pair, and two identical runs of the same binary at the
+same `--shot-time` produced **different frames** — 0.63 max per-pixel
+difference in the sky. Scene 2's camera used `now - gStartTime`, but the sea and
+sky shaders were handed raw `NowSeconds()`, which is `SDL_GetPerformanceCounter()
+/ frequency` — the performance counter since boot. So the water and the clouds
+animated against **wall-clock time** while the camera animated against **scene
+time**. For a benchmark that means the water is in a different phase on every
+run, and every screenshot of it is a random phase of the animation.
+
+Scenes 1, 3 and 4 were already scene-relative. Scene 2 now has a `gSceneTime`
+set once per frame from the same value the camera uses, and both `BindSkyUniforms`
+and `DrawSea` read it. Residual variance between two runs is now only the
+capture quantisation to a frame boundary, which is a harness property and
+~16 ms on the user's driver.
+
+### Comment budget
+
+The long explanatory blocks in `sea_frag.glsl` and `sky_frag.glsl` were
+condensed while this was fixed: **sea 172 -> 161 comment lines (463 -> 462
+total), sky 146 -> 134 (448 -> 436)**. What was kept is the part that is not
+recoverable from the code — the cross-file byte-identity contract on
+`encodeScene`, the `MUST match` constants, and the measured numbers behind each
+decision. Trimming `encodeScene` on one side only briefly broke the invariant;
+it is checked after every edit to either file.
+
 ## BUILD-P22: the flyover was off before the first frame, so its GIF had one frame
 
 `docs/screenshots/uzi_flyover.gif` shipped with **one** frame. The README has
