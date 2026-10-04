@@ -1563,10 +1563,17 @@ int main(int argc, char **argv) {
                  event.type == SDL_MOUSEBUTTONUP ||
                  event.type == SDL_MOUSEWHEEL) {
         handleMouseEvent(event);
-        gFlyover = false;   // any mouse input hands the camera back
+        // BUILD-P22: a scripted headless capture has no user to hand the
+        // camera back to, and SDL delivers a MOTION event on its own when a
+        // window maps and takes focus -- so this cancelled the flyover before
+        // frame 1 and every --screenshot run captured the same static orbit.
+        // That is why docs/screenshots/uzi_flyover.gif shipped with one frame
+        // against the README's "ten frames across the run": the flyover was
+        // already off by the time the first shot was taken.
+        if (gShotPath == nullptr) gFlyover = false;
       } else if (event.type == SDL_MOUSEMOTION) {
         handleMouseMotion(event);
-        gFlyover = false;
+        if (gShotPath == nullptr) gFlyover = false;
       } else if (event.type == SDL_WINDOWEVENT) {
         if (event.window.event == SDL_WINDOWEVENT_RESIZED) {
           gWinW = event.window.data1;

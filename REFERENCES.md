@@ -179,6 +179,81 @@ Realism takeaways applied:
   glazing bars over them. Emissive geometry is only believable if the frame behind it still exists —
   the bars and the sill are what stop a lit pane reading as a sticker.
 
+## BUILD-P22: the flyover was off before the first frame, so its GIF had one frame
+
+`docs/screenshots/uzi_flyover.gif` shipped with **one** frame. The README has
+always described it as "ten frames across the run: a high approach that reveals
+the whole 110-gun array, a low runway pass down its length, then a pull back to
+the orbit", so the file and its caption disagreed — and the file was wrong.
+
+The asset was never a bad encode. `git log --follow` shows it was committed
+once, in `799e3d6` (BUILD-P11), already single-frame, so this is a defect that
+outlived the build that introduced the feature rather than a regression from
+P21. The frames it did contain were the right ones; there was only ever one of
+them.
+
+### Why the flyover never ran during capture
+
+The event loop handed the camera back on **any** mouse input, and `SDL_MOUSEMOTION`
+was in that set unconditionally:
+
+```c
+} else if (event.type == SDL_MOUSEMOTION) {
+  handleMouseMotion(event);
+  gFlyover = false;
+```
+
+SDL delivers a MOTION event by itself when a window maps and takes focus — it is
+not a user gesture and it carries no intent. Under the pinned-framebuffer
+capture path (`--width`, which sets `gWindowedMode`) the window maps, that event
+arrives before frame 1, and `UpdateFlyoverCamera` returns immediately for the
+rest of the run. Instrumenting the capture gate settled it rather than
+inference: at `--shot-time 2` and at `--shot-time 45` it reported `flyover=0`,
+`az=-25.00`, `el=26.00`, `d=11.22` both times — the static orbit defaults. The
+ten frames came back **bit-for-bit identical**, max per-pixel difference `0.0`.
+
+That also explains the shape of the failure. It is not "the animation is subtle"
+— it is that the animation was never running, so no tuning of the path, the
+acts or the frame times could have produced a moving loop.
+
+The fix is to stop treating scripted capture as user input: both
+`gFlyover = false` sites are now guarded by `gShotPath == nullptr`. There is no
+user to hand the camera back to in a headless capture, and nothing else about
+the run changes. Live behaviour is untouched — a real mouse click or drag still
+cancels the flyover immediately, which is what the README promises.
+
+### The rebuilt loop
+
+Ten frames at 760x428, one process per shot (scene 1 accepts a single
+`--shot-time`, so a multi-frame loop is ten runs), at t = 2, 5, 7.5, 12, 17,
+22, 27, 34.5, 40 and 45 s — two frames inside act 1's reveal, five through act
+2's runway, three across act 3's pull back. All ten renders logged no
+`failed:` / `error:` / `GL_INVALID`.
+
+| frame pair | mean abs difference | pixels differing >10/255 |
+| --- | --- | --- |
+| f0 -> f1 (act 1) | 0.0423 | 22.8% |
+| f2 -> f3 (act 2) | 0.0232 | 8.9% |
+| f5 -> f6 (act 2) | 0.0672 | 27.2% |
+| f7 -> f8 (act 3) | 0.0998 | 35.7% |
+| f8 -> f9 (act 3) | 0.0912 | 39.0% |
+
+Every consecutive pair differs, the largest moves are the act transitions, and
+mean luma runs 0.580 to 0.672 across the sequence as the frame fills and empties
+— a camera move, not a re-encode of one picture. The top band stays at 0.736 in
+all ten, i.e. the horizon is still in frame at every point on the path, which is
+the constraint BUILD-P11 derived for the 50-degree vertical FOV.
+
+Encoded 256-colour adaptive from frame 0 with Floyd-Steinberg dither on frames
+1-9, 1200 ms a frame, `loop=0`. 1200 ms rather than the 900 ms the two
+four-frame dolly loops use: this one spans the whole 47 s three-act move, and
+at 900 ms it reads as a slideshow. 12 s for the loop.
+
+Scene 1's shaders did not change in P21 or P22, so this is not a stale-asset
+refresh — it is the one committed asset that never matched its own caption.
+No frame-rate claim is made: these are local llvmpipe software-rasteriser
+renders and llvmpipe is not the user's driver.
+
 ## BUILD-P21: the scene files are scene files, and scenes 2, 3 and 4 get measured
 
 ### The rename, and why the names were wrong
