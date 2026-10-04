@@ -148,12 +148,40 @@ void main() {
     float box = max(abs(q.x), abs(q.y));
     // soft-edged diffuser: the panel is a diffusing sheet, so its border is a
     // ramp over several degrees, not a step
-    float panel = smoothstep(half_, half_ * 0.55, box);
+    float edgeT = smoothstep(half_, half_ * 0.55, box);
+    // BUILD-P19: A FITTING IS NOT A SOLID WHITE RECTANGLE. Measured on the
+    // 1280x720 t=7 baseline, this panel was ONE 255x89 px mass at 0.97 fill
+    // — 2.40% of the frame with a hard edge and nothing inside it. A flat
+    // plateau with a hard edge is the loudest "this is a rectangle of maths"
+    // signal available, and it is simply wrong: a real troffer has a bezel
+    // the diffuser is clipped into, a prismatic louvre across its face, and
+    // a diffuser that dims toward the frame because the acrylic is deeper
+    // there. Three cheap terms, all of them real, and together they turn a
+    // slab of clipped white into a fitting.
+    //   diffuser face, dimming toward the frame
+    float panel = edgeT * (0.62 + 0.38 * smoothstep(half_ * 0.05, half_ * 0.80, edgeT));
+    // the prismatic louvre every tiled ceiling fitting has: ~20 ribs across
+    // the face, which is ~12 px per rib on screen, so it survives the
+    // resolution without shimmering. It is also what stops the panel being
+    // featureless in the range the tonemap has already rolled onto the
+    // shoulder — the one part of it that is NOT clipped.
+    float louvre = 0.5 + 0.5 * cos(q.x * 210.0);
+    panel *= 0.86 + 0.14 * louvre;
+    // the bezel: the frame the diffuser is clipped into, sitting OUTSIDE the
+    // diffuser edge. It occludes rather than adds, so behind it you see the
+    // ceiling tile, which is what a white plastic frame looks like anyway.
+    panel *= smoothstep(half_ * 1.00, half_ * 0.86, box);
     // mullion cross — the giveaway that this is a light fitting and not a blob
     float mull = smoothstep(0.030, 0.012, abs(q.x))
                + smoothstep(0.030, 0.012, abs(q.y));
     panel *= clamp(1.0 - mull * 0.85, 0.0, 1.0);
-    col += uLightTint * panel * 5.6;
+    // BUILD-P19: 5.6 -> 4.2, on top of the ~0.81 mean of the new face term
+    // and the ~0.93 of the bezel. Peak radiance on the panel falls ~43%.
+    // 13.94% of the baseline frame sat above 0.93 luma, almost all of it
+    // here and on the adjacent white tiles; the filmic shoulder can only
+    // compress a highlight it is actually given, so the honest fix is to
+    // stop handing it a plateau.
+    col += uLightTint * panel * 4.2;
     // bloom skirt: the panel is bright enough to light the tiles right around it
     col += uLightTint * smoothstep(half_ * 2.6, half_, box) * 0.30;
 

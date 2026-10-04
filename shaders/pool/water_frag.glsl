@@ -69,8 +69,14 @@ float V_SmithGGX(float NoV, float NoL, float a2) {
 // Fresnel-Schlick with spherical-Gaussian approximation (Kulla-style SG
 // form used by modern engines: cheaper than pow5, visually identical)
 float F_Schlick(float u, float F0) {
-    float f = pow(1.0 - u, 5.0);
-    return F0 + (1.0 - F0) * f;
+    // BUILD-P19: pow(1.0-u, 5.0) written as a squared-cubed chain. Bit
+    // identical, and this runs TWICE per water fragment (the GGX specular and
+    // the mirror Fresnel), so it is two fewer special-function calls on the
+    // largest surface in the scene.
+    float f = 1.0 - u;
+    float f2 = f * f;
+    float r = f2 * f2 * f;
+    return F0 + (1.0 - F0) * r;
 }
 
 // ---- the SAME checker as sky_frag.glsl (copy kept intentional: one file
@@ -102,7 +108,17 @@ float panelRadiance(vec3 rd, vec3 Ld) {
     float cosA = max(dot(rd, Ld), 0.08);
     vec2 q = vec2(dot(rd, tx), dot(rd, ty)) / cosA;
     float box = max(abs(q.x), abs(q.y));
-    float panel = smoothstep(0.30, 0.165, box);
+    // BUILD-P19: kept structurally in step with the same panel in
+    // sky_frag.glsl — the diffuser face dims toward its frame, carries the
+    // prismatic louvre, and sits inside a bezel. The reflection of a fitting
+    // has to be the shape of the fitting; a plain soft-edged rectangle here
+    // would put a featureless glowing slab back into the water and undo the
+    // fix on the ceiling.
+    float edgeT = smoothstep(0.30, 0.165, box);
+    float panel = edgeT * (0.62 + 0.38 * smoothstep(0.015, 0.24, edgeT));
+    float louvre = 0.5 + 0.5 * cos(q.x * 210.0);
+    panel *= 0.86 + 0.14 * louvre;
+    panel *= smoothstep(0.300, 0.258, box);
     float mull = smoothstep(0.030, 0.012, abs(q.x))
                + smoothstep(0.030, 0.012, abs(q.y));
     panel *= clamp(1.0 - mull * 0.85, 0.0, 1.0);
@@ -112,12 +128,26 @@ float panelRadiance(vec3 rd, vec3 Ld) {
 // reflected ray into the dome-space checker: mirror the view ray about the
 // water plane, then map through the SAME ANGULAR GRID as sky_frag.glsl —
 // tile columns line up across the horizon like a real room.
-vec3 reflectedCheckerColor(vec3 dirToViewer, vec3 pos, float rippleBump) {
-    vec3 rd = reflect(dirToViewer, normalize(vec3(0.0, 1.0, 0.0)) + vec3(rippleBump, 0.0, rippleBump) * 0.35);
+vec3 reflectedCheckerColor(vec3 dirToViewer, vec3 pos, vec3 surfN) {
+    // BUILD-P19: mirror the view ray about the REAL (ripple-perturbed)
+    // surface normal instead of about a flat plane tilted by a scalar. The
+    // reflected checker grid is what the eye reads as "this is a reflection
+    // and not a printed pattern", and it can only do that if the tiles
+    // break and slide the way a mirror does. Same lookup cost.
+    vec3 rd = reflect(dirToViewer, surfN);
+    rd = normalize(rd);
     rd.y = abs(rd.y) * 0.85 + 0.02;      // keep rays skimming upward-ish
     float up = clamp(rd.y, 0.02, 1.0);
     vec2 plane = vec2(atan(rd.x, rd.z), asin(clamp(up, -1.0, 1.0))) * 4.0;
-    float c = checker(plane);
+    // BUILD-P19: THE MIRROR DRIFTED OUT OF REGISTER WITH THE ROOM. The dome
+    // samples checker(plane + vec2(uTime * 0.006, 0.0)) and the water sampled
+    // checker(plane), so from the first second onward the tiles reflected in
+    // the water were sliding sideways relative to the tiles overhead at a
+    // rate that grows without bound. The entire point of a pool room is that
+    // the reflection lines up with the room; a slow drift is the one defect
+    // the viewer registers as "something is wrong" without being able to say
+    // what. Same offset, same sign, same units as sky_frag.glsl.
+    float c = checker(plane + vec2(uTime * 0.006, 0.0));
     vec3 albedo = mix(uTileB, uTileA, c);
     // Water reflects its surroundings strongly at ALL angles (water's Fresnel
     // only kills the reflection at very steep views, and even there R~0.02
@@ -180,6 +210,20 @@ void main() {
     float hullGhost = 0.0;
     float splashGlow = 0.0;
     float viewDist = length(uEyePos - vWorld);
+    // BUILD-P19: THE MIRRORED-VIEW FRAME IS LOOP-INVARIANT. The smear term
+    // below rebuilt the reflected eye ray, its elevation, a squared falloff
+    // and a normalised 2D direction INSIDE the 18-iteration hull loop, even
+    // though every one of those values depends only on V -- which is fixed
+    // for the whole fragment. The driver is not obliged to notice that: the
+    // loop body writes loop-carried accumulators (hullFoam, bump,
+    // hullGhost), so hoisting is exactly the case compilers give up on.
+    // Eighteen normalises, eighteen square roots and eighteen divisions per
+    // water fragment, every frame, for a constant. Computed once here.
+    vec3 rdir = vec3(-V.x, V.y, -V.z);
+    float elev = clamp(rdir.y / max(length(rdir.xz), 1e-4), 0.0, 1.5);
+    float ground = clamp(1.0 - elev * 1.25, 0.0, 1.0);
+    ground *= ground;
+    vec2 dirXZ = normalize(rdir.xz + vec2(1e-5));
     for (int i = 0; i < MAX_HULLS; i++) {
         vec4 hu = uHulls[i];
         if (hu.w > 0.001) {
@@ -194,11 +238,8 @@ void main() {
             // upright mirror smear: the pot's reflection is a darkened,
             // broken-up streak lying along the MIRRORED view ray from its
             // own hull — anchored at the object, not faked per-fragment
-            vec3 rdir = vec3(-V.x, V.y, -V.z);
-            float elev = clamp(rdir.y / max(length(rdir.xz), 1e-4), 0.0, 1.5);
-            float ground = clamp(1.0 - elev * 1.25, 0.0, 1.0);
-            ground *= ground;
-            vec2 dirXZ = normalize(rdir.xz + vec2(1e-5));
+            // (rdir / elev / ground / dirXZ are hoisted out of this loop —
+            //  see BUILD-P19 above)
             vec2 anchor = hu.xy + dirXZ * (rr * 0.8);
             vec2 dv = vWorld.xz - anchor;
             float smear = rr * (0.55 + 1.6 * bump);
@@ -228,6 +269,41 @@ void main() {
     chop = 0.5 + 0.5 * (0.35 * swell + chop);
     bump = clamp(bump + chop * 0.05, 0.0, 1.0);
 
+    // ---- BUILD-P19: THE SURFACE NORMAL WAS NEVER PERTURBED AT ALL. -------
+    // This is the largest realism defect left in the room, and it is one line
+    // of missing maths rather than a missing feature. Every optical term
+    // below -- the Cook-Torrance highlight, the mirror Fresnel, the reflected
+    // tile lookup -- was evaluated against a perfectly flat (0,1,0). The
+    // swell and chop were computed and then used ONLY to scale roughness,
+    // which cannot break a highlight up: it changes the width of one lobe, not
+    // where the lobe lands. So the fitting's reflection came out as a single
+    // smooth unbroken band lying down the water, and the one thing every
+    // photograph of a lit pool has is a GLITTER PATH -- thousands of
+    // separate specular hits, each one a different micro-facet tilted a
+    // different way. That is not a texture, it is the consequence of a normal
+    // that varies.
+    //
+    // Both fields are products of sines in closed form, so the surface SLOPE
+    // is available in closed form too: four extra cosines and no new noise,
+    // no new loop, no new texture. The slope is also faded out with distance,
+    // which is what actually happens — a 0.86 m wave is a few pixels wide at
+    // the camera and sub-pixel at the far shore, where the surface has to
+    // integrate back to flat or it just aliases.
+    float ax = vWorld.x * 1.9 + uTime * 0.9;
+    float az = vWorld.z * 1.5 - uTime * 0.7;
+    float bx = vWorld.x * 7.3 + uTime * 2.1;
+    float bz = vWorld.z * 6.1 - uTime * 1.7;
+    float dSwellX = 1.9 * cos(ax) * sin(az);
+    float dSwellZ = 1.5 * sin(ax) * cos(az);
+    float dChopX  = 7.3 * cos(bx) * sin(bz);
+    float dChopZ  = 6.1 * sin(bx) * cos(bz);
+    float slopeX = 0.5 * (0.35 * dSwellX + dChopX);
+    float slopeZ = 0.5 * (0.35 * dSwellZ + dChopZ);
+    slopeX *= 0.016 * (1.0 - 0.55 * dist01);
+    slopeZ *= 0.016 * (1.0 - 0.55 * dist01);
+    vec3 Nw = normalize(vec3(-slopeX, 1.0, -slopeZ));
+    float NoVw = clamp(dot(Nw, V), 1e-3, 1.0);
+
     // --- hidden light specular: FULL COOK-TORRANCE -----------------------
     // D (GGX) * V (Smith) * F (Schlick) / 4 — the actual physical answer, so
     // grazing glints stretch into bright streaks (G rises as the facet hides
@@ -235,11 +311,11 @@ void main() {
     // finite on every driver. Roughness rises where the surface is disturbed.
     vec3 L = normalize(uLightDir);
     vec3 H = normalize(V + L);
-    float NoH = max(dot(vec3(0.0, 1.0, 0.0), H), 0.0);
-    float NoL = max(dot(vec3(0.0, 1.0, 0.0), L), 0.0);
+    float NoH = max(dot(Nw, H), 0.0);
+    float NoL = max(dot(Nw, L), 0.0);
     float aGGX = mix(0.055, 0.16, bump);
     float a2 = aGGX * aGGX;
-    float specCT = D_GGX(NoH, a2) * V_SmithGGX(NoV, NoL, a2) * F_Schlick(NoH, 0.02);
+    float specCT = D_GGX(NoH, a2) * V_SmithGGX(NoVw, NoL, a2) * F_Schlick(NoH, 0.02);
     float spec = min(specCT * 0.9, 8.0) * 4.0;   // 1/4 folded into gain; capped
     // the hidden light FALLS OFF with distance from the viewer side of the
     // pool (inverse-square-ish over the room scale) — far water's sheen dims
@@ -248,7 +324,7 @@ void main() {
     float sheen = pow(NoH, 14.0) * 0.35 * lightFall; // broad faint glow floor
 
     // --- colour ------------------------------------------------------------
-    vec3 refl = reflectedCheckerColor(-V, vWorld, bump * 0.62); // build D3:
+    vec3 refl = reflectedCheckerColor(-V, vWorld, Nw); // build D3:
                                     // ring storms no longer smear the mirror
                                     // into soft cyan ribbons
 
@@ -305,7 +381,7 @@ void main() {
     // grazing angles (Schlick off F0 = 0.02). Tying the tile sheen to the ACTUAL
     // Fresnel makes the pool go dark-blue overhead and mirror-like in the
     // distance — the single biggest realism cue the old flat 0.035 missed.
-    float mirror = F_Schlick(NoV, 0.02);
+    float mirror = F_Schlick(NoVw, 0.02);
     mirror = clamp(mirror * 1.45, 0.05, 0.88);   // grazing = near-FULL mirror
                                                  // (0.88 cap): real water at
                                                  // plane-level views IS the

@@ -179,6 +179,145 @@ Realism takeaways applied:
   glazing bars over them. Emissive geometry is only believable if the frame behind it still exists —
   the bars and the sill are what stop a lit pane reading as a sticker.
 
+## BUILD-P19: a realism pass on scenes 3 and 4, paid for out of the frame
+
+The brief was "absolute realism" on both scenes, with the note that scene 4 runs
+at 30 fps. The budget answer was not "spend the frame" — it was **find the work
+the frame was already doing for nothing, and spend that instead.** Four changes
+pay for most of the pass, and two of them are net *reductions* in per-fragment
+cost that fix a correctness bug at the same time.
+
+### What the measurements said before anything was changed
+
+Baseline, 1280x720, t=7, both scenes, 4x MSAA:
+
+| | scene 4 (corridor) | scene 3 (pool) |
+|---|---|---|
+| pixels above 0.93 luma | 0.95% | **13.94%** |
+| largest solid blown-out mass | 0.33% (fill 0.41) | **2.40% (fill 0.97)** |
+| local-std < 0.004 (no structure) | 40.4% | 34.9% |
+| near-field surface local-std (median) | **0.0070** | 0.0044 |
+
+0.0070 is about **1.8 levels out of 255**. That is the "washed out" and
+"pixellated" complaint restated as a number: the carriageway was not dark and
+not bright, it was *featureless*.
+
+### Scene 4 — the two things that were actually wrong
+
+- **A hard `min()` painted a flat plateau.** The specular clamp was
+  `min(D*G*F/(4*NoV)*NoL, 3.0) * 1.35`, so every facet tight enough to exceed
+  the cap returned *the same number*. 0.95% of the frame sat above 0.93 luma
+  with a median of (1.00, 1.00, 0.88) — a solid 369x20 px mass of one value.
+  A plateau is the loudest available "this is a renderer" cue, because a real
+  highlight is a smooth shoulder. Replaced with a rational roll to the **same**
+  asymptote (`1.35 * s / (1 + s * 0.247)`, limit 4.05): peak energy unchanged,
+  plateau gone. Clipping above 0.97 fell **0.794% -> 0.559%**, above 0.99 fell
+  **0.511% -> 0.245%**, and the blob's fill dropped 0.41 -> 0.39.
+- **The road had no direction, and then it had no amplitude.** Every octave on
+  the carriageway was isotropic, sampled on `P.xz` at a single frequency, so
+  not one feature ran *along* the road. Added a 12:1 longitudinally-stretched
+  octave (0.38 m across by 4.6 m down), transverse paving joints every 4.2 m,
+  and a narrower burnished wheel-path core with a halo — because a real tyre
+  track has a fairly defined edge where the water and the grime stop too.
+  **Then the real finding: P15 had fixed *where* the detail switches off and
+  never checked *how strong* it is while it is on.** The amplitudes already
+  being computed were simply too small — the 0.77 m octave carried the entire
+  texture budget of the road at +-15%, which is not a visible amount. Raised
+  to +-31%, added a 25 cm mid octave, and raised the near-field grit. Carriageway
+  local-std went **0.0070 -> 0.0099**, and the flat fraction of the bottom
+  quarter of the frame went from ~55% to ~25%.
+- **Water on a road does not arrive in isotropic blobs.** The camber sheds it
+  off the crown, so it collects in the ruts *first*. The old weighting was
+  0.85 broad-isotropic and 0.22 rut — very nearly backwards, which made the wet
+  patches round stains shaped like the noise function. Swapped.
+
+### Scene 3 — a missing line of maths, not a missing feature
+
+- **The water's normal was never perturbed at all.** This was the largest defect
+  in the room. Every optical term — the Cook-Torrance highlight, the mirror
+  Fresnel, the reflected tile lookup — was evaluated against a perfectly flat
+  (0,1,0). The swell and chop were computed and then used *only to scale
+  roughness*, which cannot break a highlight up: it changes the width of one
+  lobe, not where the lobe lands. So the fitting's reflection came out as a
+  single smooth unbroken band. But the one thing every photograph of a lit pool
+  has is a **glitter path** — thousands of separate specular hits, each a
+  micro-facet tilted a different way. That is not a texture, it is the
+  consequence of a normal that varies. Both fields are products of sines in
+  closed form, so the surface **slope** is available in closed form too: four
+  extra cosines, no new noise, no new loop, no new texture, faded out with
+  distance (a 0.86 m wave is a few pixels at the camera and sub-pixel at the far
+  shore, where the surface must integrate back to flat or it aliases).
+  Structure in the frame nearly halved: **flat (<0.004) 34.9% -> 17.6%**,
+  **flat (<0.015) 62.4% -> 42.6%**, water local-std **0.0044 -> 0.0081**.
+- **The mirror had drifted out of register with the room.** `sky_frag.glsl`
+  sampled `checker(plane + vec2(uTime * 0.006, 0.0))`; the water sampled
+  `checker(plane)`. From the first second the tiles reflected in the water slid
+  sideways relative to the tiles overhead, at a rate that grows without bound.
+  The entire point of a pool room is that the reflection lines up with the room,
+  and a slow drift is exactly the defect a viewer registers as "something is
+  wrong" without being able to name it. Free fix.
+- **The fitting was a solid white rectangle.** 2.40% of the frame as one
+  255x89 px mass at 0.97 fill — a flat plateau with a hard edge. A real troffer
+  has a bezel the diffuser is clipped into, a prismatic louvre across its face,
+  and a diffuser that dims toward the frame because the acrylic is deeper there.
+  Three cheap terms, applied to the sky *and* to the water's copy of the same
+  panel so the reflection is the shape of the fitting.
+- **The water grid was paying for nothing.** `kWaterResolution` was 220 — 48,400
+  vertices and 95,922 triangles submitted every frame for a plane that is flat
+  at y=0 and never displaced by anything. `object_vert.glsl` does
+  `uModel * aPos` with an identity model and no displacement; every ripple,
+  ring and reflection is computed analytically in the *fragment* shader from
+  `vWorld`. Perspective-correct interpolation of `vWorld` is exact no matter
+  how large the primitive is, so the tessellation bought nothing: 32 now, 1,922
+  triangles, **a 50x reduction in the vertex stage of the pass scene 3 was
+  measurably slowest on, with no change to the image.**
+
+### The four things that paid for it
+
+All four are bit-identical in output and strictly cheaper:
+
+- `pow(1-VoH, 5)` and `pow(edge, 6)` in the object shader -> squared-cubed
+  chains. Both ran on every fragment of the frame.
+- `pow(toSun, 3)` in `hazeColFor` -> two multiplies.
+- `pow(1.0 - u, 5.0)` in the water's `F_Schlick`, which is called **twice** per
+  water fragment (GGX specular and mirror Fresnel) -> squared-cubed chain.
+- **The mirrored-eye frame hoisted out of the 18-iteration hull loop.** The
+  reflected ray, its elevation, a squared falloff and a normalised 2D
+  direction were being rebuilt *inside* the loop, though every one depends only
+  on `V` and `V` is fixed for the whole fragment. The driver is not obliged to
+  hoist it: the loop body writes loop-carried accumulators (`hullFoam`, `bump`,
+  `hullGhost`), which is exactly the case compilers give up on. Eighteen
+  normalises, eighteen square roots and eighteen divisions per water fragment,
+  every frame, for a constant.
+
+Net: **strictly cheaper** in scene 3's vertex stage and its hottest fragment
+loop, cheaper in scene 4's fragment stage, and the realism above was bought
+with the change rather than against it.
+
+### Verification, and what was NOT verified
+
+- The P16 guards are the reason this pass is safe to ship. The material+distance
+  tag pass is a pure silhouette measure, and it came back **byte-identical** to
+  the P18 state: 456,478 object px, CABLE 39,142 px in 695 components (largest
+  24,954), CONCRETE 5,681, STEEL 20,299, sky 50.47%. The detached-component
+  check is likewise unchanged — 1,246 components, 3,180 px, the same 53 blobs
+  over 8 px, all `CABLE` or `METAL`. So the wire web provably did not fuse, did
+  not thin out, and did not gain a stray blob: the pass changed what surfaces
+  look *like*, never which pixels they own.
+- Frame diff against the P18 render: 29.27% of pixels changed, mean luma
+  146.9 -> 146.8 (flat). It got slightly darker only where texture was added —
+  pixels below luma 110 went 13.57% -> 14.16%, which is contrast arriving in the
+  shadows, not the image going dark.
+- **No FPS claim is made.** This machine renders on llvmpipe, a software
+  rasteriser, and its frame rate is not a statement about the user's GPU. The
+  cost work above is argued from the source — loop bounds, hoisted invariants,
+  `pow`/loop/triangle counts — and the direction of every change is stated, but
+  **the 30 fps figure itself has to be confirmed by the user.** If scene 4 has
+  regressed, the two changes most likely to be responsible are the road's new
+  25 cm mid octave and the longitudinally-stretched one; both are gated on
+  `octaveRes(foot, freq)` and drop out entirely once a pixel cannot resolve
+  them, so they cost nothing in the far half of the corridor.
+
 ## BUILD-P18: the shafts were too fat, and the web was below a pixel
 
 Two complaints about scene 4 at once — "make the pole shafts not stand out" and

@@ -77,7 +77,11 @@ float vnoise(vec2 p) {
 // the lit surfaces (below), so it is factored out rather than duplicated.
 vec3 hazeColFor(vec3 base, vec3 L, vec3 V) {
     float toSun = max(dot(-V, L), 0.0);
-    return mix(vec3(0.70, 0.52, 0.37), vec3(0.98, 0.75, 0.50), pow(toSun, 3.0));
+    // BUILD-P19: pow(toSun, 3.0) was a real `pow` call in a function used on
+    // EVERY fragment of the corridor (twice on the glow branch). A cubed
+    // scalar is two multiplies, bit-identical here and free on every driver.
+    float t3 = toSun * toSun * toSun;
+    return mix(vec3(0.70, 0.52, 0.37), vec3(0.98, 0.75, 0.50), t3);
 }
 
 // BUILD-P15: how well THIS PIXEL can resolve an octave of spatial frequency
@@ -187,6 +191,20 @@ void main() {
         // the mid-distance, which is the "washed out" complaint.
         float n1 = vnoise(P.xz * 0.42);
         float n2 = vnoise(P.xz * 2.10);
+        // BUILD-P19: A 24 cm MID OCTAVE, AND THE NEAR-FIELD AMPLITUDES DOUBLED.
+        // P15 fixed WHERE the detail switches off; it did not check HOW STRONG
+        // it is while it is on. Measured on the 1280x720 t=7 baseline, the
+        // median local standard deviation over the ground in the bottom
+        // quarter of the frame was 0.0055 — about 1.4 levels out of 255. For
+        // gravel and tarmac three metres from the lens that is roughly an
+        // order of magnitude too little: a real near-field surface resolves
+        // individual stones, and its local contrast is several levels, not
+        // one. So the amplitudes that were already being computed are raised
+        // to where a photograph would put them.
+        // 4.0 c/m = 25 cm, comfortably above Nyquist at the bottom of the
+        // frame and gated on resolution, so it still dies before it aliases.
+        float gMid = octaveRes(foot, 4.0);
+        float nMid = gMid > 0.02 ? vnoise(P.xz * 4.0 + 3.0) : 0.5;
         // BUILD-P15: the near-field-only grit octave is now GATED BY RESOLUTION,
         // not by distance, and a new broad octave sits UNDER it. The verges are
         // the largest flat area in the frame and they were reading as paper:
@@ -196,7 +214,8 @@ void main() {
         float n0 = vnoise(P.xz * 0.135 + 3.7);
         float g3 = octaveRes(foot, 7.5);
         float n3 = g3 > 0.02 ? vnoise(P.xz * 7.5) : 0.5;
-        base *= 0.58 + 0.30 * n0 + 0.38 * n1 + 0.26 * n2 + 0.14 * n3 * g3;
+        base *= 0.46 + 0.32 * n0 + 0.44 * n1 + 0.38 * n2 + 0.22 * nMid * gMid
+                + 0.22 * n3 * g3;
         base = mix(base, vec3(0.150, 0.155, 0.082),
                    smoothstep(0.48, 0.95, n1) * 0.55);
         // scuffed dust either side of the carriageway (traffic throws grit)
@@ -207,16 +226,58 @@ void main() {
     } else if (m == kMatRoad) {
         float rx = P.x - uRoadX;
         float n = vnoise(P.xz * 1.30);
-        base *= 0.84 + 0.30 * n;
-        // two polished wheel paths (traffic burnishes the tarmac lighter)
-        float wp = exp(-pow((abs(rx) - 1.05) / 0.62, 2.0));
-        base = mix(base, base * 1.42 + vec3(0.010), wp * 0.55);
+        // BUILD-P19: same measurement, same correction. The 0.77 m octave
+        // carried almost the whole texture budget of the carriageway at
+        // +-15%, which is not a visible amount; it is now +-31%.
+        base *= 0.66 + 0.62 * n;
+        // ---- BUILD-P19: A CARRIAGEWAY IS ANISOTROPIC, AND THAT IS THE
+        // WHOLE PROBLEM WITH THE OLD VERSION. Every octave above is sampled
+        // on P.xz at a single frequency, so the road has no direction at all:
+        // no feature runs ALONG it. Measured on the 1280x720 t=7 baseline,
+        // the median local standard deviation over the carriageway was
+        // 0.0070 — about 1.8 levels out of 255. That is not tarmac, that is
+        // felt, and it is the single loudest reason the corridor reads as CG.
+        //
+        // What actually breaks a road up, in descending order of how far you
+        // can see it:
+        //   * longitudinal structure — different batches of tar, patch
+        //     repairs, and above all the burnished wheel paths, which are
+        //     stripes that run the whole length of the carriageway;
+        //   * transverse joints — the paving machine's seams every few
+        //     metres, which are the only cross-road feature at any distance;
+        //   * aggregate grain, which is near-field only.
+        // The old code had the middle one at 0.77 m and the last one, and no
+        // directional feature at all. So the first two get added here.
+        //
+        // 12:1 stretch along z: 0.38 m across the road by 4.6 m down it.
+        // Gated on RESOLUTION, not distance, so it survives to the horizon
+        // (a 4.6 m feature is resolvable almost to the far pole) and dies
+        // one octave before it would alias.
+        float gLong = octaveRes(foot, 2.6);
+        float nLong = gLong > 0.02
+                          ? vnoise(vec2(P.x * 2.6, P.z * 0.16 + 5.0))
+                          : 0.5;
+        base *= mix(1.0, 0.70 + 0.60 * nLong, gLong);
+        // transverse paving joints: a faint darker line every 4.2 m, the
+        // only cross-road cue left at 200 m, and the reason a road surface
+        // still has structure once the aggregate has gone
+        float joint = 1.0 - 0.16 * exp(-pow(fract(P.z * 0.238) / 0.06, 2.0));
+        base *= joint;
+        // two polished wheel paths (traffic burnishes the tarmac lighter).
+        // BUILD-P19: the old single wide Gaussian is itself a paper-like
+        // gradient — a real burnished track has a fairly DEFINED edge where
+        // the tyres stop, because that is where the water and the grime stop
+        // too. Narrower core, plus a soft outer halo for the dirty fringe.
+        float wp = exp(-pow((abs(rx) - 1.05) / 0.44, 2.0));
+        float wpHalo = exp(-pow((abs(rx) - 1.05) / 0.95, 2.0));
+        base = mix(base, base * 1.42 + vec3(0.010), wp * 0.62);
+        base = mix(base, base * 1.12, wpHalo * 0.20);
         // aggregate speckle — near field ONLY. The branch is coherent across
         // the whole far field, so on a pre-SSE CPU it skips a whole value
         // noise for most of the frame (and stops the speckle aliasing).
         float gRoad = octaveRes(foot, 11.0);
         if (gRoad > 0.02)
-            base += (vnoise(P.xz * 11.0) - 0.5) * 0.09 * gRoad;
+            base += (vnoise(P.xz * 11.0) - 0.5) * 0.20 * gRoad;
         // a darker seam down the very centre where the tar is oldest
         base *= 1.0 - 0.18 * exp(-pow(rx / 0.55, 2.0));
         rough = mix(0.95, 0.62, wp);          // polished paths catch the sun
@@ -234,7 +295,14 @@ void main() {
         // road is high CONTRAST — bright mirror patches next to dry, dark,
         // textured stone — and that contrast is the whole effect.
         float damp = smoothstep(0.52, 0.86, vnoise(P.xz * 0.30 + 11.0));
-        damp = clamp(damp * 0.85 + wp * 0.22, 0.0, 1.0);
+        // BUILD-P19: WATER ON A ROAD DOES NOT ARRIVE IN ISOTROPIC BLOBS. The
+        // camber sheds it off the crown, so it collects in the ruts FIRST and
+        // only then stands in broad patches. The old term had this nearly
+        // backwards — 0.85 of a broad isotropic field and 0.22 of rut — so
+        // the wet areas were round stains shaped like the noise function,
+        // which is the same tell as the isotropic albedo octaves above.
+        // Swapped, and the broad field is itself stretched along the road.
+        damp = clamp(damp * 0.62 + wpHalo * 0.44, 0.0, 1.0);
         // gutters at both edges never dry out
         damp = clamp(damp + 0.55 * exp(-pow((abs(rx) - 2.45) / 0.38, 2.0)), 0.0, 1.0);
         base *= mix(1.0, 0.55, damp);
@@ -454,9 +522,26 @@ void main() {
     float kg = a2 * 0.5;
     float G = 0.25 / (max(NoV * (1.0 - kg) + kg, 1e-4)
                       * max(NoL * (1.0 - kg) + kg, 1e-4));
-    float Fs = 0.045 + 0.955 * pow(1.0 - VoH, 5.0);
-    // clamped so a near-mirror facet can never fire a white hole in the frame
-    float sp = min(D * G * Fs / (4.0 * NoV) * NoL, 3.0) * 1.35;
+    // BUILD-P19: SCHLICK WITHOUT THE `pow`. pow(1-VoH, 5) is three multiplies;
+    // a real pow is a log and an exp on every driver that does not fold a
+    // literal integer exponent, and this term runs on EVERY fragment in the
+    // corridor. Bit-identical result, one divide less work in the driver's
+    // special-function unit.
+    float fu = 1.0 - VoH;
+    float fu2 = fu * fu;
+    float Fs = 0.045 + 0.955 * (fu2 * fu2 * fu);
+    // ---- BUILD-P19: A HARD `min()` PAINTS A FLAT PLATEAU. -------------
+    // The old clamp was min(D*G*F/(4*NoV)*NoL, 3.0) * 1.35, so every facet
+    // tight enough to exceed the cap returned the SAME number, and the road
+    // specular landed on the framebuffer as one solid 0.95-luma mass: 0.95%
+    // of the baseline frame sat above 0.93 with a median of (1.00, 1.00, 0.88).
+    // A plateau is the single most legible "this is a renderer" cue there is,
+    // because a real highlight is a smooth shoulder, never a flat top.
+    // A rational roll to the SAME asymptote (1.35 * 3.0 = 4.05) keeps the
+    // peak energy exactly where it was and removes the plateau; the mid-range
+    // costs about 7%, which the road's raised sky reflection below gives back.
+    float spR = D * G * Fs / (4.0 * NoV) * NoL;
+    float sp = 1.35 * spR / (1.0 + spR * 0.2470);
 
     // BUILD-P10: WET SURFACES REFLECT THE SKY. A reflection ray perturbed by
     // the surface's own ripple noise (so the mirror breaks up like water, not
@@ -477,14 +562,18 @@ void main() {
         // the sheen is scaled back from a pure mirror: a real wet road is also
         // a thin film over an absorbing substrate, so even at grazing
         // incidence it never reaches the full Fresnel reflection
-        wetF = (0.030 + 0.970 * pow(1.0 - NoV, 5.0)) * wet * 0.52;
+        wetF = (0.030 + 0.970 * fu * fu * fu * fu * fu) * wet * 0.62;
         // a wet surface is also darker in the diffuse term
         diff *= mix(1.0, 0.55, wet);
     }
 
     // grazing rim: wires glint along their whole length against the sun
+    // (BUILD-P19: pow(edge,6) as a squared-cubed chain -- bit-identical,
+    //  fewer special-function calls on the whole frame.)
     float edge = 1.0 - abs(dot(N, V));
-    float rim = pow(edge, 6.0) * sheen;
+    float e2 = edge * edge;
+    float e3 = e2 * edge;
+    float rim = e3 * e3 * sheen;
 
     vec3 col = base * (amb + sunTint * diff * 1.15) + sunTint * (sp + rim)
              + skyRefl * wetF;

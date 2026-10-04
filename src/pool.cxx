@@ -86,7 +86,21 @@ unsigned lodepng_decode_file(unsigned char **out, unsigned *w, unsigned *h,
                                  // uploads all 48 in one glUniform4fv plus a
                                  // live count so idle frames loop zero times
 
-static const int kWaterResolution = 220;  // grid verts per side (display grid;
+// BUILD-P19: THIS GRID WAS PAYING FOR NOTHING. The water plane is FLAT at
+// y = 0 and the vertex shader (shaders/pool/object_vert.glsl) does
+// uModel * aPos with an identity model and NO displacement of any kind —
+// every ripple, every ring, every reflection is computed analytically in the
+// FRAGMENT shader from vWorld. So the tessellation bought nothing at all:
+// 220x220 is 48,400 vertices and 95,922 triangles submitted every frame to
+// produce exactly the same image as two triangles would, because
+// perspective-correct interpolation of vWorld is exact no matter how large
+// the primitive is. It was pure vertex-stage cost on the heaviest pass in
+// the scene, in front of the heaviest fragment shader in the project.
+//
+// 32 keeps a coarse grid for anything that later wants to displace the
+// surface, and drops the count to 1,922 triangles — a 50x reduction in the
+// pass that scene 3 was measurably slowest on.
+static const int kWaterResolution = 32;   // grid verts per side (display grid;
                                           // the lighting is analytic per pixel)
 static const float kWaterSize = 300.0f;   // water patch half-size reaches the
                                           // horizon haze
