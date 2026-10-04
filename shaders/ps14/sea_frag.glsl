@@ -23,7 +23,7 @@ uniform vec3  uSunDir;
 uniform vec3  uHorizonColor;
 uniform vec3  uWaterColor;
 
-#define MAX_CLOUDS 7             // must match sky_frag.glsl and scene2.cxx
+#define MAX_CLOUDS 9             // MUST match sky_frag.glsl and scene2.cxx
 uniform int   uCloudCount;
 uniform float uCloudAzim[MAX_CLOUDS];   // centre azimuth, radians
 uniform float uCloudElev[MAX_CLOUDS];   // centre elevation, radians

@@ -270,6 +270,36 @@ highlight over more surface instead of clipping it: the glitter path lost 14%
 of its p99 while the sea kept its saturation. Every reported defect is gone and
 no other metric regressed.
 
+### A cross-file constant that did not match
+
+Checking the shared contracts after this pass turned up `#define MAX_CLOUDS 7`
+in `sea_frag.glsl` against **9** in both `sky_frag.glsl` and `src/scene2.cxx`,
+on a line whose own comment said it had to match. `DrawSea` uploads all five
+cloud arrays with `count = MAX_CLOUDS` (9) into arrays the sea declares as 7,
+which the spec says is `GL_INVALID_OPERATION`.
+
+**The first conclusion drawn here was wrong, and is worth recording.** The
+obvious reading — the upload fails, the uniforms stay zero, `projectedCloudDensity`
+returns 0, `cloudShadow` returns `exp(0) = 1.0` and the sea has no cloud shadows
+at all — did not survive a diagnostic render of the `shadow` term directly.
+With `MAX_CLOUDS 7` the measured shadow field over the water was min 0.2257,
+std 0.1735, with 11.08% of the water below 0.99 and 118 distinct levels: fully
+alive. This driver truncates the count to the declared array size instead of
+rejecting the call, so the first seven clouds upload correctly.
+
+The real consequence is narrower and was not visible from a still frame: **the
+sea drew only seven of the nine cloud shadows**, so two of the nine cloud banks
+visible in the sky cast nothing on the water beneath them. Those two are the
+smallest and highest of the nine (radii 0.026 and 0.030 rad at 24-27 degrees
+elevation), which is why the shadowed fraction barely moved — 11.08% with seven
+against 11.08% with nine, with the field only fractionally darker (min 0.2257
+-> 0.2157). Fixed to 9 for contract compliance, and re-rendering the committed
+still so it matches the shader it ships with.
+
+The lesson is the same one this section keeps hitting: a mismatch can be real
+and still not mean what the spec says it means on the driver in front of you.
+Measure the term, not the contract.
+
 ### The reproducibility bug this exposed
 
 A/B needed a matched pair, and two identical runs of the same binary at the
