@@ -262,15 +262,69 @@ not bright, it was *featureless*.
   and a diffuser that dims toward the frame because the acrylic is deeper there.
   Three cheap terms, applied to the sky *and* to the water's copy of the same
   panel so the reflection is the shape of the fitting.
-- **The water grid was paying for nothing.** `kWaterResolution` was 220 — 48,400
-  vertices and 95,922 triangles submitted every frame for a plane that is flat
-  at y=0 and never displaced by anything. `object_vert.glsl` does
-  `uModel * aPos` with an identity model and no displacement; every ripple,
-  ring and reflection is computed analytically in the *fragment* shader from
-  `vWorld`. Perspective-correct interpolation of `vWorld` is exact no matter
-  how large the primitive is, so the tessellation bought nothing: 32 now, 1,922
-  triangles, **a 50x reduction in the vertex stage of the pass scene 3 was
-  measurably slowest on, with no change to the image.**
+- **The water grid was almost certainly paying for nothing — but the proof is
+  blocked, and that is worth recording.** `kWaterResolution` was 220: 48,400
+  vertices and 95,922 triangles every frame for a plane that is flat at y=0 and
+  never displaced by anything. `object_vert.glsl` does `uModel * aPos` with an
+  identity model and no displacement; every ripple, ring and reflection is
+  computed analytically in the *fragment* shader from `vWorld`. Now 32 — 1,922
+  triangles, a 50x cut in the vertex stage of the pass scene 3 was
+  measurably slowest on.
+  The obvious justification is that perspective-correct interpolation of a
+  linearly-varying attribute across a planar primitive is exact whatever the
+  primitive size, so the tessellation cannot change the image. **I could not
+  verify that here, and the first attempt to test it produced a confident and
+  wrong answer — see the reproducibility section immediately below.** The
+  reduction is kept because it is a real, large saving on the slowest scene and
+  the image quality measurements at 32 are the best this scene has measured;
+  it is *not* kept on a claim of pixel equivalence, because that claim is not
+  established.
+
+### The measurement trap in this scene, and why several numbers above are qualified
+
+**Scene 3 does not produce reproducible screenshots.** Two runs of the
+*identical binary* at the identical `--shot-times 7`, at the identical width,
+differ on **96% of pixels with a maximum channel difference of 248** — the same
+magnitude as the difference between grid 32 and grid 220 that I first read as
+a tessellation regression. (Scene 4, with the same renderer, reproduces
+bit-for-bit, max channel difference 0 over 921,600 pixels.)
+
+The cause is a half-finished fix from BUILD-D8. The screenshot gate was moved
+onto the **simulation** clock so `--shot-times` means the same thing at any
+frame rate, but the draw calls were left reading wall-clock `now` and feeding
+it to the shaders as `uTime`. The dome's checker drift, its caustics, the
+water's ripple phases and the hull-foam strength ramp are all therefore
+functions of how fast the machine happened to be, not of what was simulated.
+On a slow software rasteriser those runs take wildly different wall-clock
+times, so the same flag gives visibly different rooms.
+
+Consequence for this section, stated plainly rather than buried: **any scene-3
+number resting on a single render against a single render is unreliable unless
+it clears the run-to-run spread.** Two runs of one binary give this noise floor:
+
+| metric | run A | run B | spread |
+|---|---|---|---|
+| flat (<0.004 local-std) | 15.95% | 14.82% | 1.13 pp |
+| flat (<0.015 local-std) | 42.20% | 39.05% | 3.15 pp |
+| pixels > 0.93 luma | 4.30% | 4.19% | 0.11 pp |
+| horizon row (heuristic) | 387 | 31 | unusable |
+
+Against that floor:
+- The headline water result — **flat (<0.004) 34.9% -> 17.6%, a 17.3 pp move,
+  about 15x the noise** — holds, and the (0.015) move, 19.8 pp against a 3.15
+  pp floor, holds with it. The glitter-path fix is real.
+- The clipping and glint figures for scene 3 are **inside the noise** and no
+  claim rests on them. An earlier draft of this note read the fitting's gain
+  reduction as "clipping did not improve"; that reading was noise, and the
+  1.5 pp glint spread is larger than the 0.15 pp it was based on.
+- The grid-equivalence test is **unresolved**, for the reason above: isolating
+  it needs two renders of one build, and scene 3 cannot give two comparable
+  ones.
+
+The underlying fix is small and is the obvious next thing to do here — pass the
+simulation clock to the draws instead of the wall clock, as BUILD-D8 already
+did for the screenshot gate — but it is a harness change, not a realism one,
+so it is not smuggled into a commit about what the rooms look like.
 
 ### The four things that paid for it
 
@@ -317,6 +371,9 @@ with the change rather than against it.
   25 cm mid octave and the longitudinally-stretched one; both are gated on
   `octaveRes(foot, freq)` and drop out entirely once a pixel cannot resolve
   them, so they cost nothing in the far half of the corridor.
+- Every scene-4 figure in this section was taken against a **bit-reproducible**
+  baseline: the same build re-rendered reproduces this scene exactly, so the
+  deltas are measurements rather than samples.
 
 ## BUILD-P18: the shafts were too fat, and the web was below a pixel
 
