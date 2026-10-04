@@ -34,9 +34,9 @@ out vec4 fragColor;
 uniform vec3  uEyePos;
 uniform vec3  uSunDir;
 uniform float uTime;       // reserved (subtle cable sway shading)
-uniform float uRoadX;      // road centre line, must match kRoadX in pole.cxx
+uniform float uRoadX;      // road centre line, must match kRoadX in scene4.cxx
 
-// material ids — MUST match the kMat* constants in src/pole.cxx
+// material ids — MUST match the kMat* constants in src/scene4.cxx
 const float kMatPaint  = 0.0;
 const float kMatWood   = 1.0;
 const float kMatGround = 2.0;

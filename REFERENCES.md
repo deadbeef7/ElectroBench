@@ -23,10 +23,10 @@ Realism takeaways applied:
 ## Dusk ocean (scene 2) — sea + sky + clouds
 
 - Sea glitter path, fresnel, horizon sheen, foam, subsurface:
-  - shader/ps14/sea_frag.glsl (in-repo, already heavily worked)
+  - shaders/ps14/sea_frag.glsl (in-repo, already heavily worked)
 
 - Sky + volumetric clouds:
-  - shader/ps14/sky_frag.glsl (in-repo)
+  - shaders/ps14/sky_frag.glsl (in-repo)
 
 Realism takeaways applied:
 - Tight sun disc + small warm halo, attenuated by cloud cover.
@@ -73,7 +73,7 @@ Realism takeaways applied:
   slow renderer wall time and sim time diverge and any straggler on the
   wall clock breaks determinism.
 
-## LainBench (scene 4) — Lain-style utility corridor
+## Power lines (scene 4) — Lain-style utility corridor
 
 Realism takeaways applied:
 
@@ -85,7 +85,7 @@ Realism takeaways applied:
 - A low amber sun, a drifting white cloud deck and warm gravel bounce give the scene one coherent
   light story, and a filmic knee keeps the bright sky rolling off instead of clipping flat.
 
-## LainBench (scene 4) — BUILD-P7 realism pass
+## Power lines (scene 4) — BUILD-P7 realism pass
 
 - Backlit air forward-scatters: haze toward the sun is brighter than haze away from it, and it
   thins with altitude. A single constant fog colour is one of the loudest "this is CG" tells in a
@@ -140,7 +140,7 @@ Realism takeaways applied:
   matches nothing IS a floating wire. Tagging the endpoints by call site turns the list into a
   to-do list in one run.
 
-## LainBench (scene 4) — BUILD-P9: steel poles, denser wiring, no birds
+## Power lines (scene 4) — BUILD-P9: steel poles, denser wiring, no birds
 
 Realism takeaways applied:
 
@@ -178,6 +178,219 @@ Realism takeaways applied:
 - **Lit windows are the suburban cue.** A third of the street-facing panes are emissive at dusk, with
   glazing bars over them. Emissive geometry is only believable if the frame behind it still exists —
   the bars and the sill are what stop a lit pane reading as a sticker.
+
+## BUILD-P21: the scene files are scene files, and scenes 2, 3 and 4 get measured
+
+### The rename, and why the names were wrong
+
+`src/tidebench.cxx`, `src/pool.cxx` and `src/pole.cxx` are now `src/scene2.cxx`,
+`src/scene3.cxx` and `src/scene4.cxx`. The working titles were never in the
+README's own table of contents — the table said Scene 1/2/3/4, the window
+titles said Scene 1-4, the HUD said Scene 3/Scene 4, and the results breakdown
+said `Scene 3 (pool)`. Only the filenames, three of the four scene headings and
+a handful of comments still said otherwise, so the file a contributor opened
+did not match the scene they were reading about. Everything that named those
+files moved with them: the Makefile object list and its obsolete-artifact
+sweep, the MinGW static build's compile and link lines, the `MUST match kMat*`
+and `MUST match MAX_RINGS` comments in the shaders (which are cross-file
+contracts, so a stale path in one of them is worse than no comment), and the
+README.
+
+**This corrects BUILD-P20, which claimed the branded names "survive as
+subtitles, because a results screen that reads only 'Scene 2 : 812' tells you
+nothing about what scored 812".** That was the wrong trade. The scene's identity
+is carried by the two HUD lines and the window title, which have said
+`Scene 2 (Dusk Ocean)`, `Scene 3 (Pool Room)` and `Scene 4 (Lain)` since P20;
+the results screen does not need a second name for the same thing, and the
+subtitles were the only thing keeping `TideBench`/`PoolBench`/`LainBench`
+alive anywhere in the project.
+
+### The screenshot trigger was not a clock bug at all
+
+Scene 2's still could not be captured: `--scene-only --screenshot ... --shot-time
+36` ran the full 45 s benchmark and exited having written nothing. The obvious
+suspect — the gate comparing `SDL_GetTicks()`, which is process uptime rather
+than time since the scene started — was real but was not the cause.
+
+The cause was simpler. `--shot-time` was parsed **only** by `main.cxx`; all
+three GL 3.3 scenes read `--shot-times` (plural) and nothing else. So the flag
+set the output path and left the shot list empty, the scene had a screenshot
+requested at no time at all, and it correctly did nothing. The silent-no-op
+shape of it is what made it expensive to find: no error, no warning, no file.
+
+- `--shot-time S` now works on all four scenes. `main.cxx` forwards it and each
+  scene seeds a one-element list only if `--shot-times` did not already supply
+  one, so the explicit plural form still wins.
+- The uptime gate was fixed anyway, because it was wrong on its own terms.
+  Everything above the render loop (OBJ and texture load, five shader compiles,
+  the shadow pass) is charged to `SDL_GetTicks()`, so on a slow renderer the
+  scene-1 shot window was already gone before frame 1. It now uses the same
+  performance-counter origin the fps accounting does.
+
+### The 60-second benchmark was 60 seconds of uptime, scored over scene time
+
+The same `SDL_GetTicks()` comparison cut the scene-1 run, while the score
+underneath it divided `gTotalFrames` by `gPerfStartTick` — a *shorter* interval,
+because setup time was excluded from one side only. A machine with a slow start
+therefore ended its run early and divided by too small a number, and the
+reported average FPS — the headline figure of the whole benchmark — came out
+too high. Both sides now use `sceneSeconds`. This is a measurement fix, not a
+difficulty change: nothing about what is rendered moved.
+
+### Scene 2 (dusk ocean): one display transform, and a sea that can be shaded
+
+This scene was the only one in the project still on per-channel Reinhard, and
+the only one that had never had a realism pass at all (BUILD-P10 covered scenes
+3 and 4 only).
+
+- **The sky and the sea were tone-mapping differently.** The dome used Reinhard
+  plus a warm highlight roll-off; the sea used plain Reinhard and no roll-off.
+  The sea reflects the dome out of the HDR cubemap and then runs the result
+  through its own curve, so every reflection in the water was a slightly
+  different colour from the thing it was reflecting. Both now share one
+  `encodeScene()`, kept byte-identical in the two files for the same reason the
+  pool and pole scenes keep byte-identical copies.
+- **The grade was in the wrong colour space.** ACES + the split tone + a
+  saturation lift applied *before* the gamma is mostly cancelled by the gamma:
+  gamma encoding roughly halves apparent saturation, so a 0.52 channel ratio in
+  linear arrives near 0.28 on screen. The lift is now applied after the encode,
+  which is where a grade belongs. Measured on the t=36 frame, mean saturation
+  **0.130 -> 0.268**.
+- **ACES is not a like-for-like swap.** At a scene value of 0.2 it returns 0.30
+  where Reinhard returned 0.17. Swapping it in uncompensated lifted mean luma
+  from 0.299 to 0.375 and pushed p95 from 0.653 to 0.833. The curve change is
+  paid for with one exposure constant inside the shared function (0.70), not by
+  walking every radiance in the scene. Final mean luma 0.326.
+- **The wave normals were sampled as points, not as areas.** The
+  finite-difference epsilon was a fixed 0.35 m, so past a few hundred metres one
+  pixel spans more than a wavelength and the gradient came out as a difference
+  of two nearly unrelated phases — not a normal, just noise, which is what
+  "the sea shimmers at the horizon" is made of. The epsilon now tracks
+  `fwidth`, and each of the six octaves is gated on its own frequency by the
+  same `octaveRes()` rule the pole scene has used since P15. The gate values are
+  computed once per fragment and shared by all three taps.
+- **The glitter path was three hand-fitted `pow` lobes with fixed exponents.** A
+  "pinpoint sparkle" 520 wide is sub-pixel past a few hundred metres, so the far
+  half of the path was per-pixel noise and the near half was blown-out white
+  beads. Physically the lobe *widens* with distance, because many facets inside
+  one pixel average into a glare. One GGX + Smith + Fresnel term with roughness
+  driven by the same footprint does the work of all three, with the pole scene's
+  P19 rational roll-off bounding the peak.
+- **Foam was a grey constant and had no distance gate.** A breaking crest is a
+  few centimetres of rough near-white surface; it returns mostly the sky above
+  it plus whatever sun reaches it. It is now lit from the sky at the fragment's
+  own horizon, and gated on footprint so it merges into a pale band instead of
+  speckling to the horizon.
+- **The dead band under the horizon was not clouds, it was a hole.** Every
+  hand-placed bank sits at 9-27 degrees elevation with a 1.5-2.9 degree radius,
+  so nothing existed below about 6 degrees. That strip measured **95.1%** of its
+  pixels below a local standard deviation of 0.006 — under 1.5/255 — directly
+  above the busiest, brightest part of the frame. Real dusk skies carry thin,
+  broken, hard-foreshortened cloud bars in the last few degrees, lit from
+  underneath because the sun is under them.
+
+Measured, t=36, 760x428, llvmpipe (local numbers; no fps claim is made):
+
+| | before | after |
+|---|---|---|
+| mean saturation | 0.130 | 0.268 |
+| detail grad-RMS | 0.0367 | 0.0737 |
+| pixels over 0.97 luma | 0.00% | 0.00% |
+| mean luma / max | 0.299 / 0.930 | 0.326 / 0.940 |
+| y160-200 median local SD | 0.0036 (95.1% flat) | 0.0211 (14.6% flat) |
+| y200-240 median local SD | 0.0075 (43.9% flat) | 0.0359 (1.3% flat) |
+| y320-360 median local SD | 0.0256 (11.0% flat) | 0.0693 (1.0% flat) |
+
+### Scene 3 (pool room): the water was the smoothest thing in the frame
+
+- Measured on the t=7 frame, the three bottom row bands — the water, which is
+  the subject of the room — sat at 17-22% of their pixels below a local
+  standard deviation of 0.006 while every tiled surface above them was busier.
+  P19 had added the normal perturbation; its amplitude was 0.016, about a
+  0.9-degree surface tilt, which is calmer than a real pool on any day it is
+  used. It is now 0.030, with a third scale at about 33 cm added, and every
+  scale gated on `fwidth` rather than on the old `1.0 - 0.55 * dist01` — a
+  guess about how big the room is, wrong the moment the camera moves.
+- **4.32% of the frame was clipping and there was a 222x60 solid mass** of
+  fused panel-and-tile in the corner (fill 0.68). A tile that clips is a tile
+  with no gradient left in it: the shoulder can only roll off a highlight it is
+  given, and at exposure 0.85 the brightest white tiles were already pinned at
+  0.96-0.98. Room exposure 0.85 -> 0.74. Clipping **4.32% -> 2.13%**, top-band
+  over-threshold **9.36% -> 2.12%**, the solid mass **2.77% -> 1.87%** and
+  222x60 -> 120x53. The panel itself keeps its hard highlight, which is the one
+  place a clipped value is correct.
+- Two-tap triangular dither, matching the pole and ocean scenes: the room's red
+  and white tiles meet along long straight seams and the water carries a wide
+  smooth blue ramp, and both band visibly at 8 bits.
+
+Measured, t=7, 760x427:
+
+| | before | after |
+|---|---|---|
+| pixels over 0.97 luma | 4.32% | 2.13% |
+| top band over 0.97 | 9.36% | 2.12% |
+| solid mass over 0.93 | 2.77% (222x60) | 1.87% (120x53) |
+| y280-320 median local SD | 0.0147 (17.4% flat) | 0.0503 (2.2% flat) |
+| y320-360 median local SD | 0.0209 (20.9% flat) | 0.0332 (4.8% flat) |
+| y360-400 median local SD | 0.0199 (21.9% flat) | 0.0257 (10.8% flat) |
+| detail grad-RMS | 0.0503 | 0.0600 |
+| mean luma | 0.687 | 0.688 |
+
+### Scene 4 (power lines): the cumulus deck was one noise cell across the whole sky
+
+- **There was no cloud in the frame.** The deck is sampled at
+  `cp = |dir.xz| / dir.y * 0.50`. With this camera's 52-degree vertical FOV
+  gazing 6.6 degrees up, the visible band runs from -19 to +33 degrees of
+  elevation, over which `cp` spans roughly 0.5 to 2.1 — so the noise input
+  spanned 0.23 to 1.05 and **the entire visible sky was sampling less than one
+  noise cell**. The clouds were not too sparse; there were none, and no
+  threshold setting could have produced any. That is why y40-y120 measured
+  59-67% of their pixels below a local standard deviation of 0.006.
+- Deck frequency 0.50 -> 1.75, erosion layer 2.70 -> 6.50 (so it still bites
+  holes in the edges), threshold 0.620 -> 0.560. This is worth being precise
+  about, because the obvious move — "more cloud" — was tried first and did
+  nothing measurable. Coverage fraction is set by the threshold and feature
+  SIZE by the frequency; only the frequency was wrong.
+- **High cirrus for the clear half.** Broken cumulus does not fill the sky, and
+  the open part was still a mathematical gradient. Cirrus is the one cloud lit
+  from underneath and behind, which is why it goes pink at sunset while
+  everything under it goes grey. One caveat worth recording: the first attempt
+  stretched the noise by 0.11, and because `|dir.xz|/dir.y` is cot(theta) — only
+  about 1.2 units across the whole visible band — that collapsed the veil's
+  entire vertical extent to a tenth of one cell. It became a function of
+  azimuth alone and the dead bands did not move by a single count.
+- Cloud crown green 0.845 -> 0.775, continuing the P15 direction.
+
+Measured, t=12, 760x428:
+
+| | before | after |
+|---|---|---|
+| detail grad-RMS | 0.0522 | 0.0655 |
+| y40-80 median local SD | 0.0029 (66.9% flat) | 0.0080 (45.5% flat) |
+| y80-120 median local SD | 0.0029 (59.7% flat) | 0.0205 (26.5% flat) |
+| y120-160 median local SD | 0.0032 (55.4% flat) | 0.0360 (10.5% flat) |
+| y160-200 median local SD | 0.0188 (34.1% flat) | 0.0441 (19.9% flat) |
+| pixels over 0.97 luma | 0.65% | 0.65% |
+| mean saturation | 0.479 | 0.382 |
+
+**The saturation figure went the other way and is reported rather than buried.**
+Half the frame is now large, bright, lit cloud, and the least saturated thing in
+an amber-sky picture is now in front of the amber. Pulling the crown's green
+down recovered 0.372 -> 0.382 and no more; the rest of the drop is coverage,
+not tint, and closing it would mean thinning the cloud back out into the
+gradient this pass just removed. 0.382 is still well inside the range P13
+established as "decisively amber" (that build went 0.367 -> 0.439), and the
+texture gain is 3x to 11x per band against it.
+
+### Not re-rendered here
+
+`docs/screenshots/lain_lines.gif` and `pool_splash.gif` are 760-wide loops of
+four frames each. They predate this pass and were left alone rather than
+half-refreshed; the stills (`lain_lines.png`, `pool_teapot.png`,
+`ps14_dusk_t36.png`) were re-rendered at 720p from the new shaders and do match.
+Every number above is from a local llvmpipe software rasteriser at 760 px wide.
+llvmpipe is not the user's driver and no frame-rate claim is made anywhere in
+this section.
 
 ## BUILD-P20: scenes are numbered 1-4, the bench presents at 720p fullscreen, and scene 3 can finally be A/B'd
 

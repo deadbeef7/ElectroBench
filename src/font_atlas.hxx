@@ -1,10 +1,10 @@
 // ElectroBench — shared HUD font atlas.
 //
-// One 8x8-per-glyph bitmap font (96 printable ASCII glyphs) shared by BOTH
-// scenes of the single ElectroBench binary, so the two scenes render
+// One 8x8-per-glyph bitmap font (96 printable ASCII glyphs) shared by ALL FOUR
+// scenes of the single ElectroBench binary, so every scene renders
 // identical HUD text:
-//   * src/main.cxx      draws it as fixed-function textured quads (GL 2.1)
-//   * src/tidebench.cxx draws it through shaders/ps14/hud_*.glsl (GL 3.3)
+//   * src/main.cxx   draws it as fixed-function textured quads (GL 2.1)
+//   * src/scene2.cxx draws it through shaders/ps14/hud_*.glsl (GL 3.3)
 //
 // Layout: 16 columns x 6 rows of 8x8 cells packed into the top-left of a
 // 512x64 RGBA8 texture (the used region is 128x48; the padding keeps
@@ -14,7 +14,7 @@
 #include <cstddef>
 
 // 96 glyphs, ASCII 32..127. Each glyph is 8 bytes, one byte per row,
-// LSB = leftmost pixel (the orientation used by Tidebench's atlas builder).
+// LSB = leftmost pixel (the orientation used by this atlas builder).
 static const unsigned char kFontAtlasGlyphs[96][8] = {
     {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, {0x18,0x3C,0x3C,0x18,0x18,0x00,0x18,0x00}, // space !
     {0x36,0x36,0x00,0x00,0x00,0x00,0x00,0x00}, {0x36,0x7F,0x36,0x7F,0x36,0x00,0x00,0x00}, // " #

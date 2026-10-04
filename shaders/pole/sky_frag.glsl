@@ -1,5 +1,5 @@
 #version 330 core
-// SCENE 4 (LAINBENCH): the sky.
+// SCENE 4 (power lines): the sky.
 //
 // BUILD-P10 — the old dome was a three-stop gradient (amber zenith, peach
 // middle, cream horizon) with a soft fbm cloud smeared over it. It was the
@@ -206,19 +206,53 @@ void main() {
         vec2 drift = vec2(uTime * 0.0060, -uTime * 0.0023);  // wind flows up-
                                                             // corridor, like
                                                             // the wires lean
-        float base = fbm3(cp * 0.50 + drift);
+        // BUILD-P21: THE DECK WAS ONE NOISE CELL BIG. `cp` is
+        // |dir.xz| / dir.y * 0.30, so over the frame this camera actually sees
+        // (52-degree vertical FOV, gazing 6.6 degrees up, i.e. -19 to +33
+        // degrees of elevation) its magnitude runs from about 0.47 at the top
+        // edge to 2.1 near the horizon. At cp*0.50 that is an input range of
+        // 0.23 to 1.05 — the ENTIRE visible sky was sampling less than one
+        // noise cell, which is why no cumulus appeared anywhere in the frame
+        // and why the y40-y120 bands measured 59-67% of their pixels below a
+        // local standard deviation of 0.006 (under 1.5/255). The clouds were
+        // not too sparse; there were none. Scaling the deck up puts roughly
+        // 2-3 cells across the frame, which is a cumulus field at this focal
+        // length. The erosion layer moves with it so it still bites holes in
+        // the edges rather than smearing them.
+        float base = fbm3(cp * 1.75 + drift);
         // a finer deck at a different speed ERODES the base: cloud edges are
         // billowed by the shear layer above them, they do not fade evenly
-        float det  = fbm2(cp * 2.70 - drift * 2.4 + 31.0);
+        float det  = fbm2(cp * 6.50 - drift * 2.4 + 31.0);
         // density, then threshold: this is what gives a cloud a hard-ish sunlit
         // crown and a soft dissolving skirt instead of one smooth blob
-        float dens = base - 0.22 * (det - 0.5);
+        // BUILD-P21: erosion 0.22 -> 0.32. The deck's density field was too
+        // UNIFORM, not too dense: value-noise fbm clusters tightly around 0.5,
+        // so a smoothstep threshold applied to it clips almost nothing at all
+        // and the sky comes back empty. Widening the high-frequency erosion
+        // raises the variance of `dens` first, which is what puts broken cloud
+        // on the deck — and because `det` is the finer field, extra erosion
+        // eats HOLES IN THE EDGES, which is where the silhouette comes from.
+        float dens = base - 0.32 * (det - 0.5);
         // BUILD-P10 TUNING: coverage is deliberately sparse. The first pass
         // thresholded at 0.505 and put a continuous sheet of cloud across the
         // whole top of the frame — a featureless pale band that read as fog,
         // and it is exactly what the old hand-drawn version of this sky did
         // NOT do: it had open orange sky right up to the frame edge.
-        cover = smoothstep(0.620, 0.780, dens) * 0.94;
+        //
+        // BUILD-P21: 0.620 -> 0.575, and it is worth being precise about why,
+        // because "more cloud" was the previous fix and it was wrong. The
+        // P10 complaint was not that there was too little cloud, it was that
+        // the cloud had no EDGES — a continuous blanket has no silhouette, so
+        // the eye reads it as fog however opaque it is. Measured on the t=12
+        // frame, 34-67% of every band from y40 to y200 sat below a local
+        // standard deviation of 0.006, i.e. under 1.5/255: half the frame was
+        // a mathematically smooth gradient with nothing in it at all. Loosening
+        // the threshold a little BUYS EDGES — more of the deck crosses into the
+        // partial-coverage band (0.62..0.78) and gets a dissolving skirt —
+        // rather than pushing more of it to a solid ceiling. The window is also
+        // NARROWED at the low end (0.560..0.780), which sharpens the edge it
+        // produces.
+        cover = smoothstep(0.560, 0.780, dens) * 0.94;
         cover *= 0.80 + 0.20 * smoothstep(0.40, 0.66, det);
         // the haze eats the last few degrees above the horizon
         cover *= smoothstep(0.035, 0.26, h);
@@ -235,7 +269,14 @@ void main() {
         // frame's white balance as surely as the dome does; leaving the crowns
         // creamy put pale yellow blobs over an orange sky, which reads as haze
         // rather than as cloud.
-        vec3 crown = vec3(1.36, 0.845, 0.475);
+        // BUILD-P21: green 0.845 -> 0.775, continuing the P15 direction. With
+        // real cumulus now in the frame for the first time, the frame's mean
+        // saturation fell from 0.479 to 0.372: the clouds are large, bright and
+        // were the least saturated thing in a picture whose whole subject is an
+        // amber sky. A cloud at this sun elevation has crossed the entire
+        // atmosphere to reach the camera, so pulling its green down is the
+        // physical answer, not just the flattering one.
+        vec3 crown = vec3(1.42, 0.775, 0.400);
         vec3 belly = vec3(0.40, 0.106, 0.058);
         float lift = pow(clamp(cover, 0.0, 1.0), 0.55);
         cloudCol = mix(belly, crown, lift);
@@ -243,6 +284,47 @@ void main() {
         cloudCol += vec3(1.00, 0.62, 0.30) * silver;
         // a touch of sky in the thin skirt so the cloud does not read as paint
         cloudCol += vec3(0.22, 0.105, 0.062) * (1.0 - lift) * max(mu, 0.0);
+    }
+
+    // ---- BUILD-P21: HIGH CIRRUS. The clear part of the sky was the other half
+    // of the dead-band problem, and no amount of cumulus fixes it. A dusk sky
+    // with open orange between the banks is NOT a gradient: at this sun
+    // elevation there is nearly always a thin, fast, high veil streaking
+    // across the clear air, and because it is ice aloft it is lit from BELOW
+    // and BELHIND — which is why cirrus at sunset is the one cloud that goes
+    // pink while everything under it goes grey. It is also almost transparent,
+    // so it adds structure to the empty half of the frame without adding
+    // coverage or hiding the amber.
+    {
+        // unrolled in the same deck space as the cumulus, at a much coarser
+        // scale and a different drift speed: cirrus is ~8 km up against the
+        // cumulus deck, so it moves slower across the sky AND shears the other
+        // way, which is what makes the two layers read as separate.
+        float ch = max(h, 0.055);
+        vec2 vp = dir.xz / ch * 0.30;
+        // Fibrous, so the noise is sampled about 4x finer in azimuth than in
+        // elevation. The SCALES matter and they are easy to get backwards:
+        // |dir.xz| / dir.y is cot(theta), which over the 10-30 degrees the
+        // frame actually sees only spans about 1.2 units, so a "stretched"
+        // factor of 0.11 collapsed the veil's entire vertical extent to a
+        // tenth of one noise cell — it became a function of azimuth alone and
+        // the measured dead bands did not move by a single count. Cirrus is
+        // stretched along its length, not smeared into a constant.
+        vec2 cir = vec2(vp.x * 9.0 - uTime * 0.010, vp.y * 4.5 + uTime * 0.004);
+        float cn = fbm2(cir);
+        float veil = smoothstep(0.48, 0.82, cn);
+        veil *= smoothstep(0.035, 0.20, h) * (1.0 - smoothstep(0.55, 0.95, h));
+        // lit from underneath and behind: brightest toward the sun, and it is
+        // PINK, not white — it is the last light of the day on high ice
+        float toward = pow(max(mu, 0.0), 2.2);
+        // BUILD-P21: 0.52 -> 0.34 mix, and a warmer dark end. At full strength
+        // the veil was measured to pull the frame's mean saturation from 0.479
+        // to 0.427 — it was greying the amber it was supposed to sit in. Ice
+        // cloud at this hour is barely opaque; what it contributes is
+        // STRUCTURE, and structure survives at a third of the opacity.
+        vec3 cirCol = mix(vec3(0.145, 0.070, 0.058), vec3(0.78, 0.32, 0.19),
+                          0.24 + 0.76 * toward);
+        sky = mix(sky, cirCol, clamp(veil * 0.26, 0.0, 0.26));
     }
 
     // ---- the sun: a TIGHT disc with limb darkening, plus the aureole the

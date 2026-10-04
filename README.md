@@ -1,5 +1,5 @@
 # ElectroBench
-ElectroBench is a 45+60+45+45 second long four-scene benchmark specifiacally designed to run on old and modern PCs, don't critise it by it using OpenGL 2.1, and GLSL 1.2, Even office PCs have low scores at it.
+ElectroBench is a 45+60+45+45 second long four-scene benchmark specifically designed to run on old and modern PCs, don't critise it by it using OpenGL 2.1, and GLSL 1.2, Even office PCs have low scores at it.
 It uses OpenGL 2.1/3.3, and C++, and uses make for compilation. It is designed to be a replacement for glmark (even though it is great and I used it before).
 
 Every scene is meant to stand up as a screenshot, not just as a frame counter: scene 1 now has a real sky and a real concrete floor instead of a flat slab in a void, and it opens on a scripted flyover. Scene 1's camera flags are `--flyover` / `--no-flyover`, and <kbd>F</kbd> toggles it live (any mouse input hands control back to you).
@@ -13,17 +13,15 @@ headless capture pipeline can still pin the framebuffer exactly.
 | Scene | Renderer | Contents |
 |---|---|---|
 | **Scene 1 — ElectroBench** (the OG) | OpenGL 2.1 / GLSL 1.2, fixed-function pipeline | **110 UZIs** on a power-trowelled concrete floor under a generated dusk sky, lit by a warm sun, opened by a three-act **flyover camera** (approach, runway pass down the array, pull back) |
-| **Scene 2 — TideBench** | OpenGL 3.3 core, pixel-shader workloads | An ocean under volumetric clouds (3DMark2001 SE "Nature" recreation) |
-| **Scene 3 — PoolBench** | OpenGL 3.3 core, analytic shaders | A white-and-red checkerboard-sky pool room lit by a visible luminous ceiling panel (with its own reflection lying down the water), grouted tiles, projected caustics and two waves of falling, splashing teapots (18 total) |
-| **Scene 4 — LainBench** | OpenGL 3.3 core, analytic shaders | A utility corridor at amber dusk under a **physically-based atmosphere** (Rayleigh + Mie, limb-darkened sun disc, wind-blown cumulus): weathered **concrete** pole shafts carrying the hardware the reference photograph shows — three tiers of pin insulators, transformer, cut-out fuses, step bolts, guy wires into buried anchors — wrapped in a **dense web of 16 thin slack telecom cables per bay** plus **hanging slack coils and service loops**, two lattice cell masts for scale, a **damp asphalt road with cast concrete kerbs that mirrors the sunset**, houses with lit windows. 4x MSAA |
+| **Scene 2 — Dusk ocean** | OpenGL 3.3 core, pixel-shader workloads | An ocean under volumetric clouds (3DMark2001 SE "Nature" recreation) |
+| **Scene 3 — Pool room** | OpenGL 3.3 core, analytic shaders | A white-and-red checkerboard-sky pool room lit by a visible luminous ceiling panel (with its own reflection lying down the water), grouted tiles, projected caustics and two waves of falling, splashing teapots (18 total) |
+| **Scene 4 — Power lines** | OpenGL 3.3 core, analytic shaders | A utility corridor at amber dusk under a **physically-based atmosphere** (Rayleigh + Mie, limb-darkened sun disc, wind-blown cumulus): weathered **concrete** pole shafts carrying the hardware the reference photograph shows — three tiers of pin insulators, transformer, cut-out fuses, step bolts, guy wires into buried anchors — wrapped in a **dense web of 16 thin slack telecom cables per bay** plus **hanging slack coils and service loops**, two lattice cell masts for scale, a **damp asphalt road with cast concrete kerbs that mirrors the sunset**, houses with lit windows. 4x MSAA |
 
 
 
 # Screenshots
 
 The 110 UZIs lying on the shadow-mapped concrete floor — every gun casts its own compact shadow anchored at its contact point (warm sun from the upper left). The floor is power-trowelled concrete: burnish sweeps, exposed aggregate, saw-cut control joints, a real sun specular lobe and aerial perspective out to the horizon:
-
-![Original GL 2.1 benchmark: 110 UZIs on a shadow-mapped concrete floor](docs/screenshots/uzi_wide.png)
 
 ![Original GL 2.1 benchmark: 110 UZIs on a shadow-mapped concrete floor](docs/screenshots/uzi_wide.png)
 
@@ -35,25 +33,25 @@ Close-up — mags resting on the ground, shadows clearly visible under each gun:
 
 ![ElectroBench flyover camera: high reveal, low runway pass and pull back over the 110-gun array](docs/screenshots/uzi_flyover.gif)
 
-The TideBench ocean scene — long cloud banks with sunward silver linings, two thin cirrus wisps riding high above the sun, a narrow orange glitter path down the middle of the sea, dark blue-purple water either side, raised swell banks:
+The dusk ocean scene — long cloud banks with sunward silver linings, two thin cirrus wisps riding high above the sun, a narrow orange glitter path down the middle of the sea, dark blue-purple water either side, raised swell banks:
 
-![ElectroBench TideBench scene](docs/screenshots/ps14_dusk_t36.png)
+![ElectroBench scene 2: the dusk ocean under volumetric clouds](docs/screenshots/ps14_dusk_t36.png)
 
-The PoolBench pool room — an infinite white-and-red checkerboard sky mirrored on open water, lit by a visible luminous ceiling panel whose reflection lies stretched down the pool, with grouted tiles and projected caustics crawling over the room, and two waves of teapots raining down in scattered positions, splashing on impact, then parking right where they fell (no bobbing, no righting — they stay put):
+The pool room — an infinite white-and-red checkerboard sky mirrored on open water, lit by a visible luminous ceiling panel whose reflection lies stretched down the pool, with grouted tiles and projected caustics crawling over the room, and two waves of teapots raining down in scattered positions, splashing on impact, then parking right where they fell (no bobbing, no righting — they stay put):
 
-![ElectroBench PoolBench scene](docs/screenshots/pool_teapot.png)
+![ElectroBench scene 3: the checkerboard pool room with the luminous ceiling panel mirrored on the water](docs/screenshots/pool_teapot.png)
 
 **In motion** — the full 18-second run (both teapot waves), captured headless frame-by-frame (1 s between frames): each impact runs the real Worthington timeline — a smooth circular collar of water leaves the surface and rises over 90 ms, the cavity pinches off and the sheet tears into crawling fingers over the next 210 ms, and a graded corona of small power-law droplets (5-26 mm, released progressively from the lip down) throws up on ballistic arcs while ripple rings expand and the mirrored checkerboard shatters across the surface. Each pot's reflection is a flat 2D black ghost smear anchored at its waterline, wobbling and breaking apart with every ring — the way real reflections die on disturbed water:
 
-![PoolBench in motion: teapot splash crowns, droplet streaks and ripple rings propagating across the checkerboard-mirrored water](docs/screenshots/pool_splash.gif)
+![Scene 3 in motion: teapot splash crowns, droplet streaks and ripple rings propagating across the checkerboard-mirrored water](docs/screenshots/pool_splash.gif)
 
-The LainBench power-line corridor — an orange dusk under a real atmosphere (Rayleigh sky, a tight limb-darkened sun disc sitting on the haze band, wind-blown cumulus with sunward silver linings). The camera aims at the **top** of the pole, because that is the subject: concrete shafts, three tiers of pin insulators, transformers and cut-outs, a **dense web of thin slack telecom cable** strung between the same two poles at a dozen heights, coils of spare cable hung off the brackets, and lattice transmission pylons standing behind the line. Below it, cast concrete kerbs and a damp road mirroring the sunset:
+The power-line corridor — an orange dusk under a real atmosphere (Rayleigh sky, a tight limb-darkened sun disc sitting on the haze band, wind-blown cumulus with sunward silver linings). The camera aims at the **top** of the pole, because that is the subject: concrete shafts, three tiers of pin insulators, transformers and cut-outs, a **dense web of thin slack telecom cable** strung between the same two poles at a dozen heights, coils of spare cable hung off the brackets, and lattice transmission pylons standing behind the line. Below it, cast concrete kerbs and a damp road mirroring the sunset:
 
-![ElectroBench LainBench scene: concrete and galvanised utility poles with a catenary cable web and open lattice transmission pylons against an orange dusk sky](docs/screenshots/lain_lines.png)
+![ElectroBench scene 4: concrete and galvanised utility poles with a catenary cable web and open lattice transmission pylons against an orange dusk sky](docs/screenshots/lain_lines.png)
 
 **In motion** — the auto-dolly walking the corridor (four positions down the run): the cable web sweeping overhead pole after pole, slack coils swinging past, guy wires pulling into their anchor blocks, and the telecom bundles peeling off toward the eaves:
 
-![LainBench in motion: concrete poles, guy wires and catenary spans over the dolly camera](docs/screenshots/lain_lines.gif)
+![Scene 4 in motion: concrete poles, guy wires and catenary spans over the dolly camera](docs/screenshots/lain_lines.gif)
 
 # How to build ?
 
@@ -99,9 +97,9 @@ into the scene), `ESC` quits. The FPS counter is a true frame-count average (SDL
 every frame accounted) — the on-screen value is a smoothed window, the final score uses **all** frames
 of the run.
 
-# Scene 2 — TideBench
+# Scene 2 — Dusk ocean
 
-TideBench is **scene 2 of the same ElectroBench binary** and is written in **OpenGL 3.3 core**.
+**Scene 2** lives in the same ElectroBench binary and is written in **OpenGL 3.3 core**.
 It pushes a heavy, realistic ocean workload —
 high-resolution environment reflections, a dense displaced ocean mesh, and a real volumetric
 light-transport model for the clouds. It is heavy **on purpose**: the goal is to push old and new
@@ -143,9 +141,9 @@ make
 
 Controls : `F` toggles the automatic fly-over camera, long-click + move orbits the camera, mouse wheel zooms, arrow keys look around, `ESC` quits.
 
-# Scene 3 — PoolBench
+# Scene 3 — Pool room
 
-PoolBench is **scene 3 of the same ElectroBench binary**, also **OpenGL 3.3 core**. It is the
+**Scene 3** lives in the same ElectroBench binary and is also **OpenGL 3.3 core**. It is the
 pool-room illusion: an infinite checkerboard ceiling-sky mirrored perfectly on open water.
 
 What it renders :
@@ -198,17 +196,23 @@ the whole fleet, `ESC` quits.
 Headless visual-test flags (used to verify the render output in CI-like environments):
 
 ```sh
+./build/ElectroBench --og-only   --screenshot /tmp/shot.ppm --shot-time 3
 ./build/ElectroBench --scene-only --width 960 --screenshot /tmp/shot.ppm --shot-times 6,20,38
-./build/ElectroBench --pool-only --width 960 --screenshot /tmp/shot.ppm --shot-times 2,3.2,5,12
-./build/ElectroBench --pole-only --width 960 --screenshot /tmp/shot.ppm --shot-times 2,9
-./build/ElectroBench --og-only --screenshot /tmp/shot.ppm --shot-time 3
+./build/ElectroBench --pool-only  --width 960 --screenshot /tmp/shot.ppm --shot-times 2,3.2,5,12
+./build/ElectroBench --pole-only  --width 960 --screenshot /tmp/shot.ppm --shot-times 2,9
 ```
 
-Any `--screenshot` path containing `%d` becomes a **frame sequence**: each `--shot-times` entry writes the next numbered frame (`frames/f-%03d.ppm` → `f-000.ppm`, `f-001.ppm`, …), so a timed burst assembles straight into an animation — that is exactly how the GIF above was made (16 shots, 0.5 s apart, stitched with ImageMagick).
+`--shot-time S` takes ONE frame at second S and works on all four scenes;
+`--shot-times A,B,C` takes a burst on any of them. Every `--screenshot` path
+containing `%d` becomes a **frame sequence**: each time entry writes the next
+numbered frame (`frames/f-%03d.ppm` → `f-000.ppm`, `f-001.ppm`, …), so a timed
+burst assembles straight into an animation — that is exactly how the GIF above
+was made (16 shots, 0.5 s apart, stitched with ImageMagick).
 
-# Scene 4 — LainBench
 
-LainBench is **scene 4 of the same ElectroBench binary**, also **OpenGL 3.3 core**. The Lain-style
+# Scene 4 — Power lines
+
+**Scene 4** lives in the same ElectroBench binary and is also **OpenGL 3.3 core**. The
 utility corridor: warm gravel under an amber dusk, two lines of steel poles marching to the
 horizon, and a wall of wires over your head.
 
@@ -295,9 +299,9 @@ Benchmark Results - Time : 45.0s, Average FPS : 12.4, Score : 308
 `build/ElectroBench` is the **only** binary, and it contains all four scenes. It runs the OG 60-second gun scene
 first, then probes an OpenGL 3.3 core context:
 
-- **found** — TideBench runs as scene 2, then PoolBench as scene 3, then LainBench as scene 4, on
-  the same session, and the final results screen shows **per-scene scores and the average of the
-  scenes that ran**
+- **found** — the dusk ocean runs as scene 2, then the pool room as scene 3, then the power lines
+  as scene 4, on the same session, and the final results screen shows **per-scene scores and the
+  average of the scenes that ran**
 - **not found** (GL 2.1-only drivers, old iGPUs) — all three GL 3.3 scenes skip themselves cleanly
   and the OG result stands, so the binary still runs on the ancient hardware it targets
 
@@ -316,9 +320,9 @@ On Windows the easiest route is [MSYS2](https://www.msys2.org/), which provides 
 ```sh
 g++ -std=c++17 -O2 -march=x86-64 -mtune=generic \
     src/main.cxx \
-    src/tidebench.cxx \
-    src/pool.cxx \
-    src/pole.cxx \
+    src/scene2.cxx \
+    src/scene3.cxx \
+    src/scene4.cxx \
     -o build/ElectroBench.exe \
     $(pkg-config --cflags --libs sdl2) \
     -lglew32 \
@@ -326,8 +330,8 @@ g++ -std=c++17 -O2 -march=x86-64 -mtune=generic \
     -lopengl32
 ```
 
-All four scenes are linked into that one binary: `src/tidebench.cxx`, `src/pool.cxx` and
-`src/pole.cxx` are scene modules (they have no `main()` of their own) that `src/main.cxx` hands the
+All four scenes are linked into that one binary: `src/scene2.cxx`, `src/scene3.cxx` and
+`src/scene4.cxx` are scene modules (they have no `main()` of their own) that `src/main.cxx` hands the
 same SDL session to. For
 the static build, prefer
 `make STATIC=1`: it passes `-DGLEW_STATIC`, uses `pkg-config --static`, and keeps the static object

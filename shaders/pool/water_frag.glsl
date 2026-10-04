@@ -14,15 +14,15 @@
 //     real pools go blue with depth), subsurface-ish body colour and distance
 //     haze into the sky tint.
 
-#define MAX_RINGS 54   // MUST match MAX_RINGS in src/pool.cxx: the scene
+#define MAX_RINGS 54   // MUST match MAX_RINGS in src/scene3.cxx: the scene
                        // uploads all 54 slots (18 pots x 3 private windows)
                        // in one glUniform4fv — a shorter array here makes the
                        // whole upload GL_INVALID_OPERATION (silent no-op),
                        // killing every ripple ring in the room.
-#define MAX_HULLS 18   // MUST match kFleetCount in src/pool.cxx: the scene
+#define MAX_HULLS 18   // MUST match kFleetCount in src/scene3.cxx: the scene
                        // uploads all 18 hull slots and 18 live-splash slots
                        // in one glUniform4fv each (BUILD-D7 waterline pass).
-#define MAX_BUBBLES 48 // MUST match MAX_BUBBLES in src/pool.cxx: the scene
+#define MAX_BUBBLES 48 // MUST match MAX_BUBBLES in src/scene3.cxx: the scene
                        // uploads all 48 subsurface bubble slots in one
                        // glUniform4fv (BUILD-D8 bubble plumes).
 
@@ -66,6 +66,21 @@ float V_SmithGGX(float NoV, float NoL, float a2) {
     float gl = NoV * sqrt(NoL * NoL * (1.0 - a2) + a2);
     return 0.5 / max(gv + gl, 1e-4);
 }
+// BUILD-P21: dither source, matched to the pole and ocean shaders.
+float hash21(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+// BUILD-P21: octave resolution gate — the same rule the pole scene uses
+// (BUILD-P15) and the ocean scene now uses. An octave whose wavelength is
+// smaller than the pixel that lands on it cannot be shaded, only aliased, so
+// it is faded out over exactly the band where it stops being resolvable.
+float octaveRes(float foot, float freq) {
+    return 1.0 - smoothstep(0.35, 1.10, foot * freq);
+}
+
 // Fresnel-Schlick with spherical-Gaussian approximation (Kulla-style SG
 // form used by modern engines: cheaper than pow5, visually identical)
 float F_Schlick(float u, float F0) {
@@ -297,10 +312,30 @@ void main() {
     float dSwellZ = 1.5 * sin(ax) * cos(az);
     float dChopX  = 7.3 * cos(bx) * sin(bz);
     float dChopZ  = 6.1 * sin(bx) * cos(bz);
-    float slopeX = 0.5 * (0.35 * dSwellX + dChopX);
-    float slopeZ = 0.5 * (0.35 * dSwellZ + dChopZ);
-    slopeX *= 0.016 * (1.0 - 0.55 * dist01);
-    slopeZ *= 0.016 * (1.0 - 0.55 * dist01);
+    // BUILD-P21: the amplitudes were 0.016 — about a 0.9-degree surface tilt,
+    // which is calmer than a real pool on any day it is used. Measured on the
+    // t=7 frame, the water was the FLATTEST part of the picture: the bottom
+    // three row bands sat at 17-22% of their pixels below a local standard
+    // deviation of 0.006 while every tiled surface above them was busier. The
+    // water is the subject of the room; it cannot be the smoothest thing in it.
+    //
+    // A THIRD, much finer scale is added (K = 19.0, about 33 cm) and every
+    // scale is gated on the fragment's own footprint rather than on raw
+    // distance: the old `1.0 - 0.55*dist01` is a guess about how big the room
+    // is, and it is wrong the moment the camera moves. This is the same
+    // octaveRes() rule the pole and ocean scenes use.
+    float foot = fwidth(vWorld.x) + fwidth(vWorld.z) + 1e-4;
+    float gSwell = octaveRes(foot, 1.9 / 6.2831853);
+    float gChop  = octaveRes(foot, 7.3 / 6.2831853);
+    float gFine  = octaveRes(foot, 19.0 / 6.2831853);
+    float cx = vWorld.x * 19.0 + uTime * 4.7;
+    float cz = vWorld.z * 16.3 - uTime * 4.1;
+    float dFineX = 19.0 * cos(cx) * sin(cz);
+    float dFineZ = 16.3 * sin(cx) * cos(cz);
+    float slopeX = 0.5 * (0.35 * dSwellX * gSwell + dChopX * gChop + 0.13 * dFineX * gFine);
+    float slopeZ = 0.5 * (0.35 * dSwellZ * gSwell + dChopZ * gChop + 0.13 * dFineZ * gFine);
+    slopeX *= 0.030;
+    slopeZ *= 0.030;
     vec3 Nw = normalize(vec3(-slopeX, 1.0, -slopeZ));
     float NoVw = clamp(dot(Nw, V), 1e-3, 1.0);
 
@@ -467,5 +502,11 @@ void main() {
     col *= 0.92;
     col = clamp((col * (2.51 * col + 0.03)) / (col * (2.43 * col + 0.59) + 0.14), 0.0, 1.0);
     col = pow(col, vec3(1.0 / 1.15));
-    fragColor = vec4(col, 1.0);
+    // BUILD-P21: two-tap triangular dither. The room's red and white tiles
+    // meet along long straight seams and the water carries a wide smooth
+    // blue ramp; both band visibly at 8 bits, and the banding is what turns a
+    // smooth surface into a visible "sheet of maths".
+    float dith = (hash21(gl_FragCoord.xy + fract(uTime) * 13.0)
+                 + hash21(gl_FragCoord.xy * 1.7 + 41.0) - 1.0) * 0.5;
+    fragColor = vec4(clamp(col + dith * (1.5 / 255.0), 0.0, 1.0), 1.0);
 }

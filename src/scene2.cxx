@@ -1055,6 +1055,16 @@ int OceanSceneParseArgs(int argc, char **argv) {
 // Shares main.cxx's --screenshot target with this scene.
 void OceanSceneSetScreenshot(const char *path) { gScreenshotPath = path; }
 
+// BUILD-P21: --shot-time S (singular) is the flag main.cxx documents for
+// "one frame at S seconds", but this scene only ever read --shot-times, so
+// passing the singular form set the path and left the list EMPTY: the scene
+// ignored the request, ran the full 45 s bench and exited having written
+// nothing, with no error anywhere. The singular form is now the one-element
+// list. An explicit --shot-times always wins.
+void OceanSceneSetShotTime(float t) {
+  if (gShotTimes.empty()) gShotTimes.push_back(t);
+}
+
 // --scene-only: this scene runs (and ends) on its own.
 void OceanSceneSetStandalone(bool standalone) { gStandaloneScene = standalone; }
 

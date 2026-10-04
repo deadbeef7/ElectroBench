@@ -9,10 +9,12 @@ SDL_GLContext glContext;
 // ---------------------------------------------------------------------------
 // CLI options (headless visual testing, mirrors the PS1.4 benchmark)
 //   --screenshot FILE  write a PPM screenshot and exit
-//   --shot-time S      seconds to run before the screenshot (default 3)
+//   --shot-time S      seconds to run before the screenshot (default 3).
+//                      Applies to scene 1 and to the three GL 3.3 scenes;
+//                      on those it is the one-element form of --shot-times.
 //   --orbit AZ EL      camera azimuth/elevation in degrees
 //   --dolly D          camera distance from the scene target
-//   --width W --height H  window size (default 1366x768)
+//   --width W --height H  window size (default 1280x720)
 // ---------------------------------------------------------------------------
 const char *gShotPath = nullptr;
 float gShotTime = 3.0f;
@@ -168,8 +170,8 @@ float cam_target[3] = {0.0f, 0.45f, 0.0f};
 // a high approach that reveals the whole 110-gun array, a low runway pass
 // down its length, then a pull back to the orbit — and it is driven off the
 // run clock, so it is identical on every machine and costs nothing per frame.
-// Any mouse input cancels it and hands control back (same rule the pool and
-// LainBench scenes use), and F toggles it.
+// Any mouse input cancels it and hands control back (same rule the pool-room
+// and power-lines scenes use), and F toggles it.
 // ---------------------------------------------------------------------------
 static bool gFlyover = true;
 static bool gFlyoverUserSet = false;
@@ -325,8 +327,8 @@ static void RenderHUD() {
 }
 
 // ---- scene 2 + 3 support ------------------------------------------------
-// This is ONE executable: src/tidebench.cxx is the ocean scene module and
-// src/pool.cxx is the pool-room scene module (neither has a main of its own);
+// This is ONE executable: src/scene2.cxx is the ocean scene module and
+// src/scene3.cxx is the pool-room scene module (neither has a main of its own);
 // both are linked straight into this binary. After the 60 s gun run this file
 // hands the SDL session to them in turn, and each GL 3.3 scene probes its own
 // core context, skipping itself when the device cannot provide one.
@@ -334,17 +336,20 @@ int RunOceanScene(bool *gaveUpOut);       // scene 2 entry (GL 3.3 ocean)
 extern double gFusedTideScore;            // scene 2's final score
 int  OceanSceneParseArgs(int argc, char **argv); // scene 2's CLI flags
 void OceanSceneSetScreenshot(const char *path);  // share --screenshot
+void OceanSceneSetShotTime(float t);            // --shot-time (singular)
 void OceanSceneSetStandalone(bool standalone);   // --scene-only
 int RunPoolScene(bool *gaveUpOut);        // scene 3 entry (GL 3.3 pool room)
 extern double gFusedPoolScore;            // scene 3's final score
 int  PoolSceneParseArgs(int argc, char **argv);  // scene 3's CLI flags
 void PoolSceneSetScreenshot(const char *path);   // share --screenshot
+void PoolSceneSetShotTime(float t);             // --shot-time (singular)
 void PoolSceneSetStandalone(bool standalone);    // --pool-only
 // SCENE 4: the power-lines scene (orange sky, poles + wire tangle).
 int RunPoleScene(bool *gaveUpOut);        // scene 4 entry (GL 3.3 power lines)
 extern double gFusedPoleScore;            // scene 4's final score
 int  PoleSceneParseArgs(int argc, char **argv);  // scene 4's CLI flags
 void PoleSceneSetScreenshot(const char *path);   // share --screenshot
+void PoleSceneSetShotTime(float t);             // --shot-time (singular)
 void PoleSceneSetStandalone(bool standalone);    // --pole-only
 void changeSize(int w, int h);            // resize handler (defined below)
 
@@ -848,7 +853,7 @@ void applyCamera() {
 
 // Renders the scene (110 UZIs on a shadowed floor!) and calculates FPS
 void renderScene() {
-  unsigned int timet = SDL_GetTicks();
+  double sceneSeconds = (double)(SDL_GetPerformanceCounter() - gPerfStartTick) / gPerfFreq;
 
   // ---- results screen: scene cleared, score on the window, then exit ----
   if (gResultsShown) {
@@ -919,7 +924,15 @@ void renderScene() {
 
   // Headless screenshot capture: read BEFORE the swap so the pixels analysed
   // are exactly what this frame rendered (the PS1.4 bench does the same).
-  if (gShotPath != nullptr && timet >= (unsigned int)(gShotTime * 1000.0f)) {
+  // BUILD-P21: the gate used to compare SDL_GetTicks(), which is PROCESS
+  // uptime, not time since the scene started. Everything above the render
+  // loop (OBJ + texture load, five shader compiles, the shadow pass) is
+  // charged to it, so on a slow renderer the shot window was already gone
+  // before frame 1 and the flag silently produced nothing - or fired on the
+  // first frame. gPerfStartTick is taken immediately before the loop, so the
+  // same performance counter the fps accounting uses gives scene-relative
+  // time.
+  if (gShotPath != nullptr && sceneSeconds >= (double)gShotTime) {
     std::vector<unsigned char> px((size_t)gWinW * gWinH * 3);
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
     glReadPixels(0, 0, gWinW, gWinH, GL_RGB, GL_UNSIGNED_BYTE, px.data());
@@ -1110,9 +1123,14 @@ void renderScene() {
     SDL_Quit();
     exit(0);
   }
-  if (timet >= 60000) {
+  // BUILD-P21: the 60 s bench cut was ALSO on process uptime, while the
+  // score underneath it divided the frame count by SCENE time. On a machine
+  // with a slow start the loop ended early and the average FPS - the headline
+  // number of the whole benchmark - was divided by too small an interval, so
+  // the reported score was too high. Both sides now use the same scene clock.
+  if (sceneSeconds >= 60.0) {
     // Score from ALL frames of the run (not the last 1-second window).
-    double elapsed = (double)(SDL_GetPerformanceCounter() - gPerfStartTick) / gPerfFreq;
+    double elapsed = sceneSeconds;
     if (elapsed <= 0.0) elapsed = 1.0;
     double avgFps = (double)gTotalFrames / elapsed;
     double score = avgFps * avgFps * 2.0;
@@ -1160,7 +1178,7 @@ void renderScene() {
       fflush(stdout);
 
       // ---- scene 4: the GL 3.3 power-lines scene (orange sky + wires) ----
-      printf("Scene 4/4 : LainBench (GL 3.3)\n");
+      printf("Scene 4/4 : Power lines (GL 3.3)\n");
       fflush(stdout);
       bool gaveUpPole = false;
       int rcPole = RunPoleScene(&gaveUpPole);
@@ -1170,7 +1188,7 @@ void renderScene() {
         SDL_Quit();
         exit(0);
       } else {
-        printf("LainBench scene skipped: no OpenGL 3.3 core context on this device\n");
+        printf("Power-lines scene skipped: no OpenGL 3.3 core context on this device\n");
       }
       fflush(stdout);
 
@@ -1472,6 +1490,12 @@ int main(int argc, char **argv) {
     PoolSceneSetScreenshot(gShotPath);
     PoleSceneSetScreenshot(gShotPath);
   }
+  // BUILD-P21: forward the singular --shot-time too. It used to be a
+  // scene-1-only flag, so `--scene-only --screenshot f.ppm --shot-time 36`
+  // gave the GL 3.3 scenes a path and no times and did nothing at all.
+  OceanSceneSetShotTime(gShotTime);
+  PoolSceneSetShotTime(gShotTime);
+  PoleSceneSetShotTime(gShotTime);
 
   if (gPoleOnly) {
     PoleSceneSetStandalone(true);
@@ -1479,7 +1503,7 @@ int main(int argc, char **argv) {
     int rc = RunPoleScene(&gaveUp);
     if (rc == 1) {
       fprintf(stderr, "ElectroBench: no OpenGL 3.3 core context on this device - "
-                      "the LainBench (power lines) scene cannot run here\n");
+                      "the power-lines (scene 4) scene cannot run here\n");
       return EXIT_FAILURE;
     }
     return 0;

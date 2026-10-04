@@ -76,7 +76,7 @@ void main() {
     // hot linear values: the tonemap knee + gamma at the end wash colours
     // toward pastel, so this overshoot keeps the tiles reading as blazing
     // white / deep pure red on screen. Must match kTileA/kTileB in
-    // src/pool.cxx (the water uniforms).
+    // src/scene3.cxx (the water uniforms).
     vec3 tileA = vec3(2.30, 2.30, 2.26);   // hot white
     vec3 tileB = vec3(1.50, 0.008, 0.010); // deep pure red
     vec3 albedo = mix(tileB, tileA, c);
@@ -192,7 +192,17 @@ void main() {
     // a clip wall, so tiles stay BLAZING but never flatten — and the deep-red
     // tiles stop washing out to salmon (ACES keeps their hue while crushing
     // the near-zero G/B, so red finally reads RED).
-    col *= 0.85;                                  // exposure under the shoulder
+    // BUILD-P21: exposure 0.85 -> 0.74. Measured on the t=7 frame, 4.32% of the
+    // whole picture sat above 0.97 luma and the top band alone was 9.36% over,
+    // with a 222x60 SOLID MASS (fill 0.68) of fused panel-and-tile in the
+    // corner. A tile that clips is a tile with no gradient left in it: the
+    // shoulder can only roll off a highlight it is given, so at 0.85 the
+    // brightest white tiles were already pinned at 0.96-0.98 and every bit more
+    // room brightness bought flat paper, not light. Just under half a stop back
+    // puts the hottest plain tile on the shoulder where its gradient survives —
+    // and the panel keeps its own hard highlight, which is the one place a
+    // clipped value is correct.
+    col *= 0.74;
     col = clamp((col * (2.51 * col + 0.03)) / (col * (2.43 * col + 0.59) + 0.14), 0.0, 1.0);
     col = pow(col, vec3(1.0 / 2.2));
     fragColor = vec4(col, 1.0);

@@ -32,7 +32,7 @@ uniform vec3  uSunDir;
 uniform vec3  uHorizonColor;
 uniform vec3  uWaterColor;
 
-#define MAX_CLOUDS 7             // must match sky_frag.glsl and tidebench.cxx
+#define MAX_CLOUDS 7             // must match sky_frag.glsl and scene2.cxx
 uniform int   uCloudCount;
 uniform float uCloudAzim[MAX_CLOUDS];   // centre azimuth, radians
 uniform float uCloudElev[MAX_CLOUDS];   // centre elevation, radians
@@ -43,19 +43,101 @@ out vec4 fragColor;
 
 const float PI = 3.14159265359;
 
+// BUILD-P21: ONE DISPLAY TRANSFORM, SHARED WITH THE SKY DOME.
+// Kept byte-identical in shaders/ps14/sky_frag.glsl, for the same reason the
+// pool and pole scenes keep byte-identical copies: the sea reflects the sky out
+// of the HDR cubemap and then runs the result through this function ITSELF, so
+// any difference between the two curves shows up immediately as a reflection
+// that does not match the thing it is reflecting.
+//
+// Before this pass the dome tone mapped with per-channel Reinhard PLUS a warm
+// highlight roll-off and the sea tone mapped with per-channel Reinhard and NO
+// roll-off, so the horizon band and the sun path came back out of the water
+// visibly different from the sky directly above them - which is the one thing
+// a mirror cannot get wrong and still look like a mirror.
+vec3 encodeScene(vec3 hdr, float dith) {
+    // ACES (Narkowicz) shoulder: rolls the sun disc and the glitter path off
+    // instead of letting them clip into flat paper.
+    const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
+    // EXPOSURE. ACES is not a like-for-like replacement for Reinhard: at a
+    // scene value of 0.2 it returns 0.30 where Reinhard returned 0.17, so
+    // swapping the curve in with no compensating stop lifted this frame's
+    // mean luma from 0.299 to 0.375 and pushed p95 from 0.653 to 0.833. The
+    // dusk sea is the DARKEST thing in a dusk frame and has to stay that way,
+    // so the curve change is paid for here, once, in one place both passes
+    // share, rather than by walking every radiance in the scene.
+    hdr *= 0.70;
+    vec3 x = clamp(max(hdr, vec3(0.0)), 0.0, 8.0);
+    x = clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+
+    // Dusk highlight roll-off. A real sun does not go white, it goes through
+    // orange on its way to being clipped; per-channel tonemapping alone sends
+    // the brightest 2% of a saturated orange frame straight to paper.
+    float lum0 = dot(x, vec3(0.2126, 0.7152, 0.0722));
+    const float warmStart = 0.45;
+    if (lum0 > warmStart) {
+        float f = clamp((lum0 - warmStart) / 0.20, 0.0, 1.0);
+        f = f * f;
+        vec3 warm = vec3(1.0, 0.62, 0.36);
+        warm *= lum0 / max(dot(warm, vec3(0.2126, 0.7152, 0.0722)), 1e-4);
+        x = mix(x, warm, f);
+    }
+
+    vec3 g = pow(max(x, vec3(0.0)), vec3(1.0 / 2.2));
+
+    // ---- THE GRADE, and it is applied in DISPLAY space on purpose. Gamma
+    // encoding roughly HALVES apparent saturation: a 0.52 channel ratio in
+    // linear arrives near 0.28 on screen. A lift applied BEFORE the gamma is
+    // therefore mostly cancelled by it, which is why the whole dusk-ocean
+    // frame measured a mean saturation of 0.130 - a brown-grey mush rather
+    // than a sunset - while the same lift applied post-gamma is worth roughly
+    // twice as much. (The pole scene grades pre-gamma against a much hotter
+    // palette and gets away with it; this palette cannot.)
+    float lum = dot(g, vec3(0.2126, 0.7152, 0.0722));
+    g = mix(g, g * vec3(0.93, 0.98, 1.13),
+            (1.0 - smoothstep(0.02, 0.34, lum)) * 0.50);   // cool shadows
+    g = mix(g, g * vec3(1.07, 1.01, 0.92),
+            smoothstep(0.52, 1.00, lum) * 0.45);          // warm highlights
+    g = clamp(mix(vec3(lum), g, 1.34), 0.0, 1.0);
+
+    // Two-tap triangular dither. The dusk gradient is the widest smooth ramp
+    // in the project - a whole ocean fading into a whole sky - and 8-bit
+    // output draws visible contour lines across exactly that ramp.
+    g += dith * (1.5 / 255.0);
+    return clamp(g, 0.0, 1.0);
+}
+
+// BUILD-P21: octave resolution gate, the same rule the pole scene uses
+// (BUILD-P15). An octave whose wavelength is smaller than the pixel that lands
+// on it cannot be shaded, only aliased, so it is faded out over exactly the
+// band where it stops being resolvable and not one step earlier. `foot` is the
+// fragment's world-space footprint in metres; `freq` is the octave's frequency
+// in cycles per metre.
+float octaveRes(float foot, float freq) {
+    return 1.0 - smoothstep(0.35, 1.10, foot * freq);
+}
+
 // NORMAL FIELD: smooth sines (finite differences of this drive the lighting).
 // Scale/speed of each line must match the DISPLACEMENT field in sea_vert.glsl
 // so crest banks light up where the geometry actually rises. The displacement
 // shader additionally sharpens crests and adds two long swells; that asymmetry
 // is deliberate (sharp banks, smooth lighting).
-float waveHeight(vec2 p, float t) {
+//
+// BUILD-P21: each octave is gated on the fragment's own world footprint. The
+// gate values are computed ONCE per fragment in main() and passed in, so all
+// three finite-difference taps share them: six smoothsteps per pixel, not
+// eighteen, and — more to the point — a fragment two hundred metres out gets a
+// normal that is the AVERAGE slope of the water inside its pixel instead of
+// the slope at one arbitrary point inside it. Those are different numbers, and
+// the second one is what made the far sea shimmer.
+float waveHeight(vec2 p, float t, vec4 rA, vec2 rB) {
     float h = 0.0;
-    h += sin(dot(p, vec2(0.98,  0.20)) * 0.170 + t * 1.30) * 1.55;
-    h += sin(dot(p, vec2(-0.64,  0.77)) * 0.240 + t * 1.60) * 1.00;
-    h += sin(dot(p, vec2( 0.36, -0.93)) * 0.380 + t * 2.10) * 0.55;
-    h += sin(dot(p, vec2(-0.91, -0.42)) * 0.540 + t * 2.70) * 0.34;
-    h += sin(dot(p, vec2( 0.59,  0.81)) * 0.860 + t * 3.40) * 0.20;
-    h += sin(dot(p, vec2(-0.20,  0.98)) * 1.450 + t * 4.40) * 0.11;
+    h += sin(dot(p, vec2(0.98,  0.20)) * 0.170 + t * 1.30) * 1.55 * rA.x;
+    h += sin(dot(p, vec2(-0.64,  0.77)) * 0.240 + t * 1.60) * 1.00 * rA.y;
+    h += sin(dot(p, vec2( 0.36, -0.93)) * 0.380 + t * 2.10) * 0.55 * rA.z;
+    h += sin(dot(p, vec2(-0.91, -0.42)) * 0.540 + t * 2.70) * 0.34 * rA.w;
+    h += sin(dot(p, vec2( 0.59,  0.81)) * 0.860 + t * 3.40) * 0.20 * rB.x;
+    h += sin(dot(p, vec2(-0.20,  0.98)) * 1.450 + t * 4.40) * 0.11 * rB.y;
     return h;
 }
 
@@ -63,7 +145,8 @@ float waveHeight(vec2 p, float t) {
 // cloud deck used by the sky. The eight 3D lobes, morph, and boundary erosion
 // below intentionally match sky_frag.glsl, so the moving shadow footprint
 // tracks the visible cloud instead of being a separate decorative mask.
-float cloudHash21(vec2 p) {
+// BUILD-P21: also the dither source for encodeScene() below.
+float hash21(vec2 p) {
     vec3 p3 = fract(vec3(p.xyx) * 0.1031);
     p3 += dot(p3, p3.yzx + 33.33);
     return fract((p3.x + p3.y) * p3.z);
@@ -73,10 +156,10 @@ float cloudValueNoise(vec2 p) {
     vec2 i = floor(p);
     vec2 f = fract(p);
     f = f * f * (3.0 - 2.0 * f);
-    float a = cloudHash21(i);
-    float b = cloudHash21(i + vec2(1.0, 0.0));
-    float c = cloudHash21(i + vec2(0.0, 1.0));
-    float d = cloudHash21(i + vec2(1.0, 1.0));
+    float a = hash21(i);
+    float b = hash21(i + vec2(1.0, 0.0));
+    float c = hash21(i + vec2(0.0, 1.0));
+    float d = hash21(i + vec2(1.0, 1.0));
     return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
 
@@ -168,17 +251,20 @@ float cloudShadow(vec3 world, vec3 sd) {
 
 // Three octaves of small analytic wavelets: extra normal detail that would
 // be wasted (and aliased) as vertex displacement, but sells micro-chop up
-// close. Frequencies chosen so screen-space wavelength stays > ~4px at typical
-// orbit distances — content finer than that reads as noise on real GPUs.
-void detailNormals(vec2 p, float t, float dist, inout vec2 grad) {
-    float fade = exp(-dist * 0.004);   // micro-chop is a NEAR-camera feature
-    if (fade < 0.02) return;
+// close. BUILD-P21: the old fade was exp(-dist * 0.004), a distance guess that
+// is wrong the moment the camera changes height or pitch — the same reason
+// scene 4 moved its gates onto resolution. These run on the footprint instead.
+void detailNormals(vec2 p, float t, float foot, inout vec2 grad) {
+    float g1 = octaveRes(foot, 0.183);    // K = 1.15 / 2pi
+    float g2 = octaveRes(foot, 0.366);    // K = 2.30 / 2pi
+    float g3 = octaveRes(foot, 0.700);    // K = 4.40 / 2pi
+    if (g1 + g2 + g3 < 0.02) return;
     float w1 = sin(dot(p, vec2(0.86, 0.51)) * 1.15 + t * 5.10);
     float w2 = sin(dot(p, vec2(-0.44, 0.90)) * 2.30 + t * 6.80);
     float w3 = sin(dot(p, vec2(0.22, -0.97)) * 4.40 + t * 8.60);
-    grad += vec2(0.86, 0.51) * 1.15 * w1 * 0.045;
-    grad += vec2(-0.44, 0.90) * 2.30 * w2 * 0.022;
-    grad += vec2(0.22, -0.97) * 4.40 * w3 * 0.010;
+    grad += vec2(0.86, 0.51) * 1.15 * w1 * 0.045 * g1;
+    grad += vec2(-0.44, 0.90) * 2.30 * w2 * 0.022 * g2;
+    grad += vec2(0.22, -0.97) * 4.40 * w3 * 0.010 * g3;
 }
 
 void main() {
@@ -187,12 +273,24 @@ void main() {
 
     // ---- analytic wave normal (finite differences of the wave field) ----
     float dist = length(vWorld.xz - uEyePos.xz);
-    float e = 0.35;
-    float hC = waveHeight(vWorld.xz, uTime);
-    float hX = waveHeight(vWorld.xz + vec2(e, 0.0), uTime);
-    float hZ = waveHeight(vWorld.xz + vec2(0.0, e), uTime);
+    // BUILD-P21: the finite-difference epsilon was a FIXED 0.35 m, so every
+    // pixel sampled the wave field as a point however large its own footprint
+    // was. Past a few hundred metres one pixel spans more than a wavelength and
+    // the gradient came out as a difference of two nearly unrelated phases —
+    // not a normal, just noise, which is exactly what "the sea shimmers at the
+    // horizon" is made of. The epsilon now tracks the footprint, so the
+    // gradient is an area average: the mean slope of the water inside the
+    // pixel, which is the only thing the pixel can actually show.
+    float foot = fwidth(vWorld.x) + fwidth(vWorld.z) + 1e-4;
+    vec4 rA = vec4(octaveRes(foot, 0.02705), octaveRes(foot, 0.03820),
+                   octaveRes(foot, 0.06048), octaveRes(foot, 0.08594));
+    vec2 rB = vec2(octaveRes(foot, 0.13682), octaveRes(foot, 0.23079));
+    float e = max(0.35, foot * 0.60);
+    float hC = waveHeight(vWorld.xz, uTime, rA, rB);
+    float hX = waveHeight(vWorld.xz + vec2(e, 0.0), uTime, rA, rB);
+    float hZ = waveHeight(vWorld.xz + vec2(0.0, e), uTime, rA, rB);
     vec2 grad = vec2(-(hX - hC) / e, -(hZ - hC) / e);
-    detailNormals(vWorld.xz, uTime, dist, grad);
+    detailNormals(vWorld.xz, uTime, foot, grad);
     vec3 N = normalize(vec3(grad.x, 1.0, grad.y));
 
     // ---- phase 1: addressing - ripple normal map, scrolled over the surface
@@ -220,6 +318,13 @@ void main() {
     vec2 sunXZ = normalize(L.xz);
     vec2 dirXZ = normalize(vWorld.xz - uEyePos.xz + vec2(1e-4));
     float sunAlign = max(dot(dirXZ, sunXZ), 0.0);
+    // BUILD-P21: hoisted. The sky colour just above this fragment's own
+    // horizon is needed in three places — as the foam's ambient light, as the
+    // far-sea mirror target and as the haze target — and it used to be
+    // sampled after the foam that wanted it.
+    vec2 dxdz = vWorld.xz - uEyePos.xz;
+    vec3 skyAtHorizon = texture(uSkyEnvTex,
+        normalize(vec3(dxdz.x, 0.012, dxdz.y))).rgb;
     vec3 Rdark = normalize(vec3(R.x, abs(R.y) * 1.8 + 0.62, R.z)); // steep: upper sky
     R = normalize(mix(Rdark, R, pow(sunAlign, 6.0)));
 
@@ -272,8 +377,21 @@ void main() {
     float chaos = texture(uRippleTex, vUV * 190.0 + vec2(uTime * 0.011, -uTime * 0.007)).g;
     float foam = texture(uFoamTex, vUV * 23.0 + vec2(uTime * 0.010, 0.0)).r;
     foam *= texture(uFoamTex, vUV * 41.0 - vec2(0.0, uTime * 0.013)).g;
+    // BUILD-P21: a breaking crest is the finest thing in the frame — it is
+    // genuinely sub-pixel past a few hundred metres — so it now runs on the
+    // same footprint gate as the wave octaves instead of painting a full-
+    // contrast speckle pattern out to the horizon. Real whitecaps merge into
+    // a pale band long before they stop being individually visible.
+    foam *= octaveRes(foot, 0.62);
     foam *= crest * slopeFacing * (0.35 + 0.65 * chaos);
-    body += vec3(0.55, 0.48, 0.58) * foam * 0.55; // dim warm-gray foam
+    // BUILD-P21: foam is not a grey constant. It is a rough near-white surface
+    // a few centimetres thick, so what it mostly returns to the eye is the sky
+    // directly above it, plus whatever sun actually reaches it. Lighting it
+    // from a hard-coded tint is what made breaking crests read as confetti
+    // stuck onto the water rather than as water thrown into the air.
+    vec3 foamLit = skyAtHorizon * 0.62
+                 + vec3(1.0, 0.50, 0.24) * (sunDiffuse * shadow) * 0.40;
+    body += foamLit * foam * 0.62;
 
     // subsurface glow against the light: THIN CRESTS transmit a dim jade-green
     // where sunlight actually passes through the water. Gated to the sun's
@@ -286,9 +404,6 @@ void main() {
     // ---- horizon sheen: the far sea is a MIRROR of the sky band above it
     // (grazing fresnel -> nearly pure reflection up there), so by geometry
     // the water edge converges into the sky with no haze knob needed.
-    vec2 dxdz = vWorld.xz - uEyePos.xz;
-    vec3 skyAtHorizon = texture(uSkyEnvTex,
-        normalize(vec3(dxdz.x, 0.012, dxdz.y))).rgb;
     float horizonMix = smoothstep(1500.0, 1900.0, dist);
     color = mix(color, skyAtHorizon, horizonMix * 0.85);
 
@@ -300,23 +415,49 @@ void main() {
     float haze = 1.0 - exp(-dist * 0.00075);
     color = mix(color, skyAtHorizon, haze * (0.30 + 0.70 * haze));
 
-    // ---- phase 3: address + blend - sun glitter path ----
-    // tight sparkle core + broad soft sheen, gated to the sun's azimuth column
-    // so the glow stays a NARROW path down the middle with dark water either
-    // side. Killed entirely inside cloud shadows, tinted orange, and the
-    // sparkle variance rides the ripple chaos.
+    // ---- phase 3: address + blend - sun glitter path, as a REAL MICROFACET
+    // DISTRIBUTION. Before BUILD-P21 the path was three hand-fitted
+    // pow(N·H, n) lobes with FIXED exponents: a "pinpoint sparkle" 520 wide is
+    // sub-pixel past a few hundred metres, so the far half of the glitter path
+    // was per-pixel noise the eye reads as shimmer, while the near half was
+    // blown-out white beads. Physically the lobe WIDENS with distance — many
+    // facets inside one pixel average into a smooth glare — so roughness is
+    // driven by the same footprint that gates the wave octaves, and one
+    // GGX + Smith + Fresnel term does the work of all three lobes.
     vec3 H = normalize(L + V);
-    float NdH = max(dot(N, H), 0.0);
+    float NdH = clamp(dot(N, H), 0.0, 1.0);
+    float NoV = clamp(dot(N, V), 1e-3, 1.0);
+    float NoL = clamp(dot(N, L), 0.0, 1.0);
+    float VoH = clamp(dot(V, H), 0.0, 1.0);
+    float rough = clamp(0.085 + foot * 0.016, 0.085, 0.30);
+    float alpha = rough * rough;                 // GGX: alpha = roughness^2
+    float a2 = alpha * alpha;
+    float dd = NdH * NdH * (a2 - 1.0) + 1.0;
+    float Dg = a2 / (3.14159265 * dd * dd);      // GGX / Trowbridge-Reitz NDF
+    // Smith height-correlated visibility (the same form the pool scene uses, so
+    // the project shades water one way everywhere).
+    float gv = NoL * sqrt(NoV * NoV * (1.0 - a2) + a2);
+    float gl2 = NoV * sqrt(NoL * NoL * (1.0 - a2) + a2);
+    float Vis = 0.5 / max(gv + gl2, 1e-4);
+    // Fresnel-Schlick at water's F0. pow5 written as a squared-cubed chain.
+    float fq = 1.0 - VoH;
+    float fq2 = fq * fq;
+    float Fr = 0.02 + 0.98 * (fq2 * fq2 * fq);
+    float spR = Dg * Vis * Fr / (4.0 * NoV * max(NoL, 1e-3));
+    // Bounded roll-off. A mirror sun on a facet is orders of magnitude over 1.0;
+    // the rational form keeps that energy in the frame without letting it clip
+    // into a flat white bead (the same fix the pole scene's P19 specular got).
+    float sp = spR / (1.0 + spR * 0.235);
+    // Gated to the sun's azimuth column so the glow stays a NARROW path with
+    // dark water either side, killed inside cloud shadows, and its sparkle
+    // variance rides the ripple chaos.
     float pathGate = pow(sunAlign, 10.0) * 0.96 + 0.04;
     float sparkleGate = (0.55 + 0.90 * chaos);
-    float glint = pow(NdH, 520.0) * 6.0;              // pinpoint sparkles
-    float glintMid = pow(NdH, 90.0) * 0.55;           // mid falloff keeps it grainy
-    float glintWide = pow(NdH, 14.0) * 0.22;          // soft sheen around the path
-    color += vec3(1.0, 0.56, 0.24) * (glint + glintMid + glintWide * pathGate)
+    color += vec3(1.0, 0.56, 0.24) * sp * 0.42
              * (0.25 + max(L.y, 0.0) * 1.2) * pathGate * shadow * sparkleGate;
 
-    // HDR tone map + gamma
-    color = color / (color + vec3(1.0));
-    color = pow(color, vec3(1.0 / 2.2));
-    fragColor = vec4(color, 1.0);
+    // ---- SHARED DISPLAY TRANSFORM (identical to the sky dome's) ----------
+    float dith = (hash21(gl_FragCoord.xy + fract(uTime) * 13.0)
+                 + hash21(gl_FragCoord.xy * 1.7 + 41.0) - 1.0) * 0.5;
+    fragColor = vec4(encodeScene(color, dith), 1.0);
 }

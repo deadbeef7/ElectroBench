@@ -2,15 +2,15 @@
 # ElectroBench Makefile
 # Windows (MSYS2), macOS (Homebrew), Linux
 #
-# ONE executable: build/ElectroBench contains ALL THREE scenes (the OG GL 2.1
-# gun scene, the GL 3.3 dusk-ocean scene, and the GL 3.3 pool-room scene).
-# There is no second binary and no child process: src/tidebench.cxx and
-# src/pool.cxx are linked straight into this program as scene modules and
+# ONE executable: build/ElectroBench contains ALL FOUR scenes (the OG GL 2.1
+# gun scene in src/main.cxx, and the GL 3.3 scenes in src/scene2.cxx, src/
+# scene3.cxx and src/scene4.cxx). There is no second binary and no child
+# process: the three scene modules are linked straight into this program and
 # handed the same SDL session by src/main.cxx.
 #
-# This file defines exactly ONE binary target ($(BIN)). There is no tidebench,
-# poolbench, legacy or per-scene target, and no per-scene second compile: the
-# three .cxx files are just the three object files of the one executable.
+# This file defines exactly ONE binary target ($(BIN)). There is no legacy or
+# per-scene target, and no per-scene second compile: the four .cxx files are
+# just the four object files of the one executable.
 # ============================================================
 
 CXX ?= g++
@@ -34,18 +34,20 @@ else
     OBJDIR := $(BUILD)
 endif
 
-OBJS := $(OBJDIR)/main.o $(OBJDIR)/tidebench.o $(OBJDIR)/pool.o $(OBJDIR)/pole.o
+OBJS := $(OBJDIR)/main.o $(OBJDIR)/scene2.o $(OBJDIR)/scene3.o $(OBJDIR)/scene4.o
 
 BIN = $(BUILD)/ElectroBench$(STATIC_SUFFIX)
 
 # Obsolete second-executable artifacts. Older revisions built the ocean scene as
 # its own binary (build/TideBench, ElectroBenchPS14, the CMake tree in
-# build-debug/). Nothing builds them any more, so `make` deletes any that an
-# older build left behind.
+# build-debug/), and earlier revisions of this branch named the scene objects
+# after their old working titles. Nothing builds any of them any more, so
+# `make` deletes any that an older build left behind.
 OBSOLETE := $(BUILD)/TideBench $(BUILD)/TideBench.exe \
             $(BUILD)/TideBench-static $(BUILD)/TideBench-static.exe \
             $(BUILD)/ElectroBenchPS14 $(BUILD)/ElectroBenchPS14.exe \
             $(BUILD)/PoolBench $(BUILD)/PoolBench.exe \
+            $(OBJDIR)/tidebench.o $(OBJDIR)/pool.o $(OBJDIR)/pole.o \
             ElectroBenchPS14 ElectroBenchPS14.exe PoolBench PoolBench.exe
 
 # ------------------------------------------------------------
@@ -159,24 +161,24 @@ $(OBJDIR):
 	mkdir -p $@
 
 # ------------------------------------------------------------
-# ElectroBench (the single binary: OG gun scene + ocean scene + pool scene)
+# ElectroBench (the single binary: scenes 1-4)
 # ------------------------------------------------------------
 
 $(OBJDIR)/main.o: src/main.cxx src/font_atlas.hxx | $(OBJDIR)
 	$(CXX) $(CPPFLAGS) $(PKG_CFLAGS) $(GLEW_CFLAGS) $(CXXFLAGS) -c $< -o $@
 
-$(OBJDIR)/tidebench.o: src/tidebench.cxx src/font_atlas.hxx | $(OBJDIR)
+$(OBJDIR)/scene2.o: src/scene2.cxx src/font_atlas.hxx | $(OBJDIR)
 	$(CXX) $(CPPFLAGS) $(PKG_CFLAGS) $(GLEW_CFLAGS) $(CXXFLAGS) -c $< -o $@
 
-$(OBJDIR)/pool.o: src/pool.cxx src/font_atlas.hxx | $(OBJDIR)
+$(OBJDIR)/scene3.o: src/scene3.cxx src/font_atlas.hxx | $(OBJDIR)
 	$(CXX) $(CPPFLAGS) $(PKG_CFLAGS) $(GLEW_CFLAGS) $(CXXFLAGS) -c $< -o $@
 
-$(OBJDIR)/pole.o: src/pole.cxx src/font_atlas.hxx | $(OBJDIR)
+$(OBJDIR)/scene4.o: src/scene4.cxx src/font_atlas.hxx | $(OBJDIR)
 	$(CXX) $(CPPFLAGS) $(PKG_CFLAGS) $(GLEW_CFLAGS) $(CXXFLAGS) -c $< -o $@
 
 $(BIN): $(OBJS) | $(OBJDIR)
 	@echo "========================================"
-	@echo " Building ElectroBench (all three scenes in one binary)"
+	@echo " Building ElectroBench (all four scenes in one binary)"
 	@echo " Platform: $(PLATFORM)"
 	@echo "========================================"
 ifeq ($(STATIC),1)

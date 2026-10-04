@@ -28,16 +28,16 @@ mkdir -p build/static
 
 CFLAGS="-Ilib -IC:/msys64/mingw32/include/SDL2 -Dmain=SDL_main -DGLEW_STATIC -D_WIN32_WINNT=0x0501 -std=c++17 -O2 -m32"
 
-g++ $CFLAGS -c src/main.cxx      -o build/static/main.o
-g++ $CFLAGS -c src/tidebench.cxx -o build/static/tidebench.o
-g++ $CFLAGS -c src/pool.cxx      -o build/static/pool.o
-g++ $CFLAGS -c src/pole.cxx      -o build/static/pole.o
+g++ $CFLAGS -c src/main.cxx   -o build/static/main.o
+g++ $CFLAGS -c src/scene2.cxx -o build/static/scene2.o
+g++ $CFLAGS -c src/scene3.cxx -o build/static/scene3.o
+g++ $CFLAGS -c src/scene4.cxx -o build/static/scene4.o
 
 g++ -std=c++17 -O2 -m32 \
     -D_WIN32_WINNT=0x0501 \
     -static -static-libgcc -static-libstdc++ \
-    build/static/main.o build/static/tidebench.o build/static/pool.o \
-    build/static/pole.o \
+    build/static/main.o build/static/scene2.o build/static/scene3.o \
+    build/static/scene4.o \
     -o build/ElectroBench-static.exe \
     -lmingw32 -mwindows -lSDL2main -lSDL2 -lm \
     -lkernel32 -luser32 -lgdi32 -lwinmm -limm32 -lole32 -loleaut32 \

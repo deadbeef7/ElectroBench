@@ -1,12 +1,12 @@
-// ElectroBench — scene 4 of the single ElectroBench binary: "LainBench", the
-// power-lines scene. A late-afternoon Japanese suburb memory: orange sky,
+// ElectroBench — scene 4 of the single ElectroBench binary: the power-lines
+// scene. A late-afternoon Japanese suburb memory: orange sky,
 // white drifting clouds, and a tangle of utility poles, crossarms, insulators,
 // transformers and sagging wires receding into the heat haze — the
 // serial-experiments mood, built entirely from analytic geometry (no model
 // files, no textures: every cylinder, catenary and quad is generated on the CPU
 // at startup).
 //
-// Like src/tidebench.cxx and src/pool.cxx, this translation unit is NOT a
+// Like src/scene2.cxx and src/scene3.cxx, this translation unit is NOT a
 // program of its own. It exports RunPoleScene(), which main.cxx calls as the
 // fourth scene of the one and only ElectroBench executable.
 //
@@ -2008,7 +2008,7 @@ static void RenderResults() {
   std::snprintf(big, sizeof(big), "SCORE : %.0f", gResultsScore);
   std::snprintf(timeLine, sizeof(timeLine), "Time : %.1fs   Average FPS : %.1f",
                 gResultsElapsed, gResultsFps);
-  std::snprintf(hint, sizeof(hint), "LainBench score");
+  std::snprintf(hint, sizeof(hint), "Scene 4 score");
 
   float cx = 0.5f * (float)gWindowWidth;
   float cy = 0.5f * (float)gWindowHeight;
@@ -2358,6 +2358,12 @@ int PoleSceneParseArgs(int argc, char **argv) {
 }
 
 void PoleSceneSetScreenshot(const char *path) { gScreenshotPath = path; }
+// BUILD-P21: --shot-time S (singular) is main.cxx's documented one-frame flag
+// but only --shot-times ever reached this scene, so the singular form set the
+// path with an EMPTY list and was silently ignored. See scene2.cxx.
+void PoleSceneSetShotTime(float t) {
+  if (gShotTimes.empty()) gShotTimes.push_back(t);
+}
 void PoleSceneSetStandalone(bool standalone) { gStandaloneScene = standalone; }
 
 static void WriteScreenshotPPM(const char *path) {

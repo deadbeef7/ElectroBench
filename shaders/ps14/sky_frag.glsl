@@ -41,6 +41,70 @@ out vec4 fragColor;
 
 const float PI = 3.14159265359;
 
+// BUILD-P21: ONE DISPLAY TRANSFORM, SHARED WITH THE SEA.
+// Kept byte-identical in shaders/ps14/sea_frag.glsl, for the same reason the
+// pool and pole scenes keep byte-identical copies: the sea reflects this dome
+// out of the HDR cubemap and then runs the result through the same function
+// ITSELF, so any difference between the two curves shows up immediately as a
+// reflection that does not match the thing it is reflecting.
+//
+// Before this pass the dome tone mapped with per-channel Reinhard PLUS a warm
+// highlight roll-off and the sea tone mapped with per-channel Reinhard and NO
+// roll-off, so the horizon band and the sun path came back out of the water
+// visibly different from the sky directly above them - which is the one thing
+// a mirror cannot get wrong and still look like a mirror.
+vec3 encodeScene(vec3 hdr, float dith) {
+    // ACES (Narkowicz) shoulder: rolls the sun disc and the glitter path off
+    // instead of letting them clip into flat paper.
+    const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
+    // EXPOSURE. ACES is not a like-for-like replacement for Reinhard: at a
+    // scene value of 0.2 it returns 0.30 where Reinhard returned 0.17, so
+    // swapping the curve in with no compensating stop lifted this frame's
+    // mean luma from 0.299 to 0.375 and pushed p95 from 0.653 to 0.833. The
+    // dusk sea is the DARKEST thing in a dusk frame and has to stay that way,
+    // so the curve change is paid for here, once, in one place both passes
+    // share, rather than by walking every radiance in the scene.
+    hdr *= 0.70;
+    vec3 x = clamp(max(hdr, vec3(0.0)), 0.0, 8.0);
+    x = clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+
+    // Dusk highlight roll-off. A real sun does not go white, it goes through
+    // orange on its way to being clipped; per-channel tonemapping alone sends
+    // the brightest 2% of a saturated orange frame straight to paper.
+    float lum0 = dot(x, vec3(0.2126, 0.7152, 0.0722));
+    const float warmStart = 0.45;
+    if (lum0 > warmStart) {
+        float f = clamp((lum0 - warmStart) / 0.20, 0.0, 1.0);
+        f = f * f;
+        vec3 warm = vec3(1.0, 0.62, 0.36);
+        warm *= lum0 / max(dot(warm, vec3(0.2126, 0.7152, 0.0722)), 1e-4);
+        x = mix(x, warm, f);
+    }
+
+    vec3 g = pow(max(x, vec3(0.0)), vec3(1.0 / 2.2));
+
+    // ---- THE GRADE, and it is applied in DISPLAY space on purpose. Gamma
+    // encoding roughly HALVES apparent saturation: a 0.52 channel ratio in
+    // linear arrives near 0.28 on screen. A lift applied BEFORE the gamma is
+    // therefore mostly cancelled by it, which is why the whole dusk-ocean
+    // frame measured a mean saturation of 0.130 - a brown-grey mush rather
+    // than a sunset - while the same lift applied post-gamma is worth roughly
+    // twice as much. (The pole scene grades pre-gamma against a much hotter
+    // palette and gets away with it; this palette cannot.)
+    float lum = dot(g, vec3(0.2126, 0.7152, 0.0722));
+    g = mix(g, g * vec3(0.93, 0.98, 1.13),
+            (1.0 - smoothstep(0.02, 0.34, lum)) * 0.50);   // cool shadows
+    g = mix(g, g * vec3(1.07, 1.01, 0.92),
+            smoothstep(0.52, 1.00, lum) * 0.45);          // warm highlights
+    g = clamp(mix(vec3(lum), g, 1.34), 0.0, 1.0);
+
+    // Two-tap triangular dither. The dusk gradient is the widest smooth ramp
+    // in the project - a whole ocean fading into a whole sky - and 8-bit
+    // output draws visible contour lines across exactly that ramp.
+    g += dith * (1.5 / 255.0);
+    return clamp(g, 0.0, 1.0);
+}
+
 // Wisp flattening: clouds 7+ (the thin streaks above the sun) are vertically
 // squashed so they read as cirrus veils instead of miniature cumulus puffs.
 float wispSquash(int i) { return i >= 7 ? 0.55 : 1.0; }
@@ -237,6 +301,37 @@ void main() {
     float belt = pow(anti, 2.5) * smoothstep(0.0, 0.02, h) * (1.0 - smoothstep(0.03, 0.20, h));
     sky += vec3(0.20, 0.10, 0.115) * belt * 0.55;
 
+    // ---- LOW STRATUS BARS. BUILD-P21. Measured on the baseline frame: every
+    // hand-placed bank sits between 9 and 27 degrees elevation with a 1.5-2.9
+    // degree radius, so nothing existed below about 6 degrees — and that empty
+    // strip measured 95% of its pixels with a local standard deviation under
+    // 0.006, i.e. below 1.5/255. It was the single largest dead-flat region in
+    // the picture, and it sat directly above the brightest, busiest part of the
+    // frame. Real dusk skies are almost never clear that close to the horizon:
+    // the last few degrees carry thin, broken, hard-foreshortened cloud bars
+    // lit from UNDERNEIGH because the sun is under them. They are the
+    // difference between "gradient" and "sky", and they cost one band.
+    {
+        float band = smoothstep(0.004, 0.022, h) * (1.0 - smoothstep(0.050, 0.150, h));
+        if (band > 0.002) {
+            // Foreshortening: real cloud streets compress toward the horizon,
+            // so the sample's vertical frequency RISES as h falls.
+            float az = atan(dir.z, dir.x);
+            float squash = 22.0 + 86.0 * smoothstep(0.0, 0.15, h);
+            vec2 sp = vec2(az * 2.6 + uTime * 0.006, h * squash);
+            float n1 = erosionNoise(sp);
+            float n2 = erosionNoise(sp * vec2(2.3, 1.7) + 5.1);
+            float bars = smoothstep(0.505, 0.735, n1 * 0.72 + n2 * 0.28);
+            bars *= band;
+            // lit from below, so the undersides are the brightest thing in the
+            // band toward the sun and the tops are never visible at all
+            float under = pow(max(sunAmount, 0.0), 3.0);
+            vec3 barCol = mix(vec3(0.070, 0.044, 0.068), vec3(1.15, 0.44, 0.16),
+                              0.20 + 0.80 * under);
+            sky = mix(sky, barCol, clamp(bars * 0.82, 0.0, 0.82));
+        }
+    }
+
     // ---- procedural volumetric clouds composite over the glow ----
     vec4 surface = cloudSample(dir);
     float cl = surface.x;
@@ -337,23 +432,17 @@ void main() {
     vec3 sunColHot = vec3(9.2, 5.1, 1.9);
     sky = mix(sky, sunColHot, clamp(disc + halo, 0.0, 1.0));
 
-    // Env-cubemap pass keeps HDR values (the sea shader tone maps after adding
-    // glitter). The on-screen dome pass tone maps + gammas right here so the
-    // visible sky matches what the water reflects — with the SAME orange
-    // highlight roll-off the sea uses: dusk sun/bloom rolling past 0.60
-    // luminance blends toward the sun colour instead of desaturating to
-    // white, so the glow band around the horizon stays warm to the last pixel.
-    vec3 tm = max(sky, vec3(0.0)) / (max(sky, vec3(0.0)) + vec3(1.0));
-    float lum = dot(tm, vec3(0.2126, 0.7152, 0.0722));
-    float warmStart = 0.45;
-    if (lum > warmStart) {
-        float f = clamp((lum - warmStart) / 0.20, 0.0, 1.0);
-        f = f * f;
-        vec3 warm = vec3(1.0, 0.62, 0.36);
-        warm *= lum / max(dot(warm, vec3(0.2126, 0.7152, 0.0722)), 1e-4);
-        tm = mix(tm, warm, f);
+    // The env-cubemap pass keeps HDR values (the sea shader runs the result
+    // through the SAME encodeScene() after adding glitter). The on-screen dome
+    // pass encodes here, so the visible sky and its reflection in the water
+    // cannot drift apart: dusk sun and bloom roll through orange instead of
+    // desaturating to paper, the glow band stays warm to the last pixel, and
+    // both passes get the same grade and the same dither.
+    vec3 outCol = sky;
+    if (uTonemap > 0.5) {
+        float dith = (hash21(gl_FragCoord.xy + fract(uTime) * 13.0)
+                     + hash21(gl_FragCoord.xy * 1.7 + 41.0) - 1.0) * 0.5;
+        outCol = encodeScene(sky, dith);
     }
-    tm = pow(max(tm, vec3(0.0)), vec3(1.0 / 2.2));
-    vec3 outCol = mix(sky, tm, uTonemap);
     fragColor = vec4(outCol, 1.0);
 }

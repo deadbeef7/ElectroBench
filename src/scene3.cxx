@@ -4,7 +4,7 @@
 // and bobs on the surface with realistic-ish physics (gravity, buoyancy,
 // drag, damping) on OpenGL 3.3 core.
 //
-// Like src/tidebench.cxx, this translation unit is NOT a program of its own.
+// Like src/scene2.cxx, this translation unit is NOT a program of its own.
 // It exports RunPoolScene(), which main.cxx calls as the third scene of the
 // one and only ElectroBench executable.
 //
@@ -1260,7 +1260,7 @@ static bool gIsHoldingMouse = false;
 static int gXOld = 0, gYOld = 0;
 static float gCamDist = 7.2f;
 
-// results screen + fused-run plumbing (same pattern as tidebench.cxx)
+// results screen + fused-run plumbing (same pattern as scene2.cxx)
 static bool gResultsShown = false;
 static double gResultsElapsed = 0.0, gResultsFps = 0.0, gResultsScore = 0.0;
 static double gResultsShownAt = 0.0;
@@ -1968,6 +1968,12 @@ int PoolSceneParseArgs(int argc, char **argv) {
 }
 
 void PoolSceneSetScreenshot(const char *path) { gScreenshotPath = path; }
+// BUILD-P21: --shot-time S (singular) is main.cxx's documented one-frame flag
+// but only --shot-times ever reached this scene, so the singular form set the
+// path with an EMPTY list and was silently ignored. See scene2.cxx.
+void PoolSceneSetShotTime(float t) {
+  if (gShotTimes.empty()) gShotTimes.push_back(t);
+}
 void PoolSceneSetStandalone(bool standalone) { gStandaloneScene = standalone; }
 
 static void WriteScreenshotPPM(const char *path) {
