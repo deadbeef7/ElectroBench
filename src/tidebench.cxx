@@ -44,10 +44,14 @@
 #include <SDL2/SDL_opengl.h>
 
 #include "../lib/asset_path.hxx"
+
+// BUILD-P20: 720p fullscreen is the default presentation; main.cxx clears
+// this for headless capture so the screenshot framebuffer stays pinned.
+extern bool gWindowedMode;
 #include "font_atlas.hxx" // shared HUD font data and atlas layout
 
 // ------------------------------------------------------------------ constants
-#define NAME "ElectroBench - Dusk Ocean"
+#define NAME "ElectroBench - Scene 2 (Dusk Ocean)"
 #define WIDTH 1366
 #define HEIGHT 768
 #define BENCH_MILLISECONDS 45000 // 45 s like the original ElectroBench
@@ -483,7 +487,7 @@ static double gResultsShownAt = 0.0;
 // keep the single-scene display short.
 static const double kResultsScreenSeconds = 4.0;
 // Label shown on this scene's results screen (distinguishes it from the OG's).
-static const char *gSceneName = "Dusk Ocean";
+static const char *gSceneName = "Scene 2";
 // Final score of this scene, read by main.cxx for the combined per-scene +
 // average results screen.
 double gFusedTideScore = 0.0;
@@ -1098,7 +1102,8 @@ int RunOceanScene(bool *gaveUpOut) {
   }
 
   gWindow = SDL_CreateWindow(NAME, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, winW, winH,
-                             SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
+                             SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE
+                             | (gWindowedMode ? 0u : SDL_WINDOW_FULLSCREEN));
   if (gWindowWidthOverride > 0) {
     gWindowWidth = winW;   // a headless WM may never send a RESIZED event
     gWindowHeight = winH;

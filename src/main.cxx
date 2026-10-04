@@ -16,7 +16,19 @@ SDL_GLContext glContext;
 // ---------------------------------------------------------------------------
 const char *gShotPath = nullptr;
 float gShotTime = 3.0f;
-int gWinW = 1366, gWinH = 768;
+// BUILD-P20: 720p FULLSCREEN IS NOW THE DEFAULT PRESENTATION.
+// 1366x768 was an odd, non-standard size that only ever suited the first
+// machine this ran on; every screenshot, every committed asset and the
+// project's whole framing were authored at 16:9 anyway. 1280x720 is the
+// canonical 720p frame and is what the scene screenshots are measured at.
+int gWinW = 1280, gWinH = 720;
+// Fullscreen is requested by default so the bench presents at a real 720p
+// mode rather than in a window on a desktop that is not 1280x720.
+// It is forced OFF for headless capture (--screenshot) and by --windowed,
+// because a fullscreen window's framebuffer is chosen by the display mode
+// rather than by us, and the screenshot pipeline has to be able to pin the
+// framebuffer exactly or the assets stop being reproducible.
+bool gWindowedMode = false;
 // debug: dump the shadow map and CPU-evaluate the shadow test at floor points
 bool gDumpShadow = false;
 // debug: disable shadow test for ground-truth shadow-diff screenshots
@@ -105,9 +117,10 @@ void initialiseWindow() {
   SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
   SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
 
-  window = SDL_CreateWindow(NAME, SDL_WINDOWPOS_UNDEFINED,
+  window = SDL_CreateWindow("ElectroBench - Scene 1", SDL_WINDOWPOS_UNDEFINED,
                             SDL_WINDOWPOS_UNDEFINED, gWinW, gWinH,
-                            SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN);
+                            SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN
+                            | (gWindowedMode ? 0u : SDL_WINDOW_FULLSCREEN));
   if (window == NULL) {
     fprintf(stderr, "Window could not be created! SDL_Error: %s\n",
             SDL_GetError());
@@ -402,22 +415,22 @@ static void RenderResults() {
   HudText(cx - HudTextWidth(timeLine, 1.0f) * 0.5f,
           cy + kGlyphH * kGlyphScale * 0.5f + 24.0f, timeLine);
   if (gFusedEnabled) {
-    snprintf(scene1, sizeof(scene1), "ElectroBench (guns)  : %.0f", gFusedOgScore);
-    snprintf(scene2, sizeof(scene2), "Dusk Ocean (scene 2) : %s",
+    snprintf(scene1, sizeof(scene1), "Scene 1 (guns)  : %.0f", gFusedOgScore);
+    snprintf(scene2, sizeof(scene2), "Scene 2 (ocean) : %s",
              gFusedTideRan ? "" : "skipped (needs GL 3.3)");
     if (gFusedTideRan) {
       char scoreTxt[24];
       snprintf(scoreTxt, sizeof(scoreTxt), "%.0f", gFusedTideScore);
       strncat(scene2, scoreTxt, sizeof(scene2) - strlen(scene2) - 1);
     }
-    snprintf(scene3, sizeof(scene3), "Pool Room (scene 3)  : %s",
+    snprintf(scene3, sizeof(scene3), "Scene 3 (pool)  : %s",
              gFusedPoolRan ? "" : "skipped (needs GL 3.3)");
     if (gFusedPoolRan) {
       char scoreTxt[24];
       snprintf(scoreTxt, sizeof(scoreTxt), "%.0f", gFusedPoolScore);
       strncat(scene3, scoreTxt, sizeof(scene3) - strlen(scene3) - 1);
     }
-    snprintf(scene4, sizeof(scene4), "LainBench (scene 4): %s",
+    snprintf(scene4, sizeof(scene4), "Scene 4 (lain) : %s",
              gFusedPoleRan ? "" : "skipped (needs GL 3.3)");
     if (gFusedPoleRan) {
       char scoreTxt[24];
@@ -1403,6 +1416,9 @@ int main(int argc, char **argv) {
     std::string arg = argv[i];
     if (arg == "--screenshot" && i + 1 < argc) {
       gShotPath = argv[++i];
+      gWindowedMode = true;   // pin the framebuffer for reproducible capture
+    } else if (arg == "--windowed") {
+      gWindowedMode = true;
     } else if (arg == "--shot-time" && i + 1 < argc) {
       gShotTime = (float)atof(argv[++i]);
     } else if (arg == "--orbit" && i + 2 < argc) {
@@ -1413,6 +1429,7 @@ int main(int argc, char **argv) {
       gDollySet = true;
     } else if (arg == "--width" && i + 1 < argc) {
       gWinW = atoi(argv[++i]);
+      gWindowedMode = true;   // pinned framebuffer, never a display mode
     } else if (arg == "--height" && i + 1 < argc) {
       gWinH = atoi(argv[++i]);
     } else if (arg == "--dump-shadow") {

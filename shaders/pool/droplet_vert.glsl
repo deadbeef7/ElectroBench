@@ -19,6 +19,14 @@ uniform mat4 uViewProj;
 
 out vec2 vUV;
 out float vBright;
+// BUILD-P20: THE SHUTTER. The stretch below is a geometric smear along the
+// drop's own path, and it is passed to the fragment stage because a smear
+// is not free: the same drop spread over a longer streak is DIMMER. Without
+// that, speed makes a drop longer AND keeps it fully opaque, which is the
+// signature of a painted bead on a stick. With it, a fast drop is a long,
+// faint, translucent streak and a slow one is a round bead — which is what a
+// camera actually records at a finite exposure.
+out float vStretch;
 
 void main() {
     float speed = length(aVel);
@@ -34,11 +42,16 @@ void main() {
     dir = dl > 1e-5 ? dir / dl : vec2(0.0, 1.0);
     vec2 ortho = vec2(-dir.y, dir.x);
 
-    // long axis along the motion: ~2.5x at drop speed, round when slow
-    float stretch = 1.0 + min(speed * 0.35, 1.6);
+    // long axis along the motion. BUILD-P20: 0.35/1.6 -> 0.85/4.0. The old
+    // cap put a 7.8 m/s ejecta at 2.6x, which is roughly the drop's own
+    // aspect ratio and reads as an ellipsoid rather than a trail; a real
+    // shutter smears the drop along its path for a good fraction of its own
+    // length, so the cap is lifted to 5x.
+    float stretch = 1.0 + min(speed * 0.85, 4.0);
     vec2 offset = dir * (aUV.y * aSize.x * stretch)
                 + ortho * (aUV.x * aSize.x);
     gl_Position = vec4((s0 + offset) * c0.w, c0.z, c0.w);
     vUV = aUV;
     vBright = aSize.y;
+    vStretch = stretch;
 }

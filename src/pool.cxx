@@ -59,6 +59,10 @@
 #endif
 
 #include "../lib/asset_path.hxx"
+
+// BUILD-P20: 720p fullscreen is the default presentation; main.cxx clears
+// this for headless capture so the screenshot framebuffer stays pinned.
+extern bool gWindowedMode;
 #include "font_atlas.hxx" // shared HUD font data and atlas layout
 
 // lodepng.c is compiled into main.o (via lib/util.hxx) as C++ (its symbols
@@ -73,7 +77,7 @@ unsigned lodepng_decode_file(unsigned char **out, unsigned *w, unsigned *h,
                              unsigned bitdepth);
 
 // ------------------------------------------------------------------ constants
-#define NAME "ElectroBench - Pool Room"
+#define NAME "ElectroBench - Scene 3 (Pool Room)"
 #define WIDTH 1366
 #define HEIGHT 768
 #define BENCH_MILLISECONDS 45000 // 45 s, same as the other scenes
@@ -1261,7 +1265,7 @@ static bool gResultsShown = false;
 static double gResultsElapsed = 0.0, gResultsFps = 0.0, gResultsScore = 0.0;
 static double gResultsShownAt = 0.0;
 static const double kResultsScreenSeconds = 4.0;
-static const char *gSceneName = "Pool Room";
+static const char *gSceneName = "Scene 3";
 double gFusedPoolScore = 0.0;   // read by main.cxx for the combined screen
 static bool gFusedDone = false;
 static bool gStandaloneScene = false;
@@ -1367,7 +1371,7 @@ static void RenderHUD() {
   // look changed massively across commits — stale-build screenshots must be
   // detectable at a glance)
   char line1[128];
-  std::snprintf(line1, sizeof(line1), "FPS: %d   build D9", gFps);
+  std::snprintf(line1, sizeof(line1), "FPS: %d   Scene 3   build D9", gFps);
   RenderText(16.0f, 16.0f, line1);
 }
 
@@ -1786,8 +1790,19 @@ static void RenderScene() {
   lastFrame = now;
   if (dt > 0.1) dt = 0.1; // clamp hitches so physics never tunnels
 
-  float t = (float)(now - gStartTime);
-  UpdatePhysics(now, dt);
+  // BUILD-P20: SCENE 3 IS NOW REPRODUCIBLE. BUILD-D8 moved the screenshot
+  // gate onto the simulation clock but left every DRAW reading the wall
+  // clock, so uTime — and therefore the dome's checker drift, its caustics,
+  // the water's ripple phases and the hull-foam ramp — was a function of how
+  // fast the machine happened to be. Two runs of the identical binary at the
+  // identical flag came out differing on 96% of pixels, max channel
+  // difference 248 (see REFERENCES.md BUILD-P19). That is not merely
+  // untidy: it makes the scene impossible to A/B, so every realism change
+  // here would have been unfalsifiable. Everything below the physics driver
+  // now runs on the simulation clock; `now` stays only where real elapsed
+  // time is genuinely wanted (frame dt, the results screen).
+  const double simNow = gSimTime;
+  UpdatePhysics(simNow, dt);
 
   if (gAutoCam) UpdateAutoCamera((float)gSimTime);  // SIM time: framing stays
                                                     // deterministic at any FPS
@@ -1818,12 +1833,12 @@ static void RenderScene() {
   glViewport(0, 0, gWindowWidth, gWindowHeight);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 
-  DrawSky(view, eye, now);
-  DrawFleet(view, eye, false, now);      // pots above the surface
-  DrawWater(view, eye, now);        // opaque water covers the submerged parts;
+  DrawSky(view, eye, simNow);
+  DrawFleet(view, eye, false, simNow);  // pots above the surface
+  DrawWater(view, eye, simNow);   // opaque water covers the submerged parts;
                                     // its shader now paints the reflected pots
                                     // as 2D black ghost silhouettes
-  DrawCrowns(view, now);
+  DrawCrowns(view, simNow);
   DrawJets(view, eye);
   DrawDroplets(view, eye);
   RenderHUD();
@@ -2121,7 +2136,8 @@ int RunPoolScene(bool *gaveUpOut) {
     SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, msaa ? 1 : 0);
     SDL_GL_SetAttribute(SDL_GL_SAMPLES, msaa ? 4 : 0);
     gWindow = SDL_CreateWindow(NAME, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, winW, winH,
-                               SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
+                               SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE
+                               | (gWindowedMode ? 0u : SDL_WINDOW_FULLSCREEN));
     if (!gWindow) {
       std::fprintf(stderr, "Window could not be created! SDL_Error: %s\n", SDL_GetError());
       return EXIT_FAILURE;

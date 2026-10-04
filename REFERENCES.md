@@ -179,6 +179,78 @@ Realism takeaways applied:
   glazing bars over them. Emissive geometry is only believable if the frame behind it still exists —
   the bars and the sill are what stop a lit pane reading as a sticker.
 
+## BUILD-P20: scenes are numbered 1-4, the bench presents at 720p fullscreen, and scene 3 can finally be A/B'd
+
+**The scenes are Scene 1, Scene 2, Scene 3, Scene 4** everywhere now — window
+titles, the in-scene HUD, the fused results breakdown and the README table.
+The branded names (TideBench, PoolBench, LainBench) survive as subtitles, because
+a results screen that reads only "Scene 2 : 812" tells you nothing about what
+scored 812.
+
+**720p fullscreen is the default presentation.** 1366x768 was never 16:9 and
+only ever suited the first machine this ran on; every screenshot and every
+committed asset had been authored at 16:9 regardless. Fullscreen is requested
+with `SDL_WINDOW_FULLSCREEN` (not `_DESKTOP`, which would hand the framebuffer
+to the desktop's mode instead of pinning 1280x720). It is forced off for
+`--screenshot` and `--width`, and there is an explicit `--windowed`. That last
+part is not decoration: a fullscreen window's framebuffer is chosen by the
+display mode rather than by us, so leaving it on would silently break every
+committed asset. Verified end to end — `--pole-only --width 1280` still writes
+exactly 1280x720.
+
+### The one that mattered: scene 3 could not be measured at all
+
+BUILD-P19 established that scene 3's screenshots are not reproducible — two runs
+of the *identical binary* at the identical flag differed on 96% of pixels with a
+maximum channel difference of 248 — and that the noise floor this puts under
+every scene-3 number is around 1.1 to 3.2 percentage points. That is not a
+tidiness problem. **It makes the scene impossible to A/B**, so a "hyper
+realism pass" on it would have been a sequence of unfalsifiable edits — which
+is precisely the mistake BUILD-P19 had already made once.
+
+The cause was a half-finished BUILD-D8 fix. The screenshot gate had been moved
+onto the simulation clock so `--shot-times` means the same thing at any frame
+rate, but every DRAW still read the wall clock and handed it to the shaders as
+`uTime`. So the dome's checker drift, its caustics, the water's ripple phases
+and the hull-foam ramp were all functions of how fast the machine happened to
+be. Scene 4, which never had the split, reproduced bit-for-bit throughout.
+
+The fix is one line of intent: capture the simulation clock and pass it to
+`UpdatePhysics` and to all five draws, leaving `NowSeconds()` only where real
+elapsed time is genuinely wanted (frame dt and the results screen).
+
+**Verified: two runs of the same binary at the same flags now differ by a
+maximum channel difference of 0 over all 921,600 pixels.** Scene 3 is A/B-able
+to the same standard as scene 4, and the noise floor recorded in BUILD-P19 no
+longer applies to it.
+
+One methodological note, because it nearly produced a false result here: the
+first attempt at this verification was run while the droplet shader was being
+edited underneath it, so the second of the pair loaded different code from the
+first and showed a 6% difference in one bounded region. That 6% was the edit,
+not non-determinism. Re-run with the tree frozen, it is 0%. A reproducibility
+check is only worth anything if nothing else is moving.
+
+### Splash: a shutter, and what a smear costs
+
+The crown sheet was already in good shape — Fresnel, Beer-Lambert film
+absorption, Cook-Torrance glints, crawling tear fields, energy-conserving
+fog suppression. The weakest part was the ejecta.
+
+The droplet sprite already stretched with speed, but that was **geometric
+only**: speed made a drop longer while leaving it fully opaque. A camera at a
+finite exposure does both — it smears the drop along its path *and* dims it,
+because the same water is now spread over a much larger area. Leaving alpha
+alone means the fastest ejecta are the brightest and most solid things in the
+corona, which is exactly backwards: in a photograph of a thrown splash the
+fastest water is the faintest, because it is the most spread out.
+
+So the stretch cap goes 2.6x -> 5x and the smear factor is handed to the
+fragment stage, where it divides alpha linearly and the peak colour by its
+square root — a streak still catches light along its length, it just stops
+reading as a bead on a stick. The off-centre caustic hotspot is widened with
+the same factor instead of being dragged along as one bright lump at one end.
+
 ## BUILD-P19: a realism pass on scenes 3 and 4, paid for out of the frame
 
 The brief was "absolute realism" on both scenes, with the note that scene 4 runs

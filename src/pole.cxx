@@ -54,6 +54,10 @@
 #endif
 
 #include "../lib/asset_path.hxx"
+
+// BUILD-P20: 720p fullscreen is the default presentation; main.cxx clears
+// this for headless capture so the screenshot framebuffer stays pinned.
+extern bool gWindowedMode;
 #include "font_atlas.hxx" // shared HUD font data and atlas layout
 
 // --------------------------------------------------------------- math block
@@ -218,7 +222,7 @@ static Program LinkProgram(const char *vsPath, const char *fsPath) {
 }
 
 // ------------------------------------------------------------------ constants
-static const char *const gName = "ElectroBench - LainBench";
+static const char *const gName = "ElectroBench - Scene 4 (Lain)";
 static const int WIDTH = 1280, HEIGHT = 720;
 static const float kGroundY = 0.0f;
 // dusk sun: LOW and AHEAD of the dolly camera (up the corridor), slightly
@@ -1991,7 +1995,7 @@ static void RenderHUD() {
   // build tag: on-screen proof of which scene code the exe runs (stale-build
   // screenshots must be detectable at a glance)
   char line1[128];
-  std::snprintf(line1, sizeof(line1), "FPS: %d   build P16   scene 4: LainBench", gFps);
+  std::snprintf(line1, sizeof(line1), "FPS: %d   Scene 4   build P20", gFps);
   RenderText(16.0f, 16.0f, line1);
 }
 
@@ -2443,7 +2447,8 @@ int RunPoleScene(bool *gaveUpOut) {
     SDL_GL_SetAttribute(SDL_GL_SAMPLES, msaa ? 4 : 0);
     gWindow = SDL_CreateWindow(gName, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
                                winW, winH,
-                               SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
+                               SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE
+                               | (gWindowedMode ? 0u : SDL_WINDOW_FULLSCREEN));
     if (!gWindow) {
       std::fprintf(stderr, "Window could not be created! SDL_Error: %s\n", SDL_GetError());
       return EXIT_FAILURE;
