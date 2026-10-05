@@ -1547,11 +1547,14 @@ int main(int argc, char **argv) {
     printf("Assets: exe dir %s| cwd wins over the exe dir when it has shaders/\n",
            b ? b : "(unknown)");
     SDL_free(b);
-    for (int i = 0; i < 4; i++)
-      printf("  %-32s %7ld bytes  %s\n", kKey[i], assetFileSize(kKey[i]),
-             resolveAssetPath(kKey[i]).c_str());
+    for (int i = 0; i < 4; i++) {
+      const std::string resolved = resolveAssetPath(kKey[i]);
+      printf("  %-32s %7ld bytes  %s\n", kKey[i], assetSizeOf(resolved),
+             resolved.c_str());
+    }
   }
-  if (assetTraceSelected()) printf("Assets: tracing every resolved path (--trace-assets)\n");
+  if (assetTraceSelected())
+    printf("Assets: (--trace-assets) every resolved path is printed as it loads\n");
   fflush(stdout);
 
   if (gPoleOnly) {

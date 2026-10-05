@@ -61,10 +61,12 @@ inline std::string resolveAssetPath(const char *path) {
   return p;
 }
 
-// Byte size of a resolved asset, or -1. Printed alongside the path so a stale
-// copy is obvious even when both candidate folders are named "shaders".
-inline long assetFileSize(const char *path) {
-  std::ifstream f(resolveAssetPath(path), std::ios::binary | std::ios::ate);
+// Byte size of an ALREADY-RESOLVED path, or -1. Takes the resolved path rather
+// than the logical one so a caller that prints the path and its size together
+// resolves once: resolving twice would print each asset line twice under
+// --trace-assets, and a diagnostic nobody can read is no diagnostic.
+inline long assetSizeOf(const std::string &resolvedPath) {
+  std::ifstream f(resolvedPath, std::ios::binary | std::ios::ate);
   if (!f.good()) return -1;
   return static_cast<long>(f.tellg());
 }
