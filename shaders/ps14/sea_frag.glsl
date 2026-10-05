@@ -274,6 +274,26 @@ void main() {
     // aimed with it hits the sun or misses it at random — the isolated-pixel
     // speckle the glitter path showed. This becomes roughness below.
     float curv = abs(hX + hZ - 2.0 * hC) / (e * e);
+    // BUILD-P24: the slope SPREAD inside this pixel, not just at its centre.
+    // The sea is shaded as if every fragment were a single mirror facet: the sun
+    // term comes from one point normal. Past a few tens of metres a pixel is
+    // half a metre to a couple of metres of water holding many facets that are
+    // NOT parallel, so a point normal swings N.L from 0 to 0.79 between
+    // neighbours -- every sun-keyed term (the warm slopes, the foam gate, the
+    // subsurface lift) then paints whole sun-facing faces as flat tan patches
+    // with hard edges. The one normal a pixel can honestly show is the MEAN of
+    // the slopes it covers.
+    float slopeSpread = curv * foot;
+    // Relax toward flat water in proportion to how much slope the pixel mixes.
+    // Mean max(N.L) over the field is 0.284 and flat water gives L.y = 0.287, so
+    // this barely moves the AVERAGE of the sun term -- what it removes is its
+    // CONTRAST, which is what made the blotches.
+    // Only the sun-KEYED chain uses this. The mirror ray and the GGX lobe keep
+    // the point normal on purpose: they already carry their own sub-pixel
+    // treatment (roughness by Toksvig, the cubemap LOD), and relaxing them too
+    // cost the sun column most of its mean luma for no extra smoothing.
+    vec3 Nlit = normalize(mix(N, vec3(0.0, 1.0, 0.0),
+                              clamp(slopeSpread * 1.6, 0.0, 1.0)));
 
     // ---- phase 1: addressing - ripple normal map, scrolled over the surface
     float rippleFade = exp(-dist * 0.0018);           // ripples die out far away
@@ -314,8 +334,16 @@ void main() {
     reflColor *= mix(1.0, 0.46, offSun);
 
     // ---- fresnel: sea is a mirror at grazing angles, glass straight down ----
-    float NdV = max(dot(N, V), 0.0);
-    float fresnel = 0.022 + 0.978 * pow(1.0 - NdV, 5.0);
+    // BUILD-P24: NdV was the only dot product here not clamped at the TOP. Two
+    // unit vectors can return 1.0000001, which makes the base NEGATIVE, and
+    // pow() of a negative base is undefined in GLSL -- it returns NaN, and
+    // encodeScene maps NaN to 0, so the pixel is pure black. Clamped like NdH
+    // and NoV, and the pow written as the same squared-cubed chain the
+    // Fresnel-Schlick term further down already uses.
+    float NdV = clamp(dot(N, V), 0.0, 1.0);
+    float f1 = 1.0 - NdV;
+    float f2 = f1 * f1;
+    float fresnel = 0.022 + 0.978 * (f2 * f2 * f1);
     // At dusk the whole surface reads as a dark mirror of the sky: lift the
     // base reflectance above the physical 2%.
     fresnel = clamp(fresnel * 1.25 + 0.045, 0.0, 0.92);
@@ -331,7 +359,7 @@ void main() {
     // Directional sun lighting on the wave slopes: faces tilted toward the low
     // sun glow warm, backslopes fall to near-black. The azimuth gate keeps the
     // warm slope light inside the sun path; off-path stays deep blue/purple.
-    float sunDiffuse = max(dot(N, L), 0.0);
+    float sunDiffuse = max(dot(Nlit, L), 0.0);
     float warmGate = pow(sunAlign, 3.0);
 
     // cloud shadows: the projected puffs gate ALL direct sun terms
@@ -349,7 +377,7 @@ void main() {
     // slope facing the sun AND some ripple chaos. The noise tile alone would
     // foam uniformly everywhere. Cloud shadows gate it too.
     float crest = smoothstep(0.55, 1.25, hC) * mix(0.25, 1.0, shadow);
-    float slopeFacing = max(dot(N, L), 0.0) * warmGate + 0.15;
+    float slopeFacing = sunDiffuse * warmGate + 0.15;
     float chaos = texture(uRippleTex, vUV * 190.0 + vec2(uTime * 0.011, -uTime * 0.007)).g;
     // BUILD-P23: a 190x tile, so past the near field one pixel covers more than
     // one texel and the fetch minifies into noise — and it was multiplying the
@@ -416,8 +444,8 @@ void main() {
     // alone says nothing about how ROUGH the water inside that pixel is; the
     // slope spread from the curvature above is the part of the roughness the
     // analytic lobe never knew about. Many facets inside one pixel then
-    // average into a smooth glare, as real water does.
-    float slopeSpread = curv * foot;
+    // average into a smooth glare, as real water does. P24 hoisted slopeSpread up
+    // to main()'s normal so the same number could relax the lighting normal too.
     rough = clamp(sqrt(rough * rough + 0.65 * slopeSpread * slopeSpread),
                   0.085, 0.46);
     float alpha = rough * rough;                 // GGX: alpha = roughness^2

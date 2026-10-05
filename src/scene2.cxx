@@ -1122,15 +1122,34 @@ int RunOceanScene(bool *gaveUpOut) {
 
   gWindow = SDL_CreateWindow(NAME, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, winW, winH,
                              SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE
-                             | (gWindowedMode ? 0u : SDL_WINDOW_FULLSCREEN));
+                             | (gWindowedMode ? 0u : SDL_WINDOW_FULLSCREEN_DESKTOP));
+  // BUILD-P24: FULLSCREEN_DESKTOP, not FULLSCREEN. Exclusive fullscreen hands the
+  // display to the OpenGL driver and the window stops being an ordinary top-level
+  // window, so the desktop compositor has nothing to composite -- and Win+PrtScr
+  // captures the composited desktop, which came out black. Borderless
+  // fullscreen still fills the screen but stays a normal window, so the capture
+  // path works. It also sizes the window to the desktop rather than to the
+  // requested 1280x720, so the drawing size has to be read back: the HUD and
+  // the projection both use gWindowWidth/gWindowHeight, and left at 720p on a
+  // 1080p desktop the scene would be drawn into one corner.
+  if (!gWindow) {
+    std::fprintf(stderr, "Window could not be created! SDL_Error: %s\n", SDL_GetError());
+    return EXIT_FAILURE;
+  }
+  if (!gWindowedMode) {
+    int dw = winW, dh = winH;
+    SDL_GetWindowSize(gWindow, &dw, &dh);
+    if (dw > 0 && dh > 0) {
+      winW = dw;
+      winH = dh;
+      gWindowWidth = dw;
+      gWindowHeight = dh;
+    }
+  }
   if (gWindowWidthOverride > 0) {
     gWindowWidth = winW;   // a headless WM may never send a RESIZED event
     gWindowHeight = winH;
     glViewport(0, 0, winW, winH);
-  }
-  if (!gWindow) {
-    std::fprintf(stderr, "Window could not be created! SDL_Error: %s\n", SDL_GetError());
-    return EXIT_FAILURE;
   }
   gContext = SDL_GL_CreateContext(gWindow);
   if (!gContext) {

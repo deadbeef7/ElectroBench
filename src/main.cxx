@@ -122,7 +122,7 @@ void initialiseWindow() {
   window = SDL_CreateWindow("ElectroBench - Scene 1", SDL_WINDOWPOS_UNDEFINED,
                             SDL_WINDOWPOS_UNDEFINED, gWinW, gWinH,
                             SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN
-                            | (gWindowedMode ? 0u : SDL_WINDOW_FULLSCREEN));
+                            | (gWindowedMode ? 0u : SDL_WINDOW_FULLSCREEN_DESKTOP));
   if (window == NULL) {
     fprintf(stderr, "Window could not be created! SDL_Error: %s\n",
             SDL_GetError());
@@ -134,6 +134,24 @@ void initialiseWindow() {
     fprintf(stderr, "OpenGL context could not be created! SDL Error: %s\n",
             SDL_GetError());
     std::exit(EXIT_FAILURE);
+  }
+
+  // BUILD-P24: FULLSCREEN_DESKTOP, not FULLSCREEN. Exclusive fullscreen hands the
+  // display to the OpenGL driver and the window stops being an ordinary top-level
+  // window, so the desktop compositor has nothing to composite -- and Win+PrtScr
+  // captures the composited desktop, which came out black. Borderless
+  // fullscreen still fills the screen but stays a normal window, so the capture
+  // path works. It also sizes the window to the desktop rather than to the
+  // requested 1280x720, so the drawing size has to be read back: the HUD, the
+  // ortho setup and the projection all use gWinW/gWinH, and left at 720p on a
+  // 1080p desktop the scene would be drawn into one corner.
+  if (!gWindowedMode) {
+    int dw = gWinW, dh = gWinH;
+    SDL_GetWindowSize(window, &dw, &dh);
+    if (dw > 0 && dh > 0) {
+      gWinW = dw;
+      gWinH = dh;
+    }
   }
 
   SDL_GL_SetSwapInterval(0);

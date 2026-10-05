@@ -179,6 +179,221 @@ Realism takeaways applied:
   glazing bars over them. Emissive geometry is only believable if the frame behind it still exists —
   the bars and the sill are what stop a lit pane reading as a sticker.
 
+## BUILD-P24: the sunlit sea was a point-normal sample of a facet distribution, and Win+PrtScr caught a black screen
+
+The reported bug: "the zones lit up by the sun on the water are like noise" —
+big tan, flat, hard-edged amoeba patches across the sea in the committed
+`docs/screenshots/ps14_dusk_t36.png`. Second report: on the user's Windows
+machine, Win+PrtScr produced only a dark screen.
+
+### Choosing a metric that can see "blotches"
+
+The metric already in `scripts/sea_check.py` is a **block-to-block luma step at
+4 px**, which is a *pixellation* proxy. It cannot tell a 200 px flat camo patch
+from fine glitter — it just says "neighbouring pixels differ". The reported
+defect is the opposite of pixellation, so the step was re-measured at 4, 8, 16,
+32 and 64 px.
+
+Re-measuring at more scales turned out **not to be enough**, and that is the
+lesson worth keeping. A step at any one block size sums the variation *within*
+the block and *between* blocks together, so it rises when texture inside a
+patch grows even when the patch itself is being flattened. The criterion that
+survived measurement is the **variance split** — within-block standard
+deviation against between-block standard deviation — which separates a flat
+plate (high between, low within) from glitter (the reverse) directly. Both
+metrics are kept: `scripts/p24rows.py` for the step profile, `scripts/p24flat.py`
+for the split. The numbers and the table I first drew from the wrong one are
+both below.
+
+### Root cause 1 — the sun term was a point sample of a facet distribution
+
+`shaders/ps14/sea_frag.glsl` shaded every fragment as a single mirror facet:
+`sunDiffuse = max(dot(N, L), 0.0)` from one point normal, with no footprint
+awareness at all. BUILD-P21 put every wave octave on the fragment's own
+footprint, and BUILD-P23 put the GGX lobe on a Toksvig/LEAN roughening from the
+sub-pixel slope spread — but the **body chain was never converted**, and
+`sunDiffuse` drives all of it:
+
+    body += vec3(1.05, 0.42, 0.20) * pow(sunDiffuse, 3.0) * warmGate * shadow * 0.42;
+    float slopeFacing = max(dot(N, L), 0.0) * warmGate + 0.15;   // the foam gate
+    foamLit = skyAtHorizon * 0.62 + vec3(1.0, 0.50, 0.24) * (sunDiffuse * shadow) * 0.40;
+
+Measured analytically from the shader's own wave field (`scripts/slopecheck.py`):
+the six octaves sum to an RMS slope of **0.509** (27 deg), peak coherent 1.228
+(51 deg), and with the sun at 16.7 deg elevation `max(N.L, 0)` therefore swings
+**0.000 to 0.786** across the field, with **12% of it at exactly zero** and
+`pow(N.L, 3)` reaching 8.3x its own mean. A 37 m swell's sun-facing face at 40 m
+covers half the screen. So each wave face was painted as one flat tan patch
+with a hard edge: exactly the reported amoeba.
+
+The fix relaxes the lighting normal toward flat water in proportion to the
+sub-pixel slope spread already computed for the roughness term:
+
+    float slopeSpread = curv * foot;                 // hoisted out of the GGX block
+    vec3 Nlit = normalize(mix(N, vec3(0.0, 1.0, 0.0),
+                              clamp(slopeSpread * 1.6, 0.0, 1.0)));
+    float sunDiffuse = max(dot(Nlit, L), 0.0);
+
+Mean `max(N.L, 0)` over the field is **0.284** and flat water gives `L.y` =
+**0.287**, so this barely moves the *average* of the sun term — what it removes
+is its *contrast*, which is what made the blotches.
+
+**Only the sun-keyed chain uses `Nlit`.** The mirror ray `R`, the fresnel `NdV`
+and the GGX lobe keep the point normal on purpose: they already carry their own
+sub-pixel treatment (Toksvig roughness, cubemap LOD), and relaxing them too
+cost the sun column most of its mean luma for no extra smoothing. That was
+measured, not assumed.
+
+### Root cause 2 (found on the way) — `pow()` of a negative base, i.e. NaN pixels
+
+`NdV` was the only dot product in the shader not clamped at the **top**:
+
+    float NdV = max(dot(N, V), 0.0);
+    float fresnel = 0.022 + 0.978 * pow(1.0 - NdV, 5.0);
+
+Two unit vectors can return 1.0000001, which makes the base **negative**, and
+`pow()` of a negative base is undefined in GLSL — on this rasteriser it returns
+NaN, `encodeScene` maps NaN to 0, and the pixel is **pure black**. Nothing in
+the committed frame hit it, but any change that adds slope variance does. Now
+clamped like `NdH` and `NoV`, with the `pow` written as the same squared-cubed
+chain the Fresnel-Schlick term further down already uses:
+
+    float NdV = clamp(dot(N, V), 0.0, 1.0);
+    float f1 = 1.0 - NdV;
+    float f2 = f1 * f1;
+    float fresnel = 0.022 + 0.978 * (f2 * f2 * f1);
+
+The same `pow(1.0 - NdotV, n)` pattern exists in `shaders/frag.glsl` (scene 1,
+exponent 5), `shaders/ground_frag.glsl` (exponent 4) and
+`shaders/pool/teapot_frag.glsl` (exponent 4). **Those were left alone**: they are
+not on the reported path and only two of the three are in a scene that needs the
+asset set to verify, so they are recorded here rather than changed blind.
+
+### Root cause 3 — `vUV` is world/4096, so texture tiles are enormous
+
+Worth recording because it makes the rest legible: `sea_vert.glsl` sets
+`vUV = aXZ / 4096.0`, so `vUV * 23.0` tiles the foam texture every **178 m** in
+world space. `CreateFoamTexture()` builds it from `TileableFbm(u, v, 5, 8.0f)`
+plus a `u * 0.4f`-stretched streak, so its content runs from **22.3 m** base
+features down to 1.4 m. Its footprint gate was `octaveRes(foot, 0.62)`, keyed to
+lambda 1.6 m — the *finest* octave — which leaves the coarse octaves that
+actually make the visible structure at full contrast all the way to the horizon.
+The foam texture is therefore a plausible suspect on paper, and it was tested:
+in the tag pass `crest * slopeFacing` (not the texture, and not `chaos`) was the
+single best predictor of the reference frame's own lit/dark split (Cohen's
+d = **1.112**, against foam 0.676 and chaos 0.485) — which is what pointed the
+fix at the sun term rather than at the texture.
+
+### What I got wrong, and what it cost
+
+The first two attempts to measure this were made against a `sea_frag.glsl` that
+still carried a **leftover diagnostic tag pass** from an earlier experiment: the
+five-panel render that returns early before `encodeScene`. Those renders showed
+72% of the water at exactly 0.0 and a 68% collapse of the sun column's mean
+luma, and I read that as the fix destroying the scene. It was the tag, not the
+fix. The giveaway was that exactly 0.00% of the *committed* shader's water was
+black while exactly 72% of every tagged variant was — a bimodal signature that
+no energy change produces. `grep -c DIAGNOSTIC shaders/ps14/sea_frag.glsl` is
+now asserted to 0 at the end of every A/B run.
+
+The second wrong turn was raising the chop amplitudes in `detailNormals` from
+0.045/0.022/0.010 to 0.135/0.066/0.030. That was well motivated — those three
+carry a slope RMS of 0.052 against the swell band's 0.509, so the 1.4-5.5 m band
+that dominates an eye 7 m up between 15 m and 100 m was nearly empty, and the
+`octaveRes` gates decide whether an octave is *resolvable*, not how strong it is,
+so amplitude could be raised without adding aliasing. Measured, it put its
+energy exactly into the 16-32 px band: at the shipped 1280x720 it raised
+contrast there by ~27% at every scale except the largest, i.e. more noise, which
+is the opposite of the report. **The amplitudes were left at their committed
+values**. Raising them was adding fresh high-frequency contrast rather than
+addressing the flat patches the report was actually about, and the change was
+dropped.
+
+### Measured, three phases each, 760x427
+
+Scene 2 is not pixel-reproducible on a software rasteriser (`--shot-time` lands
+on whichever frame first crosses the second), and the camera BREATHES — radius
+`42 +/- 10`, eye height `7.5 +/- 2.2`, yaw and pitch all animate with t. Two
+renders a second apart are therefore different views, not just different
+shaders. Everything below is a mean over t = 32, 36, 40 (`scripts/p24rows.py`,
+`scripts/p24flat.py`), with the same three phases on both sides.
+
+**The first table I wrote for this section did not reproduce, and is worth
+recording because the wrong metric was as instructive as the wrong numbers.**
+I had reported block-to-block luma steps falling 29% at 32 px and 47% at 64 px
+and read that as "the blotches broke up". Re-running it cleanly against
+`git show HEAD:shaders/ps14/sea_frag.glsl`, every scale went UP instead:
+
+| block step (% of band mean luma) | before | after | delta |
+| --- | --- | --- | --- |
+| 4 px | 17.43 / 23.89 | 19.71 / 25.67 | +13.0% / +7.4% |
+| 8 px | 17.68 / 28.57 | 20.65 / 34.23 | +16.8% / +19.8% |
+| 16 px | 10.39 / 18.60 | 12.33 / 26.10 | +18.7% / +40.4% |
+| 32 px (far water) | 12.12 | 13.99 | +15.5% |
+| 64 px (far water) | 21.68 | 24.27 | +12.0% |
+| sky mean luma (control) | 0.3523 | 0.3534 | +0.3% |
+
+Taken alone that table says the change makes the sea noisier, which is the
+opposite of the goal. The mistake was the metric: **a block step cannot tell a
+flat plate from fine glitter.** Both are just "neighbouring pixels differ", and
+a step sums both kinds of variation, so it moves when the texture inside a
+block changes even when the large-scale structure does not.
+
+The defect as reported was FLAT patches — "tan, hard-edged amoebas". So the
+measurement has to separate the two contributions. Splitting the variance of a
+block into the part *inside* it and the part *between* blocks does exactly
+that: a flat plate has high between-block variance and low within-block
+standard deviation, and glitter is the other way round.
+
+| 32 px blocks, far water | before | after | delta |
+| --- | --- | --- | --- |
+| within-block std | 45.63 | 49.92 | **+9.4%** |
+| between-block std | 26.99 | 24.54 | **-9.1%** |
+| between/within ratio | 0.59 | 0.49 | **-16.9%** |
+
+and at 16 px blocks: within +8.2%, between -6.8%, ratio **-13.9%**.
+
+That is the signature the fix was after. The large-scale structure — the part
+the eye reads as "flat patch" — is measurably lower, and the detail inside each
+patch is measurably higher: the plates were replaced by texture, not deleted.
+The sky control is unchanged to +0.3% and whole-water mean luma moves -0.8%,
+so the sea was re-textured, not re-lit.
+
+Both effects are modest, and the per-phase spread on the step metrics is wide
+(±25%), so only the direction is claimed. The BUILD-P23 defects measured by
+`scripts/sea_check.py` all stay fixed on the same frames: clip rate 0.000%,
+pixels above 0.80 luma 0.000%, blue-leading pixels in the sun column 0.
+
+No FPS or performance claim is made anywhere in this section: every render here
+ran on llvmpipe, which is not the user's driver.
+
+### Win+PrtScr produced a black screen — exclusive fullscreen is not composited
+
+`Win+PrtScr` captures the **composited desktop**. All four scenes requested
+`SDL_WINDOW_FULLSCREEN`, which is *exclusive* fullscreen: SDL hands the display
+mode to the OpenGL driver and the window stops being an ordinary top-level
+window, so there is nothing for the desktop compositor to composite and the
+capture comes back black. The app's own `--screenshot` path was unaffected
+because `--screenshot` forces `gWindowedMode = true`, which is why the bug was
+only ever visible when screenshotting the running bench by hand.
+
+`SDL_WINDOW_FULLSCREEN_DESKTOP` (borderless fullscreen) fills the screen but
+stays a normal window, so the capture path works. All four call sites now use it.
+It also sizes the window to the *desktop* rather than to the requested
+1280x720, and every scene draws its HUD and its projection from
+`gWindowWidth`/`gWindowHeight`, so the drawing size is read back with
+`SDL_GetWindowSize` right after the context is created. Left at 720p on a 1080p
+desktop the scene would otherwise be drawn into one corner.
+
+`SDL_GL_SetSwapInterval(0)` is **unchanged**: unclamped presentation is what a
+benchmark does, and it is not the cause of the black capture.
+
+**This path could not be verified here.** The sandbox has an Xvfb at
+1920x1080x24 with no real fullscreen or DWM, and the new code is guarded by
+`if (!gWindowedMode)` so every headless render in this section takes the old
+branch unchanged. The reasoning is SDL's documented Windows behaviour; the
+confirmation has to happen on the user's machine.
+
 ## BUILD-P23: the glitter path was a razor lobe on aliased noise, and the scene clock was wall-clock
 
 Three things the user saw in scene 2 — the sun path in the sea was pixellated

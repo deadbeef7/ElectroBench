@@ -193,6 +193,25 @@ make
 Controls : `F` toggles the automatic camera, long-click + move orbits, mouse wheel zooms, `R` re-drops
 the whole fleet, `ESC` quits.
 
+**Taking a screenshot of the running bench on Windows.** The bench presents
+borderless fullscreen by default — it fills the screen but stays a normal
+top-level window — so `Win`+`PrtScr` captures it normally. It used to request
+*exclusive* fullscreen, which hands the display to the OpenGL driver and leaves
+the desktop compositor with nothing to composite; `Win`+`PrtScr` then returned a
+black screen every time, while the bench itself looked fine.
+
+Two other capture paths, neither of which goes through the compositor:
+
+- `--screenshot FILE --shot-time S` writes a frame straight out of the
+  framebuffer, before the buffer swap, and needs no window manager at all. This
+  is what the committed screenshots in `docs/screenshots/` were made with.
+- `--windowed` runs in a normal resizable window if you would rather screenshot
+  a windowed run.
+
+Note that borderless fullscreen sizes the window to your **desktop**, not to
+1280x720, so on a 1080p display the bench renders at 1080p. Pass `--width` /
+`--height` to pin the framebuffer to an exact size instead.
+
 Headless visual-test flags (used to verify the render output in CI-like environments):
 
 ```sh
