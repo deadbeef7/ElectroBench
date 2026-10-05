@@ -304,7 +304,13 @@ so every image is measured on identical pixels. Two things fell out:
   paired result for that same change is **+0.1 % at t=32 and −1.1 % at t=40** —
   a no-op, which is why it was rejected.
 
-**Phase noise floor: ~13 %.** The camera breathes (`radius = 42 + 10 sin(t*0.042)`,
+**Phase noise floor: ~13 % — SUPERSEDED by BUILD-P27, read that section first.**
+This figure conflates two *different* phases (which legitimately differ) with
+*repeatability of one* phase (which is what an A/B actually needs). The real
+repeatability floor is ~7–9 %, measured by rendering one phase twice with
+identical code; P27 corrects every verdict below that was graded against 13 %.
+
+The rest of the paragraph stands: the camera breathes (`radius = 42 + 10 sin(t*0.042)`,
 `eye.y = 7.5 + 2.2 sin(t*0.086)`, and two more terms), and the plates are locked
 to the wave phase, so t=32 and t=40 legitimately differ by this much in edge
 density with no code change at all — 52.45 against 45.53 on unchanged P25. Any
