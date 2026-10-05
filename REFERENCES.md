@@ -272,9 +272,9 @@ measured lobe rather than fitted.
 
 ### The lit zone WAS genuinely too wide — that part is fixed
 
-Independent of the reproduction failure, the gate controlling how much of the
-sea receives warm sun light was too broad, and that is measurable directly from
-the shader rather than from the frame:
+Independent of the reproduction failure above, the gate controlling how much of
+the sea receives warm sun light was too broad, and that is measurable directly
+from the shader rather than from the frame:
 
     float sunAlign = max(dot(dirXZ, sunXZ), 0.0);   // cosine of the horizontal
     float warmGate = pow(sunAlign, 3.0);            // angle to the sun
