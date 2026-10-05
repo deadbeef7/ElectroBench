@@ -179,6 +179,78 @@ Realism takeaways applied:
   glazing bars over them. Emissive geometry is only believable if the frame behind it still exists —
   the bars and the sill are what stop a lit pane reading as a sticker.
 
+## BUILD-P27: the plates are a contrast defect, and the rig cannot resolve a fix
+
+This build ships **no shader change.** It records two things: a diagnosis that
+survives scrutiny, and a control experiment that explains why five attempts to
+act on it all looked like noise — including the three in this build that I
+tried in good faith and threw away.
+
+### The diagnosis (holds up)
+
+The plates are a **contrast** defect, not a reflection-content defect. P26's
+four failures all changed *what* the sea reflects; the fourth is the proof, since
+lowering the reflection elevation brightened the sea 34–47 % and made the edges
+**12–29 % harder**.
+
+They live in the far field only (`scripts/bands.py`): rows 412–463 run **81.9 %**
+of pixels past a Sobel of 0.08 with **25.7 %** of pale pixels touching something
+0.12 darker, against **14.4 %** and **14.7 %** in the near field. That band is
+where fresnel reaches **0.92**, so the sea is nearly pure reflection of a thin
+strip of sky at ~27° elevation — the cloud-deck underside, magnified across the
+frame because the whole far band shares one elevation. Pale plate = water lying
+flat with fresnel saturated; dark rim = a wave normal tilted enough to drop
+fresnel and let the near-black body through. **The camo is the wave field printed
+at 92 % contrast.**
+
+### The control experiment, which is the real result
+
+`--shot-time` captures the first frame *crossing* the target second, and under
+llvmpipe a frame takes ~2 s, so the actual captured time — and therefore the wave
+phase — varies between runs. Two renders of **the same phase with identical
+code**:
+
+| t=36, same code | edge >0.08 | edge >0.045 | mean abs. grad | rim |
+| --- | --- | --- | --- | --- |
+| run A | 47.59 % | 56.33 % | 0.2045 | 16.6 % |
+| run B | 51.57 % | 61.14 % | 0.2186 | 17.8 % |
+| **spread** | **8.4 %** | **8.5 %** | **6.9 %** | **7.2 %** |
+
+**So the rig's reproducibility floor is ~7–9 %, and every effect anyone has been
+chasing is smaller than that.** P26's "~13 % phase noise floor" conflated two
+different phases, which legitimately differ, with repeatability of one phase,
+which does not. Against the correct floor, the three fixes tried here are:
+
+| attempt | t=32 | t=36 | t=40 |
+| --- | --- | --- | --- |
+| steepen falloff to `0.0016` | −13.0 % | — | +13.1 % |
+| gate the wash at 600 m | −8.1 % | — | +10.5 % |
+| gate it at 900 m | −11.6 % | **+6.2 % / +15.1 %** | +1.7 % |
+
+The t=36 row is the tell: the two samples of the *same* code straddle the
+baseline. Nothing here is distinguishable from noise, and the mean across phases
+is ~zero. Shipping any of them would be claiming a fix I cannot demonstrate, so
+all three were reverted and `docs/screenshots/ps14_dusk_t36.png` is deliberately
+**not** regenerated.
+
+Two of the three did show a real, repeatable-looking effect worth keeping on
+record, because they are *directionally* informative even if not provable at this
+sample size: both far bands improved at t=40 (84.3→81.3, 70.4→69.7) and the
+hard-boundary signature fell 19–21 % at r463-514. And a contrast fix scoped to
+the defect must be *scoped to the defect* — gating at 600 m or steepening the
+falloff both moved the artefact into water 200–1200 m out, costing that band
+28–63 %, before the gate was pushed out to 900 m.
+
+### What would actually settle it
+
+The fix is not blocked on a better idea, it is blocked on a better instrument.
+Three of these would resolve it: capture at an exact simulated time instead of
+first-crossing, so the frame is deterministic; or average each variant over
+enough phases to push the floor from ~8 % down past the effect size; or measure
+the reflection/fresnel split offline rather than by re-rendering. Until one of
+those lands, any "fix" for these plates measured on this rig is unfalsifiable,
+and the honest report is no fix.
+
 ## BUILD-P26: four rejected fixes, and the measurement bug that hid them
 
 This build ships **no shader change.** Its only product is the diagnosis of
