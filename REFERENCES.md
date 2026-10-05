@@ -185,7 +185,16 @@ Two reports, both second-hand this time: the sunlit water "still looks wrong,
 and the patches are too big", and Win+PrtScr on the user's machine *still*
 returns black after the P24 borderless-fullscreen change.
 
-### What I could not reproduce, stated first because it bounds everything else
+### CORRECTION (after this build shipped): the "stale binary" theory below is WRONG
+
+The user supplied the decisive evidence: the reported frames come from this
+repository, and llvmpipe and their AMD driver render the same thing. So there is
+no mixed exe/shader pair, and the "the reported frame is not something this
+repository produces" conclusion below does not hold. Keep the asset trace — it
+is still useful — but discard the stale-build inference. What actually differs
+is the MEASUREMENT, and the section above it compares the wrong quantity: it
+only ever looked at the sun column. The user's frame is pale out to BOTH frame
+edges, and the lit zone is not the defect at all.
 
 The reported frame shows large, hard-edged tan plates with near-white interiors
 covering roughly half the sea, right out to the frame edges. I could not
@@ -210,10 +219,56 @@ in the animation. The most likely explanations, in order: the running exe sits
 beside a shader folder from an unrelated build; or the frame is from a
 different point in the 45 s animation than anything sampled here.
 
+**Both of those are now ruled out** — see the correction at the top of this
+section. What was missed is that every statistic quoted here is measured INSIDE
+the sun column, while the reported frame's actual defect is that the whole sea
+is lit, edge to edge. Measuring only the column could never have revealed it.
+
 That is exactly why this build adds the two startup lines in "the capture
 problem" below. Diagnosing a mixed exe/shader pair from pixels alone is not
 possible, and I should not have written P24's conclusion as though it were
 settled when it rested on the same unverified assumption.
+
+### The measurement that was missing: litness ACROSS THE FRAME, not down the column
+
+Comparing the whole sea's brightness by horizontal eighth is the measurement
+that separates the reported frame from anything this repo renders. In the
+reported frame the water stays pale tan all the way to BOTH frame edges; here
+it falls away steeply on either side of the sun:
+
+| render | x0 | x1 | x2 | x3 | x4 | x5 | x6 | x7 | left/centre |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| P25 t=40 | 0.080 | 0.130 | 0.191 | 0.327 | 0.405 | 0.313 | 0.229 | 0.158 | **0.24** |
+| P25 t=32 | 0.081 | 0.122 | 0.217 | 0.366 | 0.492 | 0.398 | 0.262 | 0.171 | **0.22** |
+| P25 t=36 | 0.084 | 0.110 | 0.180 | 0.330 | 0.443 | 0.372 | 0.272 | 0.168 | **0.25** |
+| pre-P25 shader, t=40 | 0.100 | 0.141 | 0.206 | 0.358 | 0.422 | 0.363 | 0.240 | 0.165 | **0.28** |
+
+The reported frame is near 1.0. So the off-path water here is roughly four
+times darker than the water beside it in the reported frame, and that gap is
+stable across all three phases and across the P25 gate change. This is a real,
+reproducible difference and it is NOT the width of the glitter column, which
+this build already narrows correctly.
+
+### A fix that measured well on one phase and was thrown away
+
+Tagging each candidate painter into its own channel (foam, cloud shadow, warm
+slope, reflection) showed the **reflection** carries the reported plate
+signature: flat pale components with hard edges at a median equivalent diameter
+of 20 px and a maximum of 84 px, against the "20-80 px" in the description.
+
+The proposed fix was to pre-filter the cubemap by the normal spread the pixel
+actually covers — the same Toksvig-style argument P24 used for the GGX lobe,
+which the reflection term had never received. At t=36 it cut plate area from
+2.92% to 1.47% of the sea, a 50% reduction.
+
+**It was reverted, because at t=40 it made things worse** (plate area 2.54% to
+3.86%) and over the three phases it came out 2.43% to 2.35%, i.e. inside the
+noise. The sky control did not move, so the null result is real. Shipping it on
+the strength of the single phase that flattered it would have been exactly the
+mistake the multi-phase rule exists to prevent, and a variant that gated the
+ripple term by footprint (v3) reverted the gain entirely. The hypothesis is
+still the most promising lead; it needs a cone-width constant derived from the
+measured lobe rather than fitted.
 
 ### The lit zone WAS genuinely too wide — that part is fixed
 
