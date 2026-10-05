@@ -275,6 +275,20 @@ nothing composited into it.
 `--screenshot FILE` remains the path that cannot fail this way — it reads the
 framebuffer directly and never involves the compositor.
 
+**And the asset loader had a trap in it that can produce exactly the reported
+symptom.** `resolveAssetPath()` tries, in order: the path relative to the
+**current working directory**, then the exe's parent directory, then the exe's
+own directory. Shaders load at runtime, so this means: copy fresh shaders next
+to the exe, start the bench from a folder that still holds an older `shaders/`
+tree, and the CWD copy wins silently. The binary is current, the shader is not,
+and the mixture matches no commit — which is the only explanation consistent with
+the reproduction failure above.
+
+The first line of that function is therefore the most dangerous one in the
+project for anyone testing a change, so it is now printed on every run, with the
+byte size, alongside a `--trace-assets` flag that prints every resolved path.
+A wrong path in that output settles the question before any pixels are compared.
+
 ## BUILD-P24: the sunlit sea was a point-normal sample of a facet distribution, and Win+PrtScr caught a black screen
 
 The reported bug: "the zones lit up by the sun on the water are like noise" —

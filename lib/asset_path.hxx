@@ -1,15 +1,25 @@
-// Asset path resolution shared by both benchmarks.
+// Asset path resolution shared by all four scenes.
 //
-// Assets (OBJ models, shader sources) live in the project root, while CMake
-// places the binaries in build/. When a path does not exist relative to the
-// current working directory (repo checkout / make builds), try the
-// executable's parent directory so "./build/ElectroBench" just works.
+// Assets (OBJ models, shader sources) live in the project root, while the build
+// places binaries in build/. When a path does not exist relative to the current
+// working directory (repo checkout / make builds), try the executable's
+// directory and its parent so "./build/ElectroBench" just works.
 #pragma once
 
+#include <cstdio>
 #include <fstream>
 #include <string>
 
 #include <SDL2/SDL.h>
+
+// BUILD-P25: opt-in tracing of every resolved asset path. Shaders load at
+// RUNTIME, so a stale shaders/ folder produces a current-binary/old-shader
+// mixture that looks like neither build. See main.cxx's --trace-assets.
+inline bool &assetTraceFlag() {
+  static bool on = false;
+  return on;
+}
+inline bool assetTraceSelected() { return assetTraceFlag(); }
 
 inline bool assetFileExists(const std::string &p) {
   std::ifstream f(p);
@@ -17,23 +27,44 @@ inline bool assetFileExists(const std::string &p) {
 }
 
 // Returns the first variant of the path that exists: CWD-relative, then
-// relative to the executable's parent directory. Falls back to the original
-// path so the caller reports its usual "file not found" error.
+// relative to the executable's parent directory, then the executable's own
+// directory. Falls back to the original path so the caller reports its usual
+// "file not found" error.
+//
+// The CWD-first order is a real trap: run the exe from a checkout that still
+// holds an old shaders/ folder and THAT folder wins, silently ignoring a
+// freshly copied one next to the exe. The trace exists so that is visible
+// instead of inferred from a frame that matches nothing.
 inline std::string resolveAssetPath(const char *path) {
   const std::string p(path);
-  if (assetFileExists(p))
+  if (assetFileExists(p)) {
+    if (assetTraceSelected()) std::printf("  asset %-34s -> %s\n", path, p.c_str());
     return p;
+  }
 
   char *base = SDL_GetBasePath();
   if (base) {
     const std::string exeDir(base);
     SDL_free(base);
     const std::string fromParent = exeDir + "../" + p;
-    if (assetFileExists(fromParent))
+    if (assetFileExists(fromParent)) {
+      if (assetTraceSelected()) std::printf("  asset %-34s -> %s\n", path, fromParent.c_str());
       return fromParent;
+    }
     const std::string fromExeDir = exeDir + p;
-    if (assetFileExists(fromExeDir))
+    if (assetFileExists(fromExeDir)) {
+      if (assetTraceSelected()) std::printf("  asset %-34s -> %s\n", path, fromExeDir.c_str());
       return fromExeDir;
+    }
   }
+  if (assetTraceSelected()) std::printf("  asset %-34s -> NOT FOUND\n", path);
   return p;
+}
+
+// Byte size of a resolved asset, or -1. Printed alongside the path so a stale
+// copy is obvious even when both candidate folders are named "shaders".
+inline long assetFileSize(const char *path) {
+  std::ifstream f(resolveAssetPath(path), std::ios::binary | std::ios::ate);
+  if (!f.good()) return -1;
+  return static_cast<long>(f.tellg());
 }

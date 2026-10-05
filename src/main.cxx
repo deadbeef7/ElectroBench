@@ -1478,6 +1478,8 @@ int main(int argc, char **argv) {
       gWinH = atoi(argv[++i]);
     } else if (arg == "--dump-shadow") {
       gDumpShadow = true;
+    } else if (arg == "--trace-assets") {
+      assetTraceFlag() = true;   // print every resolved asset path
     } else if (arg == "--no-shadow") {
       gNoShadow = true;
     } else if (arg == "--og-only") {
@@ -1529,6 +1531,27 @@ int main(int argc, char **argv) {
   // builds and looks wrong in a way that is very hard to diagnose from the
   // image alone. This line tells them which half is out of date.
   printf("ElectroBench build P25 (2026-10-05)\n");
+
+  // BUILD-P25: every scene's shaders load at RUNTIME from folders beside the
+  // exe, and resolveAssetPath prefers the CURRENT WORKING DIRECTORY over the
+  // exe directory. So running from a checkout that still holds an old
+  // shaders/ folder silently overrides a freshly copied one -- a current binary
+  // shading with an old shader, which is exactly the kind of mixture that
+  // matches no commit. Print what actually got loaded, and with --trace-assets,
+  // every single resolved path.
+  {
+    static const char *kKey[] = {
+        "shaders/ps14/sea_frag.glsl", "shaders/ps14/sky_frag.glsl",
+        "shaders/pool/water_frag.glsl", "shaders/pole/object_frag.glsl"};
+    char *b = SDL_GetBasePath();
+    printf("Assets: exe dir %s| cwd wins over the exe dir when it has shaders/\n",
+           b ? b : "(unknown)");
+    SDL_free(b);
+    for (int i = 0; i < 4; i++)
+      printf("  %-32s %7ld bytes  %s\n", kKey[i], assetFileSize(kKey[i]),
+             resolveAssetPath(kKey[i]).c_str());
+  }
+  if (assetTraceSelected()) printf("Assets: tracing every resolved path (--trace-assets)\n");
   fflush(stdout);
 
   if (gPoleOnly) {

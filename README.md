@@ -225,6 +225,29 @@ Note that borderless fullscreen sizes the window to your **desktop**, not to
 1280x720, so on a 1080p display the bench renders at 1080p. Pass `--width` /
 `--height` to pin the framebuffer to an exact size instead.
 
+**When you rebuild, do both halves.** `static-build-x86-mingw32.sh` rebuilds the
+exe; the GLSL under `shaders/pole/`, `shaders/pool/` and `shaders/ps14/` is
+loaded at runtime and has to be **copied again** beside the new exe. Rebuilding
+alone leaves the previous build's shaders in place.
+
+**Then check that the shaders it loaded are the ones you copied.** Every run
+prints the resolved path and byte size of the four shading-critical shaders:
+
+```
+ElectroBench build P25 (2026-10-05)
+Assets: exe dir C:\bench\build/| cwd wins over the exe dir when it has shaders/
+  shaders/ps14/sea_frag.glsl         26889 bytes  shaders/ps14/sea_frag.glsl
+  ...
+```
+
+The resolved path is the important part. The loader tries the **current working
+directory before the exe's own directory**, so starting the bench from a folder
+that still contains an old `shaders/` tree loads that one and silently ignores
+a freshly copied folder next to the exe — a current binary shading with an old
+shader, a mixture that matches no commit. If the path printed is not the one you
+just copied to, you are running the other copy. Add `--trace-assets` to print
+every resolved asset path, not just those four.
+
 Headless visual-test flags (used to verify the render output in CI-like environments):
 
 ```sh
