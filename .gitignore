@@ -11,3 +11,8 @@ build-*/
 # Local test artifacts
 *.ppm
 scratch_*.py
+
+# Render/measurement tooling and scratch scripts. These are local analysis
+# helpers only: nothing in the build or at runtime reads them, so they are
+# deliberately never committed.
+scripts/

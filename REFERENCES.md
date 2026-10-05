@@ -179,6 +179,134 @@ Realism takeaways applied:
   glazing bars over them. Emissive geometry is only believable if the frame behind it still exists —
   the bars and the sill are what stop a lit pane reading as a sticker.
 
+## BUILD-P26: four rejected fixes, and the measurement bug that hid them
+
+This build ships **no shader change.** Its only product is the diagnosis of
+scene 2's hard-edged pale "camo plates", plus a correction to how that problem
+had been measured. Recording it because the negative result is the expensive
+part: four mechanisms were tested and refuted, and the next attempt should
+start from here rather than repeat them.
+
+### The mechanism (this part I do trust)
+
+The plates are a **far-field** phenomenon, and nothing about the near water.
+Banding the sea by screen row (`scripts/bands.py`, sea starts at y=412):
+
+| band | mean luma | edge density (>0.08) | pale px touching something 0.12 darker |
+| --- | --- | --- | --- |
+| r412-463 (far) | 0.333 | **81.9 %** | **25.7 %** |
+| r463-514 | 0.290 | 70.4 % | 20.4 % |
+| r514-566 | 0.285 | 48.7 % | 15.4 % |
+| r566-617 | 0.187 | 27.3 % | 12.2 % |
+| r668-720 (near) | 0.143 | **14.4 %** | 14.7 % |
+
+That band is also where fresnel runs highest: the sea's Schlick chain reaches
+**0.92** at grazing incidence against **0.11** looking down at water 15 m away.
+So the far sea is ~92 % reflection and the near sea is ~89 % water body. The
+complaint region and the reflection-dominated region are the same region.
+
+Why the reflection looks the way it does: `R.y = abs(R.y) * 0.30 + 0.45`
+flattens the mirror ray to ~27 degrees elevation. For a 620 m cloud deck seen
+from 7.5 m that is the **underside of the clouds**, and because the whole far
+band shares one elevation, that strip of sky is magnified across the entire
+frame width. Cloud silhouettes therefore land on the water as large hard-edged
+pale islands with dark rims. This also explains the two earlier dead ends:
+`cloudShadow` never varies over the visible sea (`scripts/cloudmap.py` returns
+1.000 everywhere, because the shadow ray's azimuth is pinned to the sun
+azimuth and no cloud lives in that band), so shadows cannot be the painter.
+
+### The measurement bug that hid all of this
+
+The earlier verdicts were computed on a **contaminated pixel band.** The sea
+was located with "brightest row + 12", but the brightest band in this scene is
+the bright low SKY, so the sea started ~30 px early and every statistic folded
+30 rows of sky into the sea. Auto-detecting it instead was worse: a lagged-step
+detector wandered from y=364 to y=602 across these very renders, which is
+useless for a comparison that assumes identical pixels. The sea band is now
+**pinned to a fixed row** (`SEA_Y0`, default 412) in `scripts/p26report.py`,
+so every image is measured on identical pixels. Two things fell out:
+
+- `mean |grad|` read 0.0319 before; the same images read ~0.20 here. The old
+  figure was measuring a sky/water boundary, not the sea.
+- The old "plate area −55 %" numbers were an artifact of that band. The real
+  paired result for that same change is **+0.1 % at t=32 and −1.1 % at t=40** —
+  a no-op, which is why it was rejected.
+
+**Phase noise floor: ~13 %.** The camera breathes (`radius = 42 + 10 sin(t*0.042)`,
+`eye.y = 7.5 + 2.2 sin(t*0.086)`, and two more terms), and the plates are locked
+to the wave phase, so t=32 and t=40 legitimately differ by this much in edge
+density with no code change at all — 52.45 against 45.53 on unchanged P25. Any
+result smaller than that is not a result. Three of the four attempts below fall
+inside it, which is why they changed nothing measurable.
+
+### What was tried and rejected
+
+| attempt | mechanism | measured | verdict |
+| --- | --- | --- | --- |
+| `fwidth(R)`-derived env LOD | blur the cubemap per-pixel by the ray's own swing | t32 **+0.1 %**, t40 −1.1 %, gbar ≤ +1.3 % | no-op |
+| soft cloud ramps **in the env pass only** | widen the 1.2° puff silhouette so the *stored* edges are soft | edges −4 %, gbar −5.6 %, rim −15 %, but sea mean **+8.6 %** (0.233 → 0.253) | regression |
+| `pow(sunAlign, 6)` → `pow(sunAlign, 10)` | align the mirror's azimuth column with `warmGate` (cos^8) and `pathGate` (cos^10) | t32 −1.1 %, t40 **+1.2 %**; banded: far −3.9 % but mid-field **+31 %** | no-op net |
+| reflection bias `0.45` → `0.16` | aim the far-field mirror at the smooth low sky (~9°) instead of the cloud-deck underside (~27°) | t32 edges **+12 %**, gbar **+27 %**, sea **+34 %**; t40 edges **+29 %**, gbar **+52 %**, sea **+47 %** — every band worse | strong effect, wrong way |
+
+All four were reverted with `git checkout`; the tree is byte-identical to P25
+and `grep -c "TEMP DIAGNOSTIC"` is 0 across all `shaders/ps14/*.glsl`.
+
+The fourth is the most useful failure, because unlike the first three it moved
+the numbers far outside the noise floor and so proves the knob is real. It
+also **brackets** it: raising the bias toward `Rdark` and lowering it toward the
+horizon glow both made the sea brighter and harder-edged, which puts `0.45`
+near a local optimum for this parameter. And the brightening *is* the defect
+mechanism, which the next section pins down.
+
+The third attempt is the one worth remembering, because it failed in an
+informative way. The reflection genuinely was the widest azimuth column in the
+shader — cos^6 holds half its weight out to 27° off-axis while the direct light
+dies by 41° and the glitter by 35° — so aligning all three to cos^10 is the
+right *intent*. It still lost, and the reason is worth keeping: it helped the
+far band (edge density 84.3 → 81.0) but wrecked the mid-field (44.0 → 57.8).
+Swapping the cloud-deck mirror for `Rdark` at 58° made things **brighter**,
+because **`Rdark` is not dark** despite its comment. "steep: upper sky" describes
+where it points, not how bright it is. Any future fix that leans on `Rdark` to
+darken off-path water is leaning on a false premise.
+
+### What actually produces a "pale plate with a dark rim"
+
+The final measurement reframes the problem. Lowering the reflection bias made
+the sea brighter by 34-47 %, and it made the edges **harder** by 12-29 % at the
+same time. Edge density rising with brightness means the defect is not "pale
+things on dark water" but **contrast**: `color = mix(body, reflColor, fresnel)`,
+and in the far field fresnel is 0.92, so the plate is almost pure reflection
+while the rim is almost pure body.
+
+So the dark rim is where the wave normal tilts and drops fresnel, and the pale
+plate is where the water lies locally flat and fresnel saturates. **The camo
+pattern is the wave field itself**, printed at 92 % contrast. That is why every
+attempt to change what is being reflected — blur it, soften it, aim it
+elsewhere, narrow its column — failed: none of them touched the thing doing the
+work. The lever is the fresnel *range* (or the wave slope at grazing range),
+not the content or direction of the reflection.
+
+### One thing that looked like a bug and is not
+
+`horizonMix = smoothstep(1500.0, 1900.0, dist)` reads like dead code next to a
+620 m cloud deck, and I nearly "fixed" it on that reasoning. `kSeaSize` is
+**4096**, not 620 — the sea patch spans ±2048 m, so the far mid-side is ~2100 m
+from the eye and the corners ~2930 m. The term fires, in the far corners. The
+620 m figure is the cloud deck's altitude, not the water's extent. Checking the
+constant cost one grep; guessing would have shipped a change to a term that
+works.
+
+### Status
+
+The camo plates are **not fixed.** No fix found in four attempts. Three landed
+inside the noise floor; the fourth moved the numbers far outside it, in the
+wrong direction, which at least brackets the reflection bias and identifies the
+real lever as the fresnel range rather than the reflected content. Everything
+above is measured; none of it is a fix, and `docs/screenshots/ps14_dusk_t36.png`
+has deliberately NOT been regenerated. There is no FPS claim anywhere in this
+file: llvmpipe is a software rasteriser and its frame times say nothing about
+the user's GPU.
+
 ## BUILD-P25: the sunlit zone was a third of the sea wide, and the capture problem was not the one I thought
 
 Two reports, both second-hand this time: the sunlit water "still looks wrong,
