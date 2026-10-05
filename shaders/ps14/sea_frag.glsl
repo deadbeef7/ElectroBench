@@ -330,7 +330,12 @@ void main() {
     // with range also smears the sun into a soft vertical glow.
     float reflDist = dist;
     vec3 reflColor = textureLod(uSkyEnvTex, R, clamp(1.5 + reflDist * 0.0012, 1.0, 5.0)).rgb;
-    float offSun = 1.0 - smoothstep(0.08, 0.45, sunAlign);
+    // BUILD-P25: the lit zone was far too WIDE. sunAlign is the cosine of the
+    // horizontal angle to the sun, and cos^3 still returns ~0.5 at 37 degrees
+    // off-axis -- so the warm term lit a third of the sea on either side of
+    // the sun instead of a column under it. cos^8 keeps the same falloff shape
+    // but puts the half-power point at ~25 degrees.
+    float offSun = 1.0 - smoothstep(0.15, 0.62, sunAlign);
     reflColor *= mix(1.0, 0.46, offSun);
 
     // ---- fresnel: sea is a mirror at grazing angles, glass straight down ----
@@ -360,7 +365,7 @@ void main() {
     // sun glow warm, backslopes fall to near-black. The azimuth gate keeps the
     // warm slope light inside the sun path; off-path stays deep blue/purple.
     float sunDiffuse = max(dot(Nlit, L), 0.0);
-    float warmGate = pow(sunAlign, 3.0);
+    float warmGate = pow(sunAlign, 8.0);   // P25: was 3.0 -- see offSun above
 
     // cloud shadows: the projected puffs gate ALL direct sun terms
     float shadow = cloudShadow(vWorld, sd);

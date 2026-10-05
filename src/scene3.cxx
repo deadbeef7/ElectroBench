@@ -2182,6 +2182,13 @@ int RunPoolScene(bool *gaveUpOut) {
   int samples = 0;
   SDL_GL_GetAttribute(SDL_GL_SAMPLES, &samples);
   std::printf("Antialiasing: %dx MSAA%s\n", samples, samples > 1 ? "" : " (unavailable)");
+  // BUILD-P25: report the real presentation mode, so "the screenshot is black"
+  // can be told apart into a stale build vs a capture tool that cannot grab the
+  // compositor.
+  std::printf("Display: %s %dx%d | capture with Win+PrtScr, or --screenshot FILE\n",
+              gWindowedMode ? "windowed" : "borderless fullscreen",
+              gWindowWidth, gWindowHeight);
+  std::fflush(stdout);
   SDL_GL_SetSwapInterval(0);
 
   if (glewInit() != GLEW_OK) {

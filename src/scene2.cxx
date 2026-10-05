@@ -1160,6 +1160,13 @@ int RunOceanScene(bool *gaveUpOut) {
     if (gaveUpOut) *gaveUpOut = true;
     return 1;
   }
+  // BUILD-P25: report the real presentation mode, so "the screenshot is black"
+  // can be told apart into a stale build vs a capture tool that cannot grab the
+  // compositor.
+  std::printf("Display: %s %dx%d | capture with Win+PrtScr, or --screenshot FILE\n",
+              gWindowedMode ? "windowed" : "borderless fullscreen",
+              gWindowWidth, gWindowHeight);
+  std::fflush(stdout);
   SDL_GL_SetSwapInterval(0); // unclamped, like a benchmark should be
 
   if (glewInit() != GLEW_OK) {

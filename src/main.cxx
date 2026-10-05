@@ -154,6 +154,14 @@ void initialiseWindow() {
     }
   }
 
+  // BUILD-P25: report what is actually on screen at startup. "The screenshot
+  // came out black" has two causes that look identical from the outside -- a
+  // stale build still asking for EXCLUSIVE fullscreen, and a capture tool that
+  // cannot grab the compositor. One line here tells them which they have.
+  printf("Display: %s %dx%d | capture with Win+PrtScr, or --screenshot FILE\n",
+         gWindowedMode ? "windowed" : "borderless fullscreen", gWinW, gWinH);
+  fflush(stdout);
+
   SDL_GL_SetSwapInterval(0);
 }
 } // namespace
@@ -1514,6 +1522,14 @@ int main(int argc, char **argv) {
   OceanSceneSetShotTime(gShotTime);
   PoolSceneSetShotTime(gShotTime);
   PoleSceneSetShotTime(gShotTime);
+
+  // BUILD-P25: print the build id on every run. The shaders load at RUNTIME
+  // from shaders/pole, shaders/pool and shaders/ps14 NEXT TO THE EXE, so an
+  // exe that is current next to a stale shader folder renders a mixture of two
+  // builds and looks wrong in a way that is very hard to diagnose from the
+  // image alone. This line tells them which half is out of date.
+  printf("ElectroBench build P25 (2026-10-05)\n");
+  fflush(stdout);
 
   if (gPoleOnly) {
     PoleSceneSetStandalone(true);

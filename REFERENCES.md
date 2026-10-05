@@ -179,6 +179,102 @@ Realism takeaways applied:
   glazing bars over them. Emissive geometry is only believable if the frame behind it still exists —
   the bars and the sill are what stop a lit pane reading as a sticker.
 
+## BUILD-P25: the sunlit zone was a third of the sea wide, and the capture problem was not the one I thought
+
+Two reports, both second-hand this time: the sunlit water "still looks wrong,
+and the patches are too big", and Win+PrtScr on the user's machine *still*
+returns black after the P24 borderless-fullscreen change.
+
+### What I could not reproduce, stated first because it bounds everything else
+
+The reported frame shows large, hard-edged tan plates with near-white interiors
+covering roughly half the sea, right out to the frame edges. I could not
+produce that image from any shader generation in this repository:
+
+| shader version | sun column max luma | lit pixels in the top 10% of range | those pixels' std |
+| --- | --- | --- | --- |
+| `282ce90` (the "CT sparkles read as glitches" era) | 0.6988 | 0.43% | 0.0110 |
+| `b00d5de` (pre-P23) | 0.7580 | 0.51% | 0.0082 |
+| `7bf9113` (P23+P24, previous build) | 0.7622 | 0.57% | 0.0077 |
+| reported frame | near white | a large fraction | — |
+
+In all three of my renders only a few tenths of one percent of the sun column
+sits in its top decile, and those pixels are spread smoothly. The reported
+image is dominated by them. Resolution is not the explanation: rendered at
+1920x1080 (the size borderless fullscreen actually gives on a desktop) the lit
+fraction is 25.0% and the sun column max is 0.7832 — statistically the same as
+1280x720.
+
+So the reported frame is not something this repository produces at that moment
+in the animation. The most likely explanations, in order: the running exe sits
+beside a shader folder from an unrelated build; or the frame is from a
+different point in the 45 s animation than anything sampled here.
+
+That is exactly why this build adds the two startup lines in "the capture
+problem" below. Diagnosing a mixed exe/shader pair from pixels alone is not
+possible, and I should not have written P24's conclusion as though it were
+settled when it rested on the same unverified assumption.
+
+### The lit zone WAS genuinely too wide — that part is fixed
+
+Independent of the reproduction failure, the gate controlling how much of the
+sea receives warm sun light was too broad, and that is measurable directly from
+the shader rather than from the frame:
+
+    float sunAlign = max(dot(dirXZ, sunXZ), 0.0);   // cosine of the horizontal
+    float warmGate = pow(sunAlign, 3.0);            // angle to the sun
+    float offSun   = 1.0 - smoothstep(0.08, 0.45, sunAlign);
+
+`cos^3` still returns 0.5 at **37 degrees** off-axis, and `offSun` does not
+reach zero until **63 degrees**. With a ~75 degree horizontal field of view
+that is most of the sea being treated as sun-facing, which is precisely the
+"the lit zone is too big" complaint. Now `pow(sunAlign, 8.0)` and
+`smoothstep(0.15, 0.62, ...)` — same falloff shape, half-power point moved from
+37 degrees to about 25, and the off-sun transition starts later so the flanks
+of the column darken rather than staying lit.
+
+Measured, three phases each (t = 32/36/40), `scripts/p25agg.py`:
+
+| metric | P24 | P25 | delta |
+| --- | --- | --- | --- |
+| continuous lit band | 22.11% of frame width | 18.64% | **-15.7%** |
+| whole-water mean luma | 0.2560 | 0.2500 | -2.6% |
+| sky mean luma (control) | 0.3534 | 0.3538 | **+0.1%** |
+
+The column narrows by about a sixth and the sea loses 2.6% of its mean
+brightness, with the sky control unmoved — the light was taken off the flanks,
+not off the whole sea.
+
+### The capture problem: stop guessing, make the binary report itself
+
+P24's answer was a theory about what SDL does on Windows. It was not verified
+(there is no real fullscreen or DWM in the test environment, and the new code
+sits behind `if (!gWindowedMode)` so no headless render exercises it) and the
+user still gets a black capture, so the theory is not sufficient. Two things
+are added instead of a third guess:
+
+- Every scene prints what it is actually presenting, at startup:
+
+      Display: borderless fullscreen 1920x1080 | capture with Win+PrtScr, or --screenshot FILE
+
+  `windowed` there means the user passed `--windowed`/`--width` or is running a
+  different build, and that answers the question before any pixels are
+  compared.
+- `main()` prints `ElectroBench build P25 (2026-10-05)`. **The shaders load at
+  runtime from `shaders/pole`, `shaders/pool` and `shaders/ps14` next to the
+  exe**, so a current exe beside a stale shader folder renders a mixture of two
+  builds. That is the failure mode most consistent with "my frame looks nothing
+  like yours", and one line at startup settles which half is out of date.
+
+The README now also documents the remaining Windows-specific cause that is
+independent of SDL: **Settings → System → Display → Graphics → Options →
+Fullscreen optimizations = Off**. Windows still gives some "borderless" OpenGL
+apps a private swap chain, and the print-screen hotkey captures a surface with
+nothing composited into it.
+
+`--screenshot FILE` remains the path that cannot fail this way — it reads the
+framebuffer directly and never involves the compositor.
+
 ## BUILD-P24: the sunlit sea was a point-normal sample of a facet distribution, and Win+PrtScr caught a black screen
 
 The reported bug: "the zones lit up by the sun on the water are like noise" —

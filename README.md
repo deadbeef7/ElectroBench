@@ -193,20 +193,33 @@ make
 Controls : `F` toggles the automatic camera, long-click + move orbits, mouse wheel zooms, `R` re-drops
 the whole fleet, `ESC` quits.
 
-**Taking a screenshot of the running bench on Windows.** The bench presents
-borderless fullscreen by default — it fills the screen but stays a normal
-top-level window — so `Win`+`PrtScr` captures it normally. It used to request
-*exclusive* fullscreen, which hands the display to the OpenGL driver and leaves
-the desktop compositor with nothing to composite; `Win`+`PrtScr` then returned a
-black screen every time, while the bench itself looked fine.
+**Taking a screenshot of the running bench on Windows.** The bench prints one
+line at startup saying what it is actually doing:
 
-Two other capture paths, neither of which goes through the compositor:
+```
+Display: borderless fullscreen 1920x1080 | capture with Win+PrtScr, or --screenshot FILE
+```
+
+If that says **windowed**, you are looking at a different build (or you passed
+`--windowed` / `--width`) — check that first, because it is the single most
+common reason a capture goes black. If it says **borderless fullscreen** and
+`Win`+`PrtScr` *still* gives you a black rectangle, it is Windows, not the
+bench, and there are two things left to try, in order:
+
+1. **Turn off fullscreen optimisations for the exe.** Settings → System →
+   Display → Graphics → `ElectroBench` (or *Browse* to the exe) → Options →
+   set **Fullscreen optimizations** to **Off**. Windows otherwise still hands a
+   "borderless" OpenGL app a private swap chain, and the screen-capture hotkey
+   captures a surface that has nothing composited into it.
+2. **Run it windowed:** `./build/ElectroBench --windowed`. A normal top-level
+   window is always capturable.
+
+The reliable path never goes through the compositor at all:
 
 - `--screenshot FILE --shot-time S` writes a frame straight out of the
-  framebuffer, before the buffer swap, and needs no window manager at all. This
-  is what the committed screenshots in `docs/screenshots/` were made with.
-- `--windowed` runs in a normal resizable window if you would rather screenshot
-  a windowed run.
+  framebuffer, before the buffer swap. This is what the committed screenshots in
+  `docs/screenshots/` were made with, and it cannot come out black.
+- `--screenshot FILE --shot-times 6,20,38` writes several frames in one run.
 
 Note that borderless fullscreen sizes the window to your **desktop**, not to
 1280x720, so on a 1080p display the bench renders at 1080p. Pass `--width` /
