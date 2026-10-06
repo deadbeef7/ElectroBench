@@ -261,6 +261,34 @@ void main() {
     vec4 rA = vec4(octaveRes(foot, 0.02705), octaveRes(foot, 0.03820),
                    octaveRes(foot, 0.06048), octaveRes(foot, 0.08594));
     vec2 rB = vec2(octaveRes(foot, 0.13682), octaveRes(foot, 0.23079));
+    // BUILD-P28: the slope variance the footprint gate just threw away. Every
+    // gate above closes when an octave stops being resolvable, and once it is
+    // closed waveHeight() returns exactly 0.0 for hC, hX and hZ -- so curv, and
+    // with it slopeSpread, collapse to ZERO exactly where the pixel is widest.
+    // A pixel covering 190 m of water was then claiming it holds no slope at
+    // all and shading it with one bare point normal: the sun lobe below has
+    // nothing left to widen it with, so it stays a binary hit/miss (the pale
+    // plate where it hits, the dark rim where it misses). The octaves are gone
+    // from the SHADING, not from the WATER: their slopes are still inside the
+    // pixel, unresolved, and unresolved slope variance is what roughness is.
+    // (gD* are detailNormals' own gates, computed here because main needs them.)
+    float gD1 = octaveRes(foot, 0.183);
+    float gD2 = octaveRes(foot, 0.366);
+    float gD3 = octaveRes(foot, 0.700);
+    // Per-octave slope amplitude is |grad| = amplitude * frequency (rad/m):
+    // the six swells give 0.170..0.264, the three wavelets 0.044..0.052.
+    // Half of each square is the mean-square slope of a sine; (1 - gate) is the
+    // share the pixel no longer resolves.
+    float hiddenVar = 0.5 * (
+          0.2635 * 0.2635 * (1.0 - rA.x * rA.x)
+        + 0.2400 * 0.2400 * (1.0 - rA.y * rA.y)
+        + 0.2090 * 0.2090 * (1.0 - rA.z * rA.z)
+        + 0.1836 * 0.1836 * (1.0 - rA.w * rA.w)
+        + 0.1720 * 0.1720 * (1.0 - rB.x * rB.x)
+        + 0.1595 * 0.1595 * (1.0 - rB.y * rB.y)
+        + 0.0518 * 0.0518 * (1.0 - gD1 * gD1)
+        + 0.0506 * 0.0506 * (1.0 - gD2 * gD2)
+        + 0.0440 * 0.0440 * (1.0 - gD3 * gD3));
     float e = max(0.35, foot * 0.60);
     float hC = waveHeight(vWorld.xz, uTime, rA, rB);
     float hX = waveHeight(vWorld.xz + vec2(e, 0.0), uTime, rA, rB);
@@ -345,6 +373,10 @@ void main() {
     // encodeScene maps NaN to 0, so the pixel is pure black. Clamped like NdH
     // and NoV, and the pow written as the same squared-cubed chain the
     // Fresnel-Schlick term further down already uses.
+    // BUILD-P28: see the roughness block below for what the camo plates
+    // actually were. The fresnel chain stays the point-normal chain it was:
+    // three attempts to average the mix weight were measured and rejected
+    // (recorded at the roughness fix), so nothing here is touched.
     float NdV = clamp(dot(N, V), 0.0, 1.0);
     float f1 = 1.0 - NdV;
     float f2 = f1 * f1;
@@ -357,7 +389,6 @@ void main() {
     // faceted surface it painted a bright blue dot wherever one facet happened
     // to sit flat, so it now fades out off-path.
     fresnel = clamp(fresnel - 0.030 * offSun, 0.0, 0.92);
-
     // ---- water body: near-black purple deep, warmed by the sky band ----
     vec3 body = uWaterColor * 0.55 + uHorizonColor * 0.03;
 
@@ -425,13 +456,15 @@ void main() {
     // (grazing fresnel -> nearly pure reflection up there), so the water edge
     // converges into the sky geometrically, with no haze knob.
     float horizonMix = smoothstep(1500.0, 1900.0, dist);
-    color = mix(color, skyAtHorizon, horizonMix * 0.85);
+    float horizonWash = horizonMix * 0.85;
+    color = mix(color, skyAtHorizon, horizonWash);
 
     // ---- aerial haze: near water stays dark, far sea melts into the horizon.
     // The target is the ACTUAL sky colour at this azimuth (env cubemap just
     // above the horizon line), so the far edge converges into the sky band.
     float haze = 1.0 - exp(-dist * 0.00075);
-    color = mix(color, skyAtHorizon, haze * (0.30 + 0.70 * haze));
+    float hazeWash = haze * (0.30 + 0.70 * haze);
+    color = mix(color, skyAtHorizon, hazeWash);
 
     // ---- phase 3: address + blend - sun glitter path, as a REAL MICROFACET
     // DISTRIBUTION. Before P21 this was three hand-fitted pow(N·H, n) lobes with
@@ -445,14 +478,41 @@ void main() {
     float NoL = clamp(dot(N, L), 0.0, 1.0);
     float VoH = clamp(dot(V, H), 0.0, 1.0);
     float rough = clamp(0.085 + foot * 0.016, 0.085, 0.30);
-    // BUILD-P23: normal-variance (Toksvig/LEAN) roughening. The distance term
-    // alone says nothing about how ROUGH the water inside that pixel is; the
-    // slope spread from the curvature above is the part of the roughness the
-    // analytic lobe never knew about. Many facets inside one pixel then
-    // average into a smooth glare, as real water does. P24 hoisted slopeSpread up
-    // to main()'s normal so the same number could relax the lighting normal too.
-    rough = clamp(sqrt(rough * rough + 0.65 * slopeSpread * slopeSpread),
-                  0.085, 0.46);
+    // BUILD-P28: THE CAMO PLATES, AS MEASURED. Three instrumented captures
+    // packed single terms into RGB and were read against the real frame:
+    //   (t36, far band rows 412-487) high-pass correlation with the final
+    //   image -- glint add +0.914, the lobe value sp +0.838 (and +0.89/+0.93/
+    //   +0.83 across the off/mid/on thirds of the sun column), against the
+    //   fresnel mix weight at -0.03. The pale plates are the SUN GLINT, not
+    //   the fresnel weight: the brightest fifth of the band sits at sp = 2.07
+    //   against the 2.17 roll-off ceiling (a flat-topped plate) and the
+    //   darkest fifth at sp = 0.18 (the rim) -- a lobe with nothing to widen
+    //   it. Three fresnel-side fixes were measured and rejected: (a) relaxing
+    //   N toward flat before the Schlick pow, sea mean +31% and one uniform
+    //   bright plate; (b) mixing point-F toward its measured mean under the
+    //   Nlit gate, far-median slopeSpread 0.20 tops the gate at 0.32, under
+    //   0.2pp; (c) a smoothstep average of F toward 0.60, 0.1-0.2pp at all
+    //   three phases (p28E/F) -- a no-op, and its carrier never correlated
+    //   with the frame to begin with.
+    // THE MISSING TERM: the widening that IS supposed to happen here is the
+    // Toksvig one below, and slopeSpread is healthy where the plates are
+    // (packed capture, t32: >=0.30 through rows 424-500) -- but it measures
+    // the curvature of the octaves still switched ON. The octaves the
+    // footprint gate removed have an identically-zero height field, so they
+    // contribute nothing to curv, and the widest pixels in the frame (foot
+    // 1.4-8 m, rows 406-440) end up claiming less slope range than they cover:
+    // measured hiddenVar there is 0.044 median against the 0.133 a fully
+    // decorrelated pixel would carry. hiddenVar below restores it -- RMS slope
+    // of each gated octave (half its square, since a sine's mean-square slope
+    // is A^2 k^2 / 2), weighted by the share the pixel no longer resolves.
+    // The near field keeps gate=1 on every octave and so is untouched.
+    // (A 14th attempt also doubled the existing 0.65 slopeSpread weight:
+    // p28G -- the plate zone improved (rows 412-487 E>.08 -2.8/-0.9/-1.0pp,
+    // rim -1.3 to -3.2pp) but every row from 487 down lifted +0.010..+0.024
+    // luma and gained up to +1.9pp, whole-sea mean +0.012 -- over the +/-0.01
+    // budget. The extra slopeSpread weight is the offender, not hiddenVar.)
+    rough = clamp(sqrt(rough * rough + 0.65 * slopeSpread * slopeSpread
+                       + hiddenVar), 0.085, 0.46);
     float alpha = rough * rough;                 // GGX: alpha = roughness^2
     float a2 = alpha * alpha;
     float dd = NdH * NdH * (a2 - 1.0) + 1.0;
@@ -485,8 +545,25 @@ void main() {
     // path, so the floor is nearly zero and the gain comes down to match.
     float pathGate = pow(sunAlign, 10.0) * 0.985 + 0.015;
     float sparkleGate = (0.55 + 0.90 * chaos);
-    color += vec3(1.0, 0.56, 0.24) * sp * 0.36
+    vec3 gAdd = vec3(1.0, 0.56, 0.24) * sp * 0.36
              * (0.25 + max(L.y, 0.0) * 1.2) * pathGate * shadow * sparkleGate;
+    // BUILD-P28: AERIAL PERSPECTIVE BELONGS TO THE GLINT TOO. Both mixes above
+    // replace a share of the surface's radiance with the sky's own colour at
+    // that azimuth, and everything that survives them does so multiplied by
+    // (1 - horizonWash) * (1 - hazeWash). The glint was added AFTER them, so it
+    // punched through at full strength while everything it sits on was washed
+    // into the sky -- which is why an instrumented capture found the sun path
+    // carrying 91% of the far band's structure (high-pass correlation with the
+    // frame, rows 412-487) on a band that is otherwise 60% sky: the surface
+    // fades out and the specular lobe does not, so every hit/miss of that lobe
+    // lands at full contrast against a hazed background. That is the camo. The
+    // fix is not a knob, it is the ordering: attenuate the glint by exactly
+    // the factor the two mixes would have applied to it had it been part of
+    // the surface radiance when they ran (identical algebra to moving this add
+    // above the horizon block). At the horizon row the wash is ~0.5, at the
+    // mid band ~0.05, in the near field ~0.01 -- the fade lands on precisely
+    // the rows 407-427 where edge density measures 86%, and nowhere else.
+    color += gAdd * (1.0 - horizonWash) * (1.0 - hazeWash);
 
     // ---- SHARED DISPLAY TRANSFORM (identical to the sky dome's) ----------
     float dith = (hash21(gl_FragCoord.xy + fract(uTime) * 13.0)

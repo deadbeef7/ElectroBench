@@ -893,6 +893,20 @@ static void RenderScene() {
   }
 
   float t = (float)(now - gStartTime); // camera time is benchmark-relative so --shot-times are deterministic
+  // BUILD-P28 (deterministic shot clock): --shot-time S fired on the first frame
+  // whose wall clock had CROSSED S. On llvmpipe a frame costs ~2 s of sim time,
+  // so "the first frame past 36 s" is any sim state in [36, 38+) chosen by load
+  // noise — two runs of IDENTICAL code landed 8.4% apart in edge density and
+  // made every A/B verdict this pipeline ever produced unfalsifiable (the P27
+  // control experiment). Fix: once a shot is armed and the sim clock has reached
+  // the FIRST pending target, clamp the sim clock to that exact target. Every
+  // frame from then on renders the identical scene state until the shot fires,
+  // so --shot-time T is now a pure function of T. No shot armed -> no clamp, and
+  // normal benchmarking is untouched.
+  if (!gShotTimes.empty() && gNextShot < gShotTimes.size() &&
+      t >= gShotTimes[gNextShot]) {
+    t = gShotTimes[gNextShot];
+  }
   gSceneTime = (double)t;                // BUILD-P23: shaders get the SAME clock as the camera
   UpdateCloudAzim(t);
 

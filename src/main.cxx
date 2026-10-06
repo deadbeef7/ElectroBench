@@ -1530,7 +1530,7 @@ int main(int argc, char **argv) {
   // exe that is current next to a stale shader folder renders a mixture of two
   // builds and looks wrong in a way that is very hard to diagnose from the
   // image alone. This line tells them which half is out of date.
-  printf("ElectroBench build P25 (2026-10-05)\n");
+  printf("ElectroBench build P28 (2026-10-06)\n");
 
   // BUILD-P25: every scene's shaders load at RUNTIME from folders beside the
   // exe, and resolveAssetPath prefers the CURRENT WORKING DIRECTORY over the

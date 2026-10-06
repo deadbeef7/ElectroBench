@@ -179,6 +179,114 @@ Realism takeaways applied:
   glazing bars over them. Emissive geometry is only believable if the frame behind it still exists —
   the bars and the sill are what stop a lit pane reading as a sticker.
 
+## BUILD-P28: the rig P27 asked for, and what it found when it arrived
+
+This build ships **the deterministic shot clock, a corrected diagnosis, and a
+fix that wins on all three phases with the sea mean held.** P27's closing line
+was that a fix for scene 2's camo plates could not be claimed until capture was
+pinned to an exact simulated time. That instrument exists now, and once it did,
+the plates turned out to belong to the sun glint rather than to fresnel.
+
+### The instrument: a shot clock with a zero noise floor
+
+`src/scene2.cxx` clamps the simulation time to the requested shot time: after
+`float t = (float)(now - gStartTime);`, if shots are armed and `t` has reached
+the next shot, `t` is held at exactly `gShotTimes[gNextShot]`. Every frame that
+captures that shot therefore renders the same wave phase, the same cloud deck
+and the same dither. Two runs of the same code at t=36 are **byte-identical**
+(`md5 de5bc76e438219fd6ddea54cd7dcb8a9`), so the repeatability floor P27
+measured at 7–9 % is now **0** — and any non-zero delta between two captures is
+real signal, no matter how small.
+
+`scripts/sea_sweep.sh OUTDIR WIDTH T1,T2,T3` renders the three phases
+(`--scene-only`) sequentially for the A/B. Every sweep below was grepped for
+`failed:` / `error:` / `GL_INVALID` first and came back clean.
+
+### The diagnosis correction: it is the glint, and the fresnel weight is not it
+
+Three instrumented captures packed single terms into RGB and were read against
+the real frame (far band, rows 412–487, t=36):
+
+| packed channel | high-pass corr. with the final image |
+| --- | --- |
+| sun-glint add | **+0.914** |
+| GGX lobe value `sp` | **+0.838** (+0.89 / +0.93 / +0.83 across the off/mid/on thirds of the sun column) |
+| fresnel mix weight | **−0.03** |
+
+The brightest fifth of that band sits at `sp = 2.07` against the 2.17 roll-off
+ceiling — a flat-topped plate — and the darkest fifth at `sp = 0.18`, the rim.
+So P26/P27's account (fresnel saturating at 0.92, printing the wave field at
+92 % contrast) does not survive the instrument: the fresnel map carries edges
+that simply do not appear in the frame.
+
+Three fresnel-side fixes were measured and rejected on the new rig:
+
+| attempt | result |
+| --- | --- |
+| relax `N` toward flat **before** the Schlick pow | sea mean **+31 %** (0.246 → 0.348), E>.08 **0.00 %**, one uniform bright plate, 29 % of the band in a single blob |
+| mix point-F toward its mean under the Nlit gate | far-median `slopeSpread` is 0.20, so the gate tops out at 0.32 — **under 0.2 pp** |
+| smoothstep F average toward 0.60 (p28E / p28F) | **0.1–0.2 pp** at all three phases — a no-op, because the gate variable collapses where the artefact lives |
+
+### The two defects that were real
+
+**1. The glint punched through aerial perspective.** `color` is washed toward
+`skyAtHorizon` twice (horizon mix, then haze) before the glitter is added, so
+the surface it sits on fades into the sky while the specular lobe arrives at
+full strength. An instrumented capture put 91 % of that band's structure in
+the glint on a band that is otherwise 60 % sky — every hit/miss of the lobe
+landing at full contrast against a washed background *is* the camo. The fix is
+not a knob, it is the ordering: the glint is now multiplied by
+`(1 - horizonWash) * (1 - hazeWash)`, algebraically identical to moving the add
+above both mixes.
+
+**2. The widest pixels claimed no slope range.** The Toksvig widening below is
+`sqrt(rough² + 0.65·slopeSpread²)`, and `slopeSpread = curv · foot` — but `curv`
+is derived from the height field the octave gate just zeroed, so an octave that
+has been switched out contributes nothing. Packed capture (t=32) measured foot
+falling from 7.65 m at row 408 to 0.20 m by row 536, with `slopeSpread` healthy
+(≥0.30) throughout — while the sub-pixel variance of the removed octaves
+(`hiddenVar`, 0.5·A²k²·(1−gate²) summed per octave) was **0.044 against the 0.133
+a fully decorrelated pixel would carry**, and exactly 0 below row 488. So the
+pixels covering 1.4–8 m of water reported less slope range than they cover, and
+their lobe kept the bare floor. `hiddenVar` restores only that, and the near
+field is untouched by construction.
+
+### What it measures (p26report, vs the P25 baseline p28A)
+
+| | t=32 | t=36 | t=40 |
+| --- | --- | --- | --- |
+| sea mean | 0.2458 → **0.2440** | 0.2658 → **0.2642** | 0.2587 → **0.2574** |
+| E>.08 | 51.76 → **51.56** | 53.20 → **53.00** | 45.58 → **45.41** |
+| E>.12 | 44.43 → **44.15** | 46.65 → **46.37** | 39.03 → **38.85** |
+| gbar | 0.2272 → **0.2216** | 0.2372 → **0.2322** | 0.1900 → **0.1869** |
+| rim | 21.7 → **20.6** | 18.6 → **17.9** | 13.7 → **13.1** |
+
+All five move the right way at all three phases, the mean shifts 0.0013–0.0018
+(well inside ±0.01), and the floor is 0. The change is also **where the defect
+is**: rows 406–418 lose 7.4 pp of edge density and 21 % of their mean gradient,
+rows 418–442 lose 1.4–2.2 pp, everything below row 520 moves ≤0.14 pp, and rows
+0–403 (sky) are byte-identical. `bands.py` on the far band: 83.28 → 82.44 with
+the hard-boundary share 28.3 → 26.0.
+
+### Rejected on the new rig, recorded so they are not retried
+
+- **Double the existing `slopeSpread` weight (0.65 → 1.30) — p28G.** The plate
+  zone really did improve (rows 412–487 E>.08 −2.8 / −0.9 / −1.0 pp, rim −1.3 to
+  −3.2 pp), but *every* row from 487 down lifted +0.010…+0.024 luma and gained up
+  to +1.9 pp: whole-sea mean **+0.012** (over budget) and E>.08 **+1.3 to +2.3**.
+  Widening the lobe where the waves are resolved converts a few large gradients
+  into many small ones — gbar falls, the edge count rises. Scoping is not
+  optional; `hiddenVar` alone (p28H) keeps the direction (E>.08 −0.03, gbar
+  −0.002) but delivers almost nothing, which is why it ships as the second,
+  smaller half of the fix rather than on its own.
+- **Any amplitude cut to the glint.** The mean budget forbids it: the glint is
+  most of the far band's luma, so dimming it moves sea mean faster than it moves
+  edge density. Attenuating it *with* aerial perspective instead of by a gain
+  spends the same light only where the atmosphere should have spent it.
+
+`docs/screenshots/ps14_dusk_t36.png` **is** regenerated in this build — the one
+P27 deliberately left alone.
+
 ## BUILD-P27: the plates are a contrast defect, and the rig cannot resolve a fix
 
 This build ships **no shader change.** It records two things: a diagnosis that
