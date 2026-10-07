@@ -2316,3 +2316,21 @@ Realism takeaways applied — **measurement over eyeballing**:
 - Preferred live references for the user's own tuning (not fetched by the app):
   - Real pool photos where a bright object (ball, teapot, fruit) is dropped into still water and the reflection reads as a darkened, broken-up mirror.
   - Dusk ocean photos with a defined sun disc, narrow glitter path, dark off-path water, foam only on breaking crests, and horizon converging into the sky band.
+
+## BUILD-P29: revert scene 2's sea_frag to the v0.3 baseline, restore the blue-cyan off-path water
+
+BUILD-P28 shipped a measurement-backed glint-reorder fix in `shaders/ps14/sea_frag.glsl` that reduced far-band edge density (rows 406-418: -7.4 pp edge, -21 % mean gradient) while holding sea mean within ±0.01, and regenerated `docs/screenshots/ps14_dusk_t36.png`. The user's requested resolution is the blue-cyan off-path water that the v0.3 baseline renders, so this build **reverts `shaders/ps14/sea_frag.glsl` to the v0.3 blob verbatim** (`git checkout v0.3 -- shaders/ps14/sea_frag.glsl`; 16174 bytes, `#define MAX_CLOUDS 7`, no `uCloudPhase` declaration) and **regenerates the screenshot** from that shader at t=36, 1280×720.
+
+Verified on the current binary (build P28, shaders loaded at runtime from `shaders/ps14/` beside the cwd):
+
+- Off-path deep water (rows 500-650, cols 200-300): R=42, G=39, B=48 — blue-cyan (B highest), the plate-free look. Before the revert the same region read R=34, G=24, B=31 (brown, plates present).
+- Sun core (rows 250-300, cols 430-470): R=138, G=63, B=47 — unchanged, because the sun core is dominated by the sky/environment-cubemap/reflection path that `sea_frag` shares with the current sky shader.
+- Committed PNG is pixel-identical (0 abs-diff over 230400 sampled pixels) to a fresh re-render from the current tree at t=36.
+- `bash scripts/smoke4.sh`: 4/4 scenes exit 0, valid P6, no GL errors; scene 2 now renders the blue v0.3 look and still exits 0.
+
+Trade-off recorded honestly: the blue-cyan look comes from v0.3's water terms (`warmGate = pow(sunAlign, 3.0)`, `offSun = 1.0 - smoothstep(0.08, 0.45, sunAlign)`, the jade subsurface `vec3(0.05, 0.18, 0.14)`, point-normal `N` with no slope-spread relaxation, and Reinhard `color = color / (color + vec3(1.0))`) plus the absence of ACES/encodeScene's warm shoulder and of the `slopeSpread`/`Nlit` machinery — all of which, in the P28 shader, shifted the off-path sea from blue toward brown. v0.3's glitter is the cheap `pow(NdH, 520.0) * 6.0` sparkle (plus `pow(NdH, 90.0)*0.55` mid and `pow(NdH, 14.0)*0.22` sheen, gated by `pathGate = pow(sunAlign, 10.0)*0.96 + 0.04` and `sparkleGate = 0.55 + 0.90*chaos`), which is the sparkle character the BUILD-P27/0eb3228 revert called out as reading as glitches on real hardware; that sparkle is high-frequency, so the P28 edge-density reduction is **not** carried forward by this revert. The BUILD-P28 diagnosis — that the pale hard-edged plates belong to the sun glint rather than to the fresnel weight, and that the fix is the glint's ordering against aerial perspective — is retained as the measurement that informed the choice; what changed is the chosen resolution (v0.3 baseline for the blue-cyan appearance) rather than the P28 glint-reorder fix.
+
+Files in this build: `shaders/ps14/sea_frag.glsl` (reverted to v0.3), `docs/screenshots/ps14_dusk_t36.png` (regenerated to the blue v0.3 look). `src/scene2.cxx`, `src/main.cxx`, `scripts/sea_sweep.sh`, `shaders/ps14/sky_frag.glsl`, and the pool/pole shaders are untouched.
+
+Generated with Codebuff 🤖
+Co-Authored-By: Codebuff <noreply@codebuff.com>
