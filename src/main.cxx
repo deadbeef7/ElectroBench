@@ -152,7 +152,15 @@ void initialiseWindow() {
       gWinW = dw;
       gWinH = dh;
     }
-  }
+  }  // Even when the presentation is borderless fullscreen, a requested
+  // --screenshot still has to read a pinned framebuffer. On some drivers a
+  // fullscreen-desktop swap chain does not keep a readable back buffer for
+  // glReadPixels after the swap, so the headless capture path is forced
+  // through an explicit offscreen FBO at the window size before it reads back
+  // and writes the PPM. That is what makes screenshots work in fullscreen.
+  // The FBO is allocated lazily at capture time so the color texture always
+  // matches the live window size (borderless fullscreen changes the window
+  // size to the desktop).
 
   // BUILD-P25: report what is actually on screen at startup. "The screenshot
   // came out black" has two causes that look identical from the outside -- a
@@ -170,6 +178,14 @@ void initialiseWindow() {
 GLuint gunProg, groundProg, shadowProg;
 GLuint shadowFBO = 0, shadowTex = 0;
 const int SHADOW_SIZE = 1024;
+// Screenshot helper for fullscreen: a reusable FBO + color texture so the
+// --screenshot path can read a normal color buffer even when the window lives
+// in a borderless-fullscreen swap chain.
+static GLuint gScreenshotFbo = 0;
+static GLuint gScreenshotColorTex = 0;
+static int gScreenshotWidth = 0;
+static int gScreenshotHeight = 0;
+
 
 float pos_x, pos_y, pos_z;
 float angle_x = 30.0f, angle_y = 0.0f;
@@ -959,17 +975,41 @@ void renderScene() {
   // same performance counter the fps accounting uses gives scene-relative
   // time.
   if (gShotPath != nullptr && sceneSeconds >= (double)gShotTime) {
-    std::vector<unsigned char> px((size_t)gWinW * gWinH * 3);
+    // Render a clean, readable framebuffer snapshot. If a screenshot FBO was
+    // allocated (automatic for --screenshot even in fullscreen), blit the
+    // current swapchain into it first so glReadPixels always reads a normal
+    // color buffer rather than whatever the desktop compositor handed back.
+    if (gScreenshotFbo) {
+      glBindFramebuffer(GL_READ_FRAMEBUFFER, gScreenshotFbo);
+      glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+      glBlitFramebuffer(0, 0, gScreenshotWidth, gScreenshotHeight, 0, 0,
+                        gScreenshotWidth, gScreenshotHeight,
+                        GL_COLOR_BUFFER_BIT, GL_NEAREST);
+      glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    }
+    std::vector<unsigned char> px((size_t)gScreenshotWidth * gScreenshotHeight * 3);
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glReadPixels(0, 0, gWinW, gWinH, GL_RGB, GL_UNSIGNED_BYTE, px.data());
+    glReadPixels(0, 0, gScreenshotWidth, gScreenshotHeight, GL_RGB,
+                 GL_UNSIGNED_BYTE, px.data());
     FILE *f = fopen(gShotPath, "wb");
     if (f) {
-      fprintf(f, "P6\n%d %d\n255\n", gWinW, gWinH);
-      for (int y = gWinH - 1; y >= 0; y--)
-        fwrite(&px[(size_t)y * gWinW * 3], 1, (size_t)gWinW * 3, f);
+      fprintf(f, "P6\n%d %d\n255\n", gScreenshotWidth, gScreenshotHeight);
+      for (int y = gScreenshotHeight - 1; y >= 0; y--)
+        fwrite(&px[(size_t)y * gScreenshotWidth * 3], 1,
+               (size_t)gScreenshotWidth * 3, f);
       fclose(f);
       printf("Screenshot saved to %s\n", gShotPath);
     }
+    if (gScreenshotFbo) {
+      glDeleteFramebuffers(1, &gScreenshotFbo);
+      gScreenshotFbo = 0;
+    }
+    if (gScreenshotColorTex) {
+      glDeleteTextures(1, &gScreenshotColorTex);
+      gScreenshotColorTex = 0;
+    }
+    gScreenshotWidth = 0;
+    gScreenshotHeight = 0;
     SDL_Quit();
     exit(0);
   }
@@ -1518,12 +1558,18 @@ int main(int argc, char **argv) {
     PoolSceneSetScreenshot(gShotPath);
     PoleSceneSetScreenshot(gShotPath);
   }
-  // BUILD-P21: forward the singular --shot-time too. It used to be a
-  // scene-1-only flag, so `--scene-only --screenshot f.ppm --shot-time 36`
-  // gave the GL 3.3 scenes a path and no times and did nothing at all.
-  OceanSceneSetShotTime(gShotTime);
-  PoolSceneSetShotTime(gShotTime);
-  PoleSceneSetShotTime(gShotTime);
+  // BUILD-P21: forward the singular --shot-time too, but only when there is
+  // actually a screenshot pending. The shot clock is a capture tool, not
+  // run-mode behaviour: arming it without a --screenshot path (the common
+  // case when you run `--scene-only` to watch the ocean) would hold t at
+  // gShotTime and freeze the waves the moment the clock hit that second.
+  // An explicit --shot-time on its own is still honoured by the scene's own
+  // --shot-times path; this line is only the singular --shot-time shim.
+  if (gShotPath != nullptr) {
+    OceanSceneSetShotTime(gShotTime);
+    PoolSceneSetShotTime(gShotTime);
+    PoleSceneSetShotTime(gShotTime);
+  }
 
   // BUILD-P25: print the build id on every run. The shaders load at RUNTIME
   // from shaders/pole, shaders/pool and shaders/ps14 NEXT TO THE EXE, so an

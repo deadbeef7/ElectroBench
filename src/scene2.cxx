@@ -603,10 +603,8 @@ static void BindSkyUniforms(const Mat4 &vp) {
   glUniform3f(gSkyProg.loc("uHorizonColor"), 0.115f, 0.055f, 0.062f); // warm maroon horizon band
   glUniform3f(gSkyProg.loc("uSunColor"), 1.55f, 0.72f, 0.30f);        // deeper orange sun
 
-  // Re-upload the small cloud layout every draw. The 28 floats are negligible,
-  // and unlike the old one-shot upload this keeps all six cubemap faces, the
-  // full-resolution dome, and the sea shadows on exactly the same drifting
-  // azimuths within the frame.
+  // Re-upload the small cloud layout every draw. The 36 floats are negligible,
+  // so the env cubemap can carry the same nine banks the on-screen dome renders.
   glUniform1i(gSkyProg.loc("uCloudCount"), MAX_CLOUDS);
   glUniform1fv(gSkyProg.loc("uCloudAzim"), MAX_CLOUDS, gCloudAzimDrift);
   glUniform1fv(gSkyProg.loc("uCloudPhase"), MAX_CLOUDS, gCloudPhase);
@@ -643,7 +641,7 @@ static void DrawSkyToEnvMap(const Mat4 &proj) {
     // bake HDR-hot silver linings that the sea then mirrors as isolated
     // bright dots down the glitter column — v0.3 never had them in its
     // reflections. The LIVE sky keeps the wisps; the reflections match v0.3.
-    glUniform1i(gSkyProg.loc("uCloudCount"), 7);
+    glUniform1i(gSkyProg.loc("uCloudCount"), 9);
     // env capture: dome centred at the origin, small radius, HDR output
     glUniform3f(gSkyProg.loc("uCenter"), 0.0f, 0.0f, 0.0f);
     glUniform1f(gSkyProg.loc("uRadius"), 10.0f);

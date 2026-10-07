@@ -32,7 +32,7 @@ uniform vec3  uSunDir;
 uniform vec3  uHorizonColor;
 uniform vec3  uWaterColor;
 
-#define MAX_CLOUDS 7             // must match sky_frag.glsl and tidebench.cxx
+#define MAX_CLOUDS 9             // must match sky_frag.glsl and tidebench.cxx
 uniform int   uCloudCount;
 uniform float uCloudAzim[MAX_CLOUDS];   // centre azimuth, radians
 uniform float uCloudElev[MAX_CLOUDS];   // centre elevation, radians
@@ -275,11 +275,11 @@ void main() {
     foam *= crest * slopeFacing * (0.35 + 0.65 * chaos);
     body += vec3(0.55, 0.48, 0.58) * foam * 0.55; // dim warm-gray foam
 
-    // subsurface glow against the light: THIN CRESTS transmit a dim jade-green
-    // where sunlight actually passes through the water. Gated to the sun's
-    // azimuth AND to un-shadowed sun — ungated it speckled pale-teal noise
-    // across the dark off-path sea (the light-blue artifact).
-    body += vec3(0.05, 0.18, 0.14) * sunAlign * warmGate * shadow * crest * 0.55;
+    // subsurface glow behind the light: thin BREAKING crests transmit a dim
+    // jade-green tint where sunlight actually passes through the water.
+    // Kept gated to the crest (breaking slope) so it is a real structure on
+    // the wave and not a free-floating pale-teal haze across the off-path sea.
+    body += vec3(0.05, 0.18, 0.14) * crest * shadow * 0.55;
 
     vec3 color = mix(body, reflColor, fresnel);
 
