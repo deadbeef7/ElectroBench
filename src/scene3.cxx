@@ -925,11 +925,14 @@ static void SpawnSplash(int pot, float x, float z, float impactSpeed, float scal
   }
 }
 
-static void ResetFleet() {
+// t0 = sim time the act begins. Every pot's spawn gate is offset by it, so
+// a re-drop staggers over the SAME window relative to *now* instead of firing
+// the whole fleet in one frame (which is what a bare ResetFleet at t>0 did).
+static void ResetFleet(double t0 = 0.0) {
   for (int i = 0; i < kFleetCount; i++) {
     gPots[i] = TeapotPhysics{};
     gPots[i].active = false;
-    gPots[i].spawnAt = kFleetDelay[i];
+    gPots[i].spawnAt = t0 + kFleetDelay[i];
     gCrowns[i] = CrownSplash{};
     gJets[i] = JetColumn{};
     gRingUsed[i] = 0;
@@ -958,6 +961,98 @@ static double gPhysicsAccum = 0.0;
 // gSimTime tracks the physics timebase; --shot-times now mean SIM seconds
 // (identical to wall seconds at 60 FPS, deterministic at any frame rate).
 static double gSimTime = 0.0;
+
+// ---------------------------------------------------------------------
+// BUILD-P30: THE FLYOVER NOW REACTS TO THE FLEET.
+//
+// The orbit used to be a fixed slow circle that ignored the drops entirely.
+// The requested act is three beats driven off the teapots themselves:
+//   1. FALL      every teapot that starts its drop pushes the orbit back one
+//                more step, so the camera widens as the rain widens and the
+//                whole falling fleet stays in shot.
+//   2. RETURN    once every pot has landed and parked, the orbit eases all the
+//                way back to its base radius.
+//   3. RESPLASH  with the camera home, every pot erupts in the SAME frame: one
+//                synchronized crown/jet/ring burst across the whole pool.
+//                The fleet then re-drops and the act repeats.
+//
+// Everything keys off gSimTime, so the choreography is identical at any frame
+// rate — the same rule the rest of the scene has followed since BUILD-P20.
+// ---------------------------------------------------------------------
+static const float kPullbackPerPot = 0.55f;  // orbit metres added per drop
+static const float kPullbackMax = 9.5f;      // widest the flyover ever gets
+static const double kReturnSeconds = 3.0;    // orbit travel back home
+static const double kResplashHold = 3.2;     // let the synchronized burst play
+static const float kResplashSpeed = 8.5f;    // identical impact energy for
+                                             // every pot -> identical crowns
+
+static float gCamPullback = 0.0f; // eased orbit offset, metres
+static int gPhase = 0;            // 0 = falling, 1 = returning, 2 = resplashed
+static double gPhaseT = 0.0;      // sim time the current phase began
+
+// how many pots of the current act have started their drop
+static int FleetSpawned() {
+  int n = 0;
+  for (int i = 0; i < kFleetCount; i++)
+    if (gPots[i].active) n++;
+  return n;
+}
+
+// true once every pot has dropped AND parked on the basin floor
+static bool FleetAllDown() {
+  for (int i = 0; i < kFleetCount; i++)
+    if (!gPots[i].active || !gPots[i].settled) return false;
+  return true;
+}
+
+// One synchronized burst: the SAME impact speed at every parked hull, so all
+// eighteen crowns rise together to the same height on the same frame. It runs
+// at the pot's current x/z, so each crown erupts around its own hull.
+static void ResplashAll() {
+  for (int i = 0; i < kFleetCount; i++) {
+    TeapotPhysics &p = gPots[i];
+    if (!p.active) continue;
+    SpawnSplash(i, p.pos.x, p.pos.z, kResplashSpeed, kFleetScale[i]);
+    SpawnRing(i, p.pos.x, p.pos.z, 0.55f);
+    p.splashTime = gSimTime;   // restart the post-impact hull churn + boil
+    p.nextBoil = gSimTime + 0.25;
+  }
+}
+
+static void UpdateChoreography(double simNow, double dt) {
+  float target = 0.0f;
+
+  if (gPhase == 0) {
+    // beat 1 — one extra step of pull-back per pot that has begun falling
+    target = std::fmin((float)FleetSpawned() * kPullbackPerPot, kPullbackMax);
+    if (FleetAllDown()) {
+      gPhase = 1;
+      gPhaseT = simNow;
+    }
+  } else if (gPhase == 1) {
+    // beat 2 — bring the flyover back home, then erupt the whole fleet at once
+    target = 0.0f;
+    if (simNow - gPhaseT >= kReturnSeconds && gCamPullback <= 0.30f) {
+      ResplashAll();
+      gPhase = 2;
+      gPhaseT = simNow;
+    }
+  } else {
+    // beat 3 — hold while the synchronized crowns play, then start the act over
+    target = 0.0f;
+    if (simNow - gPhaseT >= kResplashHold) {
+      ResetFleet(simNow); // pots stagger again from *now*, not from t=0
+      gCamPullback = 0.0f;
+      gPhase = 0;
+      gPhaseT = simNow;
+    }
+  }
+
+  // ease the orbit offset toward this beat's target — frame-rate independent,
+  // so the camera glides rather than stepping when a pot spawns
+  float k = 1.0f - std::exp(-1.6f * (float)dt);
+  gCamPullback += (target - gCamPullback) * k;
+}
 
 static void UpdatePhysicsStep(double now, float dt) {
   (void)now;
@@ -1291,10 +1386,13 @@ static void UpdateAutoCamera(float t) {
   // fall INTO frame, the camera does not rise or pitch up after them.
   float a = 0.32f + t * 0.055f;
   float spread = t > 11.0f ? std::fmin((t - 11.0f) * 0.35f, 1.6f) : 0.0f;
-  float radius = 7.6f + std::sin(t * 0.07f) * 1.1f + spread;
+  // BUILD-P30: gCamPullback is the fleet-driven beat — it widens the orbit by
+  // one step per falling pot and returns to 0 for the synchronized resplash.
+  float radius = 7.6f + std::sin(t * 0.07f) * 1.1f + spread + gCamPullback;
   gCamPos.x = std::cos(a) * radius;
   gCamPos.z = std::sin(a) * radius;
-  gCamPos.y = 2.9f + std::sin(t * 0.045f) * 0.7f + spread * 0.10f;
+  gCamPos.y = 2.9f + std::sin(t * 0.045f) * 0.7f + spread * 0.10f +
+              gCamPullback * 0.12f;
   gCamYaw = std::atan2(-gCamPos.x, -gCamPos.z); // look at the centre
   gCamPitch = -0.30f + 0.06f * std::sin(t * 0.03f);
 }
@@ -1803,6 +1901,7 @@ static void RenderScene() {
   // time is genuinely wanted (frame dt, the results screen).
   const double simNow = gSimTime;
   UpdatePhysics(simNow, dt);
+  UpdateChoreography(simNow, dt); // BUILD-P30: fall -> return -> resplash
 
   if (gAutoCam) UpdateAutoCamera((float)gSimTime);  // SIM time: framing stays
                                                     // deterministic at any FPS
@@ -1894,7 +1993,7 @@ static void ProcessKeys(const SDL_Event &event) {
   } else if (event.key.keysym.sym == SDLK_f) {
     gAutoCam = !gAutoCam;
   } else if (event.key.keysym.sym == SDLK_r) {
-    ResetFleet(); // re-drop the whole fleet
+    ResetFleet(gSimTime); // re-drop the whole fleet, staggered from now
   } else if (event.key.keysym.sym == SDLK_LEFT) {
     gCamYaw -= 0.05f;
   } else if (event.key.keysym.sym == SDLK_RIGHT) {
@@ -2205,6 +2304,11 @@ int RunPoolScene(bool *gaveUpOut) {
   gFpsTimer = gStartTime;
   gSimTime = 0.0;      // D8 harness fix: screenshot times are SIM seconds
   gPhysicsAccum = 0.0;
+  // P30: start the flyover act from its base orbit, phase 0, so a re-entry
+  // never inherits a half-finished fall/return/resplash cycle.
+  gCamPullback = 0.0f;
+  gPhase = 0;
+  gPhaseT = 0.0;
 
   SDL_Event event;
   while (!gQuit && !gFusedDone) {
