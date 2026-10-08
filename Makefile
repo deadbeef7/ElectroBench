@@ -15,7 +15,7 @@
 
 CXX ?= g++
 
-CXXFLAGS := -std=c++17 -O2 -march=x86-64 -mtune=generic
+CXXFLAGS := -std=c++17 -O3
 CPPFLAGS := -Ilib
 
 # STATIC=1 -> fully static link (example, Windows/MSYS2):
