@@ -279,7 +279,7 @@ void main() {
     // jade-green tint where sunlight actually passes through the water.
     // Kept gated to the crest (breaking slope) so it is a real structure on
     // the wave and not a free-floating pale-teal haze across the off-path sea.
-    body += vec3(0.05, 0.18, 0.14) * crest * shadow * 0.55;
+    body += vec3(0.05, 0.18, 0.14) * sunAlign * warmGate * shadow * crest * 0.55;
 
     vec3 color = mix(body, reflColor, fresnel);
 
