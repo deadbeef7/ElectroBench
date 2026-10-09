@@ -1,5 +1,5 @@
 #version 330 core
-// HUD text: single-channel bitmap font atlas, tinted pale cyan.
+
 
 in vec2 vUV;
 

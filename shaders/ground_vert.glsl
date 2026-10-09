@@ -1,5 +1,5 @@
 #version 120
-// Ground plane vertex shader (GLSL 1.2)
+
 uniform mat4 uInvView;
 uniform mat4 uLightMatrix;
 

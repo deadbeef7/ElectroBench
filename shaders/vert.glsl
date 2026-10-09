@@ -1,16 +1,14 @@
 #version 120
-// Vertex Shader (GLSL 1.2)
-// Passes texture coords, view-space position/normal, world position and
-// light-space shadow coordinates to the fragment stage.
 
-uniform mat4 uInvView;      // inverse of the camera view matrix
-uniform mat4 uLightMatrix;  // bias * lightProj * lightView (world -> [0,1])
+
+uniform mat4 uInvView;
+uniform mat4 uLightMatrix;
 
 varying vec2 vTexCoord;
-varying vec3 vViewPos;      // view-space position
-varying vec3 vNormalView;   // view-space normal (includes per-object rotation)
-varying vec3 vWorldPos;     // world-space position
-varying vec4 vShadowCoord;  // light-space position for shadow map lookup
+varying vec3 vViewPos;
+varying vec3 vNormalView;
+varying vec3 vWorldPos;
+varying vec4 vShadowCoord;
 
 void main() {
     vec4 viewPos = gl_ModelViewMatrix * gl_Vertex;

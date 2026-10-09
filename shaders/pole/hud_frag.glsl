@@ -1,6 +1,5 @@
 #version 330 core
-// Scene 4 HUD: the shared 8x8 atlas tinted CRT-amber to match the
-// power-line sky palette.
+
 
 in vec2 vUV;
 

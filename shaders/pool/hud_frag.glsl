@@ -1,6 +1,5 @@
 #version 330 core
-// Pool scene HUD: same shared 8x8 atlas as the other scenes, tinted
-// aqua-cyan to match the pool-room palette.
+
 
 in vec2 vUV;
 

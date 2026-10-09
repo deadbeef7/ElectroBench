@@ -1,9 +1,5 @@
 #version 330 core
-// Pool scene vertex shaders: shared tiny vertex shader for every object pass
-// (water grid, sky dome, teapot, splash droplets). Positions arrive pre-built
-// in object space; uModel places them in the world, uViewProj is camera
-// view * projection. Normal matrices are cheap: the scene only rotates the
-// teapot around Y and uniform-scales, so mat3(uModel) renormalised is exact.
+
 
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec3 aNormal;

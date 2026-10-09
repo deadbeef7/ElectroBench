@@ -1,8 +1,8 @@
 #version 330 core
-// HUD text: one quad per glyph, positioned in pixel coordinates.
 
-layout(location = 0) in vec2 aPos; // pixel position of quad corner
-layout(location = 1) in vec2 aUV;  // normalized atlas coordinate
+
+layout(location = 0) in vec2 aPos;
+layout(location = 1) in vec2 aUV;
 
 uniform vec2 uResolution;
 

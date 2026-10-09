@@ -1,5 +1,5 @@
 #version 330 core
-// Fullscreen triangle; no vertex buffer needed (uses gl_VertexID).
+
 
 out vec2 vNDC;
 
