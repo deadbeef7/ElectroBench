@@ -6,30 +6,9 @@
 SDL_Window *window;
 SDL_GLContext glContext;
 
-// ---------------------------------------------------------------------------
-// CLI options (headless visual testing, mirrors the PS1.4 benchmark)
-//   --screenshot FILE  write a PPM screenshot and exit
-//   --shot-time S      seconds to run before the screenshot (default 3).
-//                      Applies to scene 1 and to the three GL 3.3 scenes;
-//                      on those it is the one-element form of --shot-times.
-//   --orbit AZ EL      camera azimuth/elevation in degrees
-//   --dolly D          camera distance from the scene target
-//   --width W --height H  window size (default 1280x720)
-// ---------------------------------------------------------------------------
 const char *gShotPath = nullptr;
 float gShotTime = 3.0f;
-// BUILD-P20: 720p FULLSCREEN IS NOW THE DEFAULT PRESENTATION.
-// 1366x768 was an odd, non-standard size that only ever suited the first
-// machine this ran on; every screenshot, every committed asset and the
-// project's whole framing were authored at 16:9 anyway. 1280x720 is the
-// canonical 720p frame and is what the scene screenshots are measured at.
 int gWinW = 1280, gWinH = 720;
-// Fullscreen is requested by default so the bench presents at a real 720p
-// mode rather than in a window on a desktop that is not 1280x720.
-// It is forced OFF for headless capture (--screenshot) and by --windowed,
-// because a fullscreen window's framebuffer is chosen by the display mode
-// rather than by us, and the screenshot pipeline has to be able to pin the
-// framebuffer exactly or the assets stop being reproducible.
 bool gWindowedMode = false;
 // debug: dump the shadow map and CPU-evaluate the shadow test at floor points
 bool gDumpShadow = false;
@@ -37,8 +16,6 @@ bool gDumpShadow = false;
 bool gNoShadow = false;
 bool gDollySet = false;
 
-// Results screen: when the run ends the scene is cleared and the final score
-// is drawn on the window for a few seconds (ESC skips the wait).
 static bool gResultsShown = false;
 static double gResultsElapsed = 0.0, gResultsFps = 0.0, gResultsScore = 0.0;
 static double gResultsShownAt = 0.0;
@@ -136,15 +113,7 @@ void initialiseWindow() {
     std::exit(EXIT_FAILURE);
   }
 
-  // BUILD-P24: FULLSCREEN_DESKTOP, not FULLSCREEN. Exclusive fullscreen hands the
-  // display to the OpenGL driver and the window stops being an ordinary top-level
-  // window, so the desktop compositor has nothing to composite -- and Win+PrtScr
-  // captures the composited desktop, which came out black. Borderless
-  // fullscreen still fills the screen but stays a normal window, so the capture
-  // path works. It also sizes the window to the desktop rather than to the
-  // requested 1280x720, so the drawing size has to be read back: the HUD, the
-  // ortho setup and the projection all use gWinW/gWinH, and left at 720p on a
-  // 1080p desktop the scene would be drawn into one corner.
+
   if (!gWindowedMode) {
     int dw = gWinW, dh = gWinH;
     SDL_GetWindowSize(window, &dw, &dh);
@@ -152,20 +121,7 @@ void initialiseWindow() {
       gWinW = dw;
       gWinH = dh;
     }
-  }  // Even when the presentation is borderless fullscreen, a requested
-  // --screenshot still has to read a pinned framebuffer. On some drivers a
-  // fullscreen-desktop swap chain does not keep a readable back buffer for
-  // glReadPixels after the swap, so the headless capture path is forced
-  // through an explicit offscreen FBO at the window size before it reads back
-  // and writes the PPM. That is what makes screenshots work in fullscreen.
-  // The FBO is allocated lazily at capture time so the color texture always
-  // matches the live window size (borderless fullscreen changes the window
-  // size to the desktop).
-
-  // BUILD-P25: report what is actually on screen at startup. "The screenshot
-  // came out black" has two causes that look identical from the outside -- a
-  // stale build still asking for EXCLUSIVE fullscreen, and a capture tool that
-  // cannot grab the compositor. One line here tells them which they have.
+  }  
   printf("Display: %s %dx%d | capture with Win+PrtScr, or --screenshot FILE\n",
          gWindowedMode ? "windowed" : "borderless fullscreen", gWinW, gWinH);
   fflush(stdout);
@@ -178,9 +134,7 @@ void initialiseWindow() {
 GLuint gunProg, groundProg, shadowProg;
 GLuint shadowFBO = 0, shadowTex = 0;
 const int SHADOW_SIZE = 1024;
-// Screenshot helper for fullscreen: a reusable FBO + color texture so the
-// --screenshot path can read a normal color buffer even when the window lives
-// in a borderless-fullscreen swap chain.
+
 static GLuint gScreenshotFbo = 0;
 static GLuint gScreenshotColorTex = 0;
 static int gScreenshotWidth = 0;
@@ -193,8 +147,6 @@ int init_time = time(NULL), final_time, frame;
 int fps;
 std::string model_name = "assets/UZI.obj";
 
-// Orbit camera (driven by the flyover path and the --orbit/--dolly flags;
-// there is no interactive control left)
 float cam_azimuth = -25.0f;
 float cam_elevation = 26.0f;
 float cam_dist = 10.5f;
@@ -202,65 +154,34 @@ float cam_min_dist = 3.0f;
 float cam_max_dist = 26.0f;
 float cam_target[3] = {0.0f, 0.45f, 0.0f};
 
-// ---------------------------------------------------------------------------
-// BUILD-P11: THE FLYOVER CAMERA.
-// Scene 1 sat at one static orbit angle for the whole 45-second run, which is
-// the least 3DMark thing about the most 3DMark-shaped scene: every competitor
-// opens on a camera move that shows the workload. The path is three acts —
-// a high approach that reveals the whole 110-gun array, a low runway pass
-// down its length, then a pull back to the orbit — and it is driven off the
-// run clock, so it is identical on every machine and costs nothing per frame.
-// It is ON at launch and nothing can take it away: the only input the app
-// still honours is ESC to quit.
-// ---------------------------------------------------------------------------
 static bool gFlyover = true;
 static bool gFlyoverUserSet = false;
 
-// Scene layout: the 110 UZIs stand on the floor in a 10x11 grid
+
 int grid_rows = 11, grid_cols = 10;
 float grid_spacing = 0.68f;
 float gun_scale = 1.0f;
 float sun_dir_world[3];
 
-// ------------------------------------------------------------ real fps + score
-// Frame timing uses SDL's performance counter (sub-microsecond resolution)
-// and accounts EVERY frame, so the counter tracks real frame rate instead of
-// sampling 1-second buckets with integer division. The smooth value drives
-// the HUD/title; the final score is computed from ALL frames of the run.
 static double gPerfFreq = 1.0;
-static Uint64 gPerfStartTick = 0;   // first accounted frame
-static Uint64 gPerfLastTick = 0;    // previous frame
+static Uint64 gPerfStartTick = 0;  
+static Uint64 gPerfLastTick = 0;  
 static double gFpsWindowStart = -1.0;
 static int gFpsWindowFrames = 0;
 static double gSmoothFps = 0.0;
 static long gTotalFrames = 0;
 
-// Benchmark score: fps^2 * 2 (see README). Linear in load twice over, easy to
-// reason about, and computed from the true frame-count average of the run.
 static inline double BenchScore(double fps) { return fps * fps * 2.0; }
 
-// ---------------------------------------------------------------------------
-// FPS HUD (OpenGL 2.1 fixed function): the shared 8x8 font atlas from
-// src/font_atlas.hxx, uploaded once as an RGBA texture and drawn as
-// immediate-mode textured quads after the 3D pass, with a dark backing panel
-// for readability. The GL 3.3 ocean scene draws the SAME atlas through
-// shaders/ps14/hud_*.glsl, so both scenes render identical HUD text.
-// ---------------------------------------------------------------------------
 static bool gFontAtlasTexInit = false;
 static GLuint gFontAtlasTex = 0;
 
-// Uploads the shared atlas once per GL context. The ocean scene tears SDL down
-// and main brings the window back for the results screen, so reset
-// gFontAtlasTexInit there; calling this from every text pass is a no-op after
-// the first upload.
 static void EnsureFontAtlasTexture() {
   if (gFontAtlasTexInit) return;
   std::vector<unsigned char> px((size_t)kFontAtlasW * kFontAtlasH * 4);
   FontAtlasFillRGBA(px.data(), px.size());
   glGenTextures(1, &gFontAtlasTex);
   glBindTexture(GL_TEXTURE_2D, gFontAtlasTex);
-  // GL_RGBA is intentional: the OG renderer requests a compatibility GL 2.1
-  // context, where sized internal formats such as GL_RGBA8 are not available.
   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, kFontAtlasW, kFontAtlasH, 0,
                GL_RGBA, GL_UNSIGNED_BYTE, px.data());
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -272,13 +193,10 @@ static void EnsureFontAtlasTexture() {
 
 static const float kGlyphW = (float)kFontAtlasGlyphW;
 static const float kGlyphH = (float)kFontAtlasCell;
-static const float kGlyphAdvance = (float)kFontAtlasCell; // monospaced, no gap
-static const float kGlyphScale = 8.0f;   // results screen: 64x64 px glyphs
-static const float kHudPanelH = 18.0f;   // backing strip: 8 px text + padding
+static const float kGlyphAdvance = (float)kFontAtlasCell; 
+static const float kGlyphScale = 8.0f;   
+static const float kHudPanelH = 18.0f;  
 
-// Draws one string of 8x8 atlas glyphs as textured quads and returns the
-// width drawn, so callers can centre text. glColor tints the white glyphs
-// (GL_MODULATE); blend must be on for the linear-filtered glyph edges.
 static float HudTextScaled(float x, float y, const char *text, float scale) {
   EnsureFontAtlasTexture();
   glEnable(GL_TEXTURE_2D);
@@ -287,12 +205,12 @@ static float HudTextScaled(float x, float y, const char *text, float scale) {
   float pen = x;
   for (const char *p = text; *p; ++p) {
     unsigned char c = (unsigned char)*p;
-    if (!FontAtlasHasGlyph(c)) { // no glyph in the atlas: narrow gap, skip
+    if (!FontAtlasHasGlyph(c)) { 
       pen += kGlyphAdvance * scale * 0.75f;
       continue;
     }
     float uv[4];
-    FontAtlasGlyphUV(c, uv); // half-texel inset: no neighbour-edge bleed
+    FontAtlasGlyphUV(c, uv);
     float x0 = pen, y0 = y;
     float x1 = pen + kGlyphW * scale, y1 = y + kGlyphH * scale;
     glTexCoord2f(uv[0], uv[1]); glVertex2f(x0, y0);
@@ -305,7 +223,6 @@ static float HudTextScaled(float x, float y, const char *text, float scale) {
   return pen - x;
 }
 
-// Width a string will occupy at `scale` without drawing it (for centring).
 static float HudTextWidth(const char *text, float scale) {
   float w = 0.0f;
   for (const char *p = text; *p; ++p)
@@ -336,15 +253,11 @@ static void RenderHUD() {
   glDisable(GL_DEPTH_TEST);
   glDisable(GL_LIGHTING);
 
-  // The gun pass leaves textures bound and GL_TEXTURE_2D enabled on non-active
-  // units; glActiveTexture + explicit unit-0 state keeps these quads clean.
-  // HudTextScaled binds the atlas itself; keep the env mode / blend it needs.
   glActiveTexture(GL_TEXTURE0);
   glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
   glEnable(GL_BLEND);
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-  // dark backing panel: solid strip so the text reads on any background
   glDisable(GL_TEXTURE_2D);
   glColor4f(0.02f, 0.02f, 0.04f, 1.0f);
   float w = HudTextWidth(line, 1.0f) + 12.0f;
@@ -366,18 +279,13 @@ static void RenderHUD() {
   glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
 }
 
-// ---- scene 2 + 3 support ------------------------------------------------
-// This is ONE executable: src/scene2.cxx is the ocean scene module and
-// src/scene3.cxx is the pool-room scene module (neither has a main of its own);
-// both are linked straight into this binary. After the 60 s gun run this file
-// hands the SDL session to them in turn, and each GL 3.3 scene probes its own
-// core context, skipping itself when the device cannot provide one.
+
 int RunOceanScene(bool *gaveUpOut);       // scene 2 entry (GL 3.3 ocean)
 extern double gFusedTideScore;            // scene 2's final score
 int  OceanSceneParseArgs(int argc, char **argv); // scene 2's CLI flags
-void OceanSceneSetScreenshot(const char *path);  // share --screenshot
-void OceanSceneSetShotTime(float t);            // --shot-time (singular)
-void OceanSceneSetStandalone(bool standalone);   // --scene-only
+void OceanSceneSetScreenshot(const char *path);  
+void OceanSceneSetShotTime(float t);            
+void OceanSceneSetStandalone(bool standalone);   
 int RunPoolScene(bool *gaveUpOut);        // scene 3 entry (GL 3.3 pool room)
 extern double gFusedPoolScore;            // scene 3's final score
 int  PoolSceneParseArgs(int argc, char **argv);  // scene 3's CLI flags
@@ -393,17 +301,15 @@ void PoleSceneSetShotTime(float t);             // --shot-time (singular)
 void PoleSceneSetStandalone(bool standalone);    // --pole-only
 void changeSize(int w, int h);            // resize handler (defined below)
 
-static bool   gFusedEnabled = true;  // --og-only forces the single OG scene
-static bool   gSceneOnly = false;    // --scene-only runs the ocean scene alone
-static bool   gPoolOnly = false;     // --pool-only runs the pool scene alone
-static bool   gPoleOnly = false;     // --pole-only runs scene 4 (power lines) alone
+static bool   gFusedEnabled = true; 
+static bool   gSceneOnly = false;    
+static bool   gPoolOnly = false;    
+static bool   gPoleOnly = false;     
 static bool   gFusedTideRan = false;
 static bool   gFusedPoolRan = false;
 static bool   gFusedPoleRan = false;
 static double gFusedOgScore = 0.0;
 
-// Results screen: clear the window and show the final score big and centred.
-// Same dark panel + pale cyan text as the in-run HUD.
 static void RenderResults() {
   glUseProgram(0);
   glMatrixMode(GL_PROJECTION);
@@ -418,9 +324,7 @@ static void RenderResults() {
   glDisable(GL_LIGHTING);
   glDisable(GL_BLEND);
 
-  // unit-0 texture state must be reset here too (see RenderHUD): the gun pass
-  // leaves GL_TEXTURE_2D enabled on non-active units. HudTextScaled binds the
-  // shared font atlas itself; keep the env mode / blend it expects.
+
   glActiveTexture(GL_TEXTURE0);
   glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
   glEnable(GL_BLEND);
@@ -434,7 +338,7 @@ static void RenderResults() {
   int scenesRan = 1 + (gFusedTideRan ? 1 : 0) + (gFusedPoolRan ? 1 : 0) +
                   (gFusedPoleRan ? 1 : 0);
   if (gFusedEnabled && scenesRan > 1) {
-    // fused run: average of the scenes that ran, per-scene scores below
+
     double sum = gFusedOgScore;
     if (gFusedTideRan) sum += gFusedTideScore;
     if (gFusedPoolRan) sum += gFusedPoolScore;
@@ -450,12 +354,11 @@ static void RenderResults() {
   float cx = 0.5f * (float)gWinW;
   float cy = 0.5f * (float)gWinH;
 
-  // big score, centred: 8x8 atlas glyphs scaled up
+
   glColor4f(0.72f, 0.93f, 1.0f, 1.0f);
   HudTextScaled(cx - HudTextWidth(big, kGlyphScale) * 0.5f,
                 cy - kGlyphH * kGlyphScale * 0.5f, big, kGlyphScale);
 
-  // time + fps line, per-scene breakdown (fused) and hint, HUD scale, centred
   glColor4f(0.55f, 0.72f, 0.82f, 1.0f);
   HudText(cx - HudTextWidth(timeLine, 1.0f) * 0.5f,
           cy + kGlyphH * kGlyphScale * 0.5f + 24.0f, timeLine);
@@ -508,13 +411,7 @@ static void RenderResults() {
   glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
 }
 
-// light-space matrix (world -> [0,1] shadow map coords)
 float light_matrix[16];
-
-// BUILD-P11: this is the colour the far floor FADES TO, and it is now the sky
-// dome's own horizon colour rather than an unrelated blue-grey. While the two
-// disagreed, the floor ended in a band of clear-colour that had nothing to do
-// with either the floor or the sky.
 float sky_color[3] = {0.86f, 0.80f, 0.70f};
 
 Model model;
@@ -587,11 +484,6 @@ GLuint linkProgram(const char *vs_file, const char *fs_file) {
   return prog;
 }
 
-// Draws the floor: one big quad in world space (modelview == view only).
-// BUILD-P11: 25 m -> 110 m. At 25 m the slab ended inside the frame with a hard
-// edge against empty background, which read as "the model is floating in a
-// void" rather than as a room. The floor now runs out past the haze, so the
-// ground and the sky MEET somewhere instead of stopping.
 void drawFloor() {
   glBegin(GL_QUADS);
   glVertex3f(-110.0f, 0.0f, -110.0f);
@@ -601,18 +493,6 @@ void drawFloor() {
   glEnd();
 }
 
-// ---------------------------------------------------------------------------
-// BUILD-P11: THE SKY. Scene 1 cleared to a flat colour and that was the whole
-// environment: no horizon, no depth cue, no light in the sky for the shadows
-// to come from — a 1999 benchmark exactly.
-//
-// It is now an inverted sphere carrying a small equirectangular sky GENERATED
-// ON THE CPU (128x64, no file to ship, nothing to download): a vertical
-// gradient, a warm haze band on the horizon, and a sun glow placed at the
-// scene's own fixed sun vector, so the light in the sky and the shadows on the
-// floor finally agree. Drawn first, inside the far plane, so everything else
-// draws over it.
-// ---------------------------------------------------------------------------
 static GLuint gSkyDomeTex = 0;
 static const float kSkyDomeR = 105.0f;
 
@@ -624,16 +504,14 @@ static void BuildSkyDomeTexture() {
   const int W = 128, H = 64;
   std::vector<unsigned char> px((size_t)W * H * 4);
   for (int j = 0; j < H; j++) {
-    // v: 0 at the zenith, 1 at the nadir
     float v = ((float)j + 0.5f) / (float)H;
-    float el = 90.0f - 180.0f * v;             // degrees
+    float el = 90.0f - 180.0f * v;             
     float elr = el * 3.14159265f / 180.0f;
     float cy = sinf(elr), cr = cosf(elr);
     for (int i = 0; i < W; i++) {
       float u = ((float)i + 0.5f) / (float)W;
       float az = u * 6.28318f;
       float dx = cr * sinf(az), dz = cr * cosf(az), dy = cy;
-      // vertical gradient: cool deep zenith -> neutral mid -> warm pale horizon
       float up = dy;
       float r, g, b;
       if (dy >= 0.0f) {
@@ -642,18 +520,11 @@ static void BuildSkyDomeTexture() {
         g = 0.80f + (0.40f - 0.80f) * t;
         b = 0.70f + (0.60f - 0.70f) * t;
       } else {
-        // Below the horizon the dome is only ever seen past the edge of the
-        // floor, so it starts at EXACTLY sky_color (0.86, 0.80, 0.70) and
-        // falls away into dark ground haze. Starting it anywhere else puts a
-        // visible ring on the horizon, which is the exact artifact this pass
-        // exists to remove.
         float t = clampf(-dy * 1.6f, 0.0f, 1.0f);
         r = 0.86f - 0.62f * t;
         g = 0.80f - 0.60f * t;
         b = 0.70f - 0.54f * t;
       }
-      // the sun: a small bright disc inside a broad warm glow, at the scene's
-      // own sun vector, so the sky agrees with the shadows on the floor
       float mu = dx * sun_dir_world[0] + dy * sun_dir_world[1] +
                  dz * sun_dir_world[2];
       if (mu > 0.0f) {
@@ -672,7 +543,7 @@ static void BuildSkyDomeTexture() {
     }
   }
   if (!gSkyDomeTex) glGenTextures(1, &gSkyDomeTex);
-  glBindTexture(GL_TEXTURE_2D, gSkyDomeTex);   // whatever unit is ACTIVE
+  glBindTexture(GL_TEXTURE_2D, gSkyDomeTex);  
   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, W, H, 0, GL_RGBA, GL_UNSIGNED_BYTE,
                px.data());
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -681,8 +552,6 @@ static void BuildSkyDomeTexture() {
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 }
 
-// The dome is drawn around the CURRENT eye position, so it never clips and
-// never slides as the camera flies.
 void drawSkyDome() {
   float m[16];
   glGetFloatv(GL_MODELVIEW_MATRIX, m);
@@ -691,8 +560,6 @@ void drawSkyDome() {
   (void)SEG;
   (void)RING;
   glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
-  // quad strip: for each column, the vertex on ring r then the one on r+1.
-  // (Emitting a whole ring at a time would not form a strip at all.)
   for (int r = 0; r < RING; r++) {
     for (int i = 0; i <= SEG; i++) {
       float u = (float)i / (float)SEG;
@@ -710,8 +577,6 @@ void drawSkyDome() {
   }
 }
 
-// Draws the 110 UZIs lying flat on the floor (mag base touching the ground),
-// muzzle up, in a grid
 void drawGuns() {
   for (int i = 0; i < grid_rows; i++) {
     for (int j = 0; j < grid_cols; j++) {
@@ -723,10 +588,7 @@ void drawGuns() {
 
       glTranslatef(gridX, 0.0f, gridZ);
       glRotatef(yaw, 0.0f, 1.0f, 0.0f);
-      // the model already lies along X with the mag pointing down (-Y), so
-      // resting raw min_y on the floor plants every gun on its mag base with
-      // the body horizontal: mags touch the ground, muzzle forward.
-      // 0.001 keeps the contact face out of z-fighting but is invisible.
+
       glTranslatef(model.pos_x * gun_scale,
                    -model.min_y * gun_scale + 0.001f,
                    -model.pos_y * gun_scale);
@@ -738,7 +600,7 @@ void drawGuns() {
   }
 }
 
-// Renders the scene depth into the shadow map from the sun's point of view.
+
 void renderShadowMap() {
   glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, shadowFBO);
   glPushAttrib(GL_VIEWPORT_BIT);
@@ -756,11 +618,6 @@ void renderShadowMap() {
 
   glClear(GL_DEPTH_BUFFER_BIT);
   glUseProgram(shadowProg);
-  // render front faces so the shadow map stores the TOP surface of each gun.
-  // With the guns lying flat on the floor their back faces are the underside,
-  // at floor level, which makes contact-area shadows lose to the depth bias.
-  // Front faces sit ~0.26 units above the floor -> unambiguous depth gap.
-  // The polygon offset below keeps the guns from shadow-acne-ing themselves.
   glEnable(GL_CULL_FACE);
   glCullFace(GL_BACK);
   glEnable(GL_POLYGON_OFFSET_FILL);
@@ -798,10 +655,6 @@ void buildLightMatrix() {
   const float bias[16] = {0.5f, 0.0f, 0.0f, 0.0f, 0.0f, 0.5f, 0.0f, 0.0f,
                           0.0f, 0.0f, 0.5f, 0.0f, 0.5f, 0.5f, 0.5f, 1.0f};
   float pv[16];
-  // mat4Multiply indexes m[col*4+row], i.e. it already produces standard
-  // column-major data — exactly what glUniformMatrix4fv with transpose=GL_FALSE
-  // expects. (A transpose here was tried and verified to be wrong: it made the
-  // shader sample the wrong light-space texels, scattering shadows around.)
   mat4Multiply(lproj, lview, pv);
   mat4Multiply(bias, pv, light_matrix);
 }
@@ -824,7 +677,6 @@ static double RunSeconds() {
   return (double)(SDL_GetPerformanceCounter() - gPerfStartTick) / gPerfFreq;
 }
 
-// smoothstep, so the acts blend instead of snapping
 static inline float Smooth01(float u) {
   if (u < 0.0f) u = 0.0f;
   if (u > 1.0f) u = 1.0f;
@@ -837,12 +689,8 @@ void UpdateFlyoverCamera(double t) {
       (float)(grid_cols > grid_rows ? grid_cols : grid_rows) * grid_spacing;
   float az, el, d, tx, ty, tz;
   if (t < 7.0) {
-    // ACT 1 — the reveal: high and wide, swinging round to face the run
+   
     float e = Smooth01((float)t / 7.0f);
-    // The elevation ceiling matters more than it looks: with a 50 deg vertical
-    // FOV, anything above ~25 deg puts the HORIZON off the bottom of the frame,
-    // so the shot becomes floor-to-the-edges with no sky in it at all. The
-    // reveal has to stay under that line or there is nothing to reveal against.
     az = -78.0f + 53.0f * e;
     el = 24.0f - 9.0f * e;
     d = span * 3.0f - span * 1.4f * e;
@@ -850,18 +698,14 @@ void UpdateFlyoverCamera(double t) {
     ty = 0.45f;
     tz = 0.0f;
   } else if (t < 34.0) {
-    // ACT 2 — the runway: low, moving along the array, looking ahead down it
     float u = (float)(t - 7.0) / 27.0f;
     az = -22.0f + 5.0f * sinf(u * 6.28318f);
     el = 9.0f + 2.0f * sinf(u * 12.56636f);
     d = span * 1.15f;
-    // travel along -z because the camera sits at +z of the target and looks
-    // back along -z: the target leads the camera, so it IS the look-ahead
     tz = span * 1.25f - u * span * 2.5f;
-    tx = 0.34f * sinf(u * 9.4f);   // a slight weave, so it is not on rails
+    tx = 0.34f * sinf(u * 9.4f); 
     ty = 0.32f;
   } else {
-    // ACT 3 — the pull back to the orbit the scene used to sit in forever
     float e = Smooth01((float)(t - 34.0) / 13.0f);
     az = -22.0f + 21.0f * e;
     el = 11.0f + 9.0f * e;
@@ -907,15 +751,10 @@ void renderScene() {
     return;
   }
 
-  // BUILD-P11: the flyover drives the camera before it is applied
   UpdateFlyoverCamera(RunSeconds());
   applyCamera();
 
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-  // BUILD-P11: the sky goes down FIRST, inside the far plane, with no program
-  // bound — the whole environment is fixed-function textured geometry, so scene
-  // 1 still costs exactly what it cost before it started looking like a place.
   if (gSkyDomeTex) {
     glUseProgram(0);
     glActiveTexture(GL_TEXTURE7);
@@ -926,16 +765,11 @@ void renderScene() {
     drawSkyDome();
     glEnd();
   }
-
-  // Ground pass
   glUseProgram(groundProg);
   uploadCommonUniforms(groundProg);
   glUniform3fv(glGetUniformLocation(groundProg, "uSunDirWorld"), 1,
                sun_dir_world);
   glUniform3fv(glGetUniformLocation(groundProg, "uSkyColor"), 1, sky_color);
-  // BUILD-P11: the floor needs the eye for its specular, its grazing sheen and
-  // its aerial perspective. GL 2.1 has no built-in camera position, so it is
-  // lifted straight out of the modelview matrix's translation column.
   {
     float mv[16];
     glGetFloatv(GL_MODELVIEW_MATRIX, mv);
@@ -946,10 +780,8 @@ void renderScene() {
               gNoShadow ? 1.0f : 0.0f);
   drawFloor();
 
-  // Gun pass
   glUseProgram(gunProg);
   uploadCommonUniforms(gunProg);
-  // sun direction in view space: rotate the world-space sun by the view
   float view[16], sun_view[3] = {0.0f, 0.0f, 0.0f};
   glGetFloatv(GL_MODELVIEW_MATRIX, view);
   for (int r = 0; r < 3; r++)
@@ -960,31 +792,11 @@ void renderScene() {
 
   glUseProgram(0);
   RenderHUD();
-
-
-  // Headless screenshot capture: read BEFORE the swap so the pixels analysed
-  // are exactly what this frame rendered (the PS1.4 bench does the same).
-  // BUILD-P21: the gate used to compare SDL_GetTicks(), which is PROCESS
-  // uptime, not time since the scene started. Everything above the render
-  // loop (OBJ + texture load, five shader compiles, the shadow pass) is
-  // charged to it, so on a slow renderer the shot window was already gone
-  // before frame 1 and the flag silently produced nothing - or fired on the
-  // first frame. gPerfStartTick is taken immediately before the loop, so the
-  // same performance counter the fps accounting uses gives scene-relative
-  // time.
   if (gShotPath != nullptr && sceneSeconds >= (double)gShotTime) {
-    // The offscreen capture FBO is only allocated on the borderless-fullscreen
-    // path. --screenshot forces windowed mode, where the back buffer is
-    // directly readable, so fall back to the live window size here instead of
-    // reading (and writing) a 0x0 rect.
     if (gScreenshotFbo == 0 && gScreenshotWidth == 0) {
       gScreenshotWidth = gWinW;
       gScreenshotHeight = gWinH;
     }
-    // Render a clean, readable framebuffer snapshot. If a screenshot FBO was
-    // allocated (automatic for --screenshot even in fullscreen), blit the
-    // current swapchain into it first so glReadPixels always reads a normal
-    // color buffer rather than whatever the desktop compositor handed back.
     if (gScreenshotFbo) {
       glBindFramebuffer(GL_READ_FRAMEBUFFER, gScreenshotFbo);
       glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
@@ -1025,7 +837,6 @@ void renderScene() {
   frame++;
   final_time = time(NULL);
 
-  // ---- real fps + score accounting ----
   gTotalFrames++;
   Uint64 nowTick = SDL_GetPerformanceCounter();
   double nowS = (double)(nowTick - gPerfStartTick) / gPerfFreq;
@@ -1045,9 +856,7 @@ void renderScene() {
              gSmoothFps * gSmoothFps * 2.0);
     SDL_SetWindowTitle(window, title);
   }
-
-  // Debug probe: read back the depth texture and evaluate the exact shader
-  // shadow test on the CPU for a few key world-space floor points.
+  // very debug-y
   if (gDumpShadow) {
     std::vector<float> depth((size_t)SHADOW_SIZE * SHADOW_SIZE);
     glBindTexture(GL_TEXTURE_2D, shadowTex);
@@ -1123,7 +932,6 @@ void renderScene() {
                                 {950, 620},  {300, 680}, {1050, 680}};
       for (int pi = 0; pi < 6; pi++) {
         double wx, wy, wz;
-        // near-plane point through this pixel, then ray to the y=0 floor
         double nx_, ny_, nz_;
         gluUnProject(probes[pi][0], probes[pi][1], 0.0, mv, pr, vp, &nx_,
                      &ny_, &nz_);
@@ -1135,9 +943,6 @@ void renderScene() {
         for (int r = 0; r < 4; r++)
           for (int col = 0; col < 4; col++)
             cg[r] += light_matrix[col * 4 + r] * p4[col];
-        // uLightMatrix is already bias*P*V, so its output IS the [0,1]
-        // shadow-map coordinate; no extra half-offset (that double-bias
-        // squeezed every probe into the top-right quadrant).
         float ugx = cg[0] / cg[3];
         float ugy = cg[1] / cg[3];
         float uzg = cg[2] / cg[3];
@@ -1176,8 +981,6 @@ void renderScene() {
       }
       float p[4] = {wx, 0.0f, wz, 1.0f};
       float c[4] = {0, 0, 0, 0};
-      // column-major consumption matching the shader (m[col*4+row]); the
-      // output is already in [0,1] light space, so no extra half-offset.
       for (int col = 0; col < 4; col++)
         for (int r = 0; r < 4; r++)
           c[r] += light_matrix[col * 4 + r] * p[col];
@@ -1195,13 +998,7 @@ void renderScene() {
     SDL_Quit();
     exit(0);
   }
-  // BUILD-P21: the 60 s bench cut was ALSO on process uptime, while the
-  // score underneath it divided the frame count by SCENE time. On a machine
-  // with a slow start the loop ended early and the average FPS - the headline
-  // number of the whole benchmark - was divided by too small an interval, so
-  // the reported score was too high. Both sides now use the same scene clock.
   if (sceneSeconds >= 60.0) {
-    // Score from ALL frames of the run (not the last 1-second window).
     double elapsed = sceneSeconds;
     if (elapsed <= 0.0) elapsed = 1.0;
     double avgFps = (double)gTotalFrames / elapsed;
@@ -1277,8 +1074,7 @@ void renderScene() {
     } else {
       gResultsShownAt = elapsed;
     }
-    // Hand over to the results screen: the scene is cleared and the score is
-    // drawn on the window for kResultsScreenSeconds (ESC exits immediately).
+    // Hand over to the results screen: the scene is cleared and the score is drawn
     gResultsShown = true;
   }
 }
@@ -1346,8 +1142,6 @@ void setup() {
   model.load(resolveAssetPath(model_name.c_str()).c_str());
   pos_x = model.pos_x;
   pos_y = model.pos_y;
-
-  // normalise the model so the longest bbox side is 0.55 world units
   float ext_x = model.max_x - model.min_x;
   float ext_y = model.max_y - model.min_y;
   float ext_z = model.max_z - model.min_z;
@@ -1357,18 +1151,11 @@ void setup() {
   if (ext_z > max_dim)
     max_dim = ext_z;
   gun_scale = 0.55f / max_dim;
-
-  // fixed warm sun from the upper left-front. Elevation keeps each gun's
-  // shadow ~0.4 units (~0.6x its height): compact, clearly attached to its
-  // own contact point, and far enough from the grid edge that per-gun
-  // shadows do not tile into long diagonal bands across open floor.
   float sd[3] = {-0.58f, 0.74f, 0.34f};
   float len = sqrtf(sd[0] * sd[0] + sd[1] * sd[1] + sd[2] * sd[2]);
   sun_dir_world[0] = sd[0] / len;
   sun_dir_world[1] = sd[1] / len;
   sun_dir_world[2] = sd[2] / len;
-
-  // zoom limits relative to the scene size
   float span = (grid_cols > grid_rows ? grid_cols : grid_rows) * grid_spacing;
   cam_min_dist = span * 0.45f;
   cam_max_dist = span * 3.6f;
@@ -1417,12 +1204,6 @@ void setup() {
   // bind the shadow map to texture unit 6 (units 0-5 hold the gun maps)
   glActiveTexture(GL_TEXTURE6);
   glBindTexture(GL_TEXTURE_2D, shadowTex);
-  // BUILD-P11: the generated sky. Built AFTER the sun vector is set, because
-  // the sun glow is baked into the texture at the sun's own direction.
-  // UNIT 7, deliberately: units 0-5 hold the gun's own maps and unit 6 the
-  // shadow map, and a shader sampler remembers its unit even when the ACTIVE
-  // unit has moved on. Binding the dome to unit 0 in the render loop left the
-  // gun shader sampling the sky as its base colour every frame.
   glActiveTexture(GL_TEXTURE7);
   BuildSkyDomeTexture();
   glUseProgram(groundProg);
@@ -1431,7 +1212,6 @@ void setup() {
   glUniform1i(glGetUniformLocation(gunProg, "uShadowMap"), 6);
   glUseProgram(0);
 
-  // gun textures (as before)
   glUseProgram(gunProg);
   glActiveTexture(GL_TEXTURE0);
   glBindTexture(GL_TEXTURE_2D, model.m->texture1);
@@ -1453,7 +1233,6 @@ void setup() {
   glUniform1i(glGetUniformLocation(gunProg, "uRoughnessMap"), 5);
   glUseProgram(0);
 
-  // the guns never move in world space, so one shadow render is enough
   renderShadowMap();
 }
 
@@ -1462,7 +1241,7 @@ int main(int argc, char **argv) {
     std::string arg = argv[i];
     if (arg == "--screenshot" && i + 1 < argc) {
       gShotPath = argv[++i];
-      gWindowedMode = true;   // pin the framebuffer for reproducible capture
+      gWindowedMode = true;   
     } else if (arg == "--windowed") {
       gWindowedMode = true;
     } else if (arg == "--shot-time" && i + 1 < argc) {
@@ -1475,7 +1254,7 @@ int main(int argc, char **argv) {
       gDollySet = true;
     } else if (arg == "--width" && i + 1 < argc) {
       gWinW = atoi(argv[++i]);
-      gWindowedMode = true;   // pinned framebuffer, never a display mode
+      gWindowedMode = true;   
     } else if (arg == "--height" && i + 1 < argc) {
       gWinH = atoi(argv[++i]);
     } else if (arg == "--dump-shadow") {
@@ -1506,9 +1285,6 @@ int main(int argc, char **argv) {
       gFlyoverUserSet = true;
     }
   }
-
-  // One binary owns the whole command line: forward the GL 3.3 scenes' own
-  // flags to them and, with --scene-only / --pool-only, run that scene alone.
   if (OceanSceneParseArgs(argc, argv) != EXIT_SUCCESS)
     return EXIT_FAILURE;
   if (PoolSceneParseArgs(argc, argv) != EXIT_SUCCESS)
@@ -1520,33 +1296,14 @@ int main(int argc, char **argv) {
     PoolSceneSetScreenshot(gShotPath);
     PoleSceneSetScreenshot(gShotPath);
   }
-  // BUILD-P21: forward the singular --shot-time too, but only when there is
-  // actually a screenshot pending. The shot clock is a capture tool, not
-  // run-mode behaviour: arming it without a --screenshot path (the common
-  // case when you run `--scene-only` to watch the ocean) would hold t at
-  // gShotTime and freeze the waves the moment the clock hit that second.
-  // An explicit --shot-time on its own is still honoured by the scene's own
-  // --shot-times path; this line is only the singular --shot-time shim.
   if (gShotPath != nullptr) {
     OceanSceneSetShotTime(gShotTime);
     PoolSceneSetShotTime(gShotTime);
     PoleSceneSetShotTime(gShotTime);
   }
 
-  // BUILD-P25: print the build id on every run. The shaders load at RUNTIME
-  // from shaders/pole, shaders/pool and shaders/ps14 NEXT TO THE EXE, so an
-  // exe that is current next to a stale shader folder renders a mixture of two
-  // builds and looks wrong in a way that is very hard to diagnose from the
-  // image alone. This line tells them which half is out of date.
-  printf("ElectroBench build P28 (2026-10-06)\n");
+  printf("ElectroBench version 0.4 build R1 (Release) (2026-10-09)\n");
 
-  // BUILD-P25: every scene's shaders load at RUNTIME from folders beside the
-  // exe, and resolveAssetPath prefers the CURRENT WORKING DIRECTORY over the
-  // exe directory. So running from a checkout that still holds an old
-  // shaders/ folder silently overrides a freshly copied one -- a current binary
-  // shading with an old shader, which is exactly the kind of mixture that
-  // matches no commit. Print what actually got loaded, and with --trace-assets,
-  // every single resolved path.
   {
     static const char *kKey[] = {
         "shaders/ps14/sea_frag.glsl", "shaders/ps14/sky_frag.glsl",
