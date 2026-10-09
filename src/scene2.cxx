@@ -659,7 +659,7 @@ static void Setup() {
   BuildDomeMesh();
   BuildFontAtlas();
 
-  glGenVertexArrays(1, &gEmptyVao)
+  glGenVertexArrays(1, &gEmptyVao);
   glGenVertexArrays(1, &gHudVao);
   glGenBuffers(1, &gHudVbo);
   glBindVertexArray(gHudVao);
