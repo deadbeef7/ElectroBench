@@ -10,25 +10,6 @@
 // program of its own. It exports RunPoleScene(), which main.cxx calls as the
 // fourth scene of the one and only ElectroBench executable.
 //
-// What is rendered:
-//   * Orange sky dome (shaders/pole/sky_*.glsl): deep amber zenith through
-//     peach into a hazy cream horizon, a veiled low sun bloom, and two
-//     parallax layers of smooth white cumulus drifting on the wind. No
-//     textures — two octaves of value noise, carved into puffy cells.
-//   * The grid (shaders/pole/object_*.glsl): GALVANIZED STEEL utility poles on
-//     two receding lines — tapered shafts, step bolts, number plates, guy
-//     wires into buried anchors, angle-iron crossarms with ceramic pin
-//     insulators, cut-out fuses, a finned transformer can — and six tiers of
-//     catenary wire per bay (real sag: y = midpoint + cosh falloff) built as
-//     swept tubes. One wrap-lighting shader for everything, with aerial
-//     perspective sinking the far poles into the haze.
-//   * The camera dollies along the line under the wires, automatically from
-//     launch; nothing in the app can steer it.
-//
-// Controls: ESC quits.
-//
-// Headless flags shared with the other scenes: --screenshot, --shot-times,
-// --width; scene-specific: --pole-only (run just this scene).
 
 #include <algorithm>
 #include <array>
@@ -45,23 +26,15 @@
 #include <GL/glew.h>
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_opengl.h>
-// SDL 2.0.5 renamed SDL_GL_MULTISAMPLESAMPLES to SDL_GL_SAMPLES (same enum
-// value, 14). Accept either spelling so the MSAA request still builds against
-// the older SDL2 headers some of these static builds ship.
 #ifndef SDL_GL_SAMPLES
 #define SDL_GL_SAMPLES SDL_GL_MULTISAMPLESAMPLES
 #endif
 
 #include "../lib/asset_path.hxx"
 
-// BUILD-P20: 720p fullscreen is the default presentation; main.cxx clears
-// this for headless capture so the screenshot framebuffer stays pinned.
 extern bool gWindowedMode;
-#include "font_atlas.hxx" // shared HUD font data and atlas layout
-
+#include "font_atlas.hxx"
 // --------------------------------------------------------------- math block
-// Same minimal helpers the pool scene carries (kept local: scene modules do
-// not share a math header on purpose — each scene owns its own).
 struct Vec3 {
   float x, y, z;
 };
@@ -79,35 +52,6 @@ static inline Vec3 Vec3Norm(const Vec3 &a) {
   float l = Vec3Len(a);
   return l > 1e-8f ? Vec3Scale(a, 1.0f / l) : Vec3{0.0f, 1.0f, 0.0f};
 }
-// BUILD-P17: a unit vector PERPENDICULAR to v, for building a tube around a
-// wire.
-//
-// Why this exists: Vec3Norm does not return a zero vector for a zero input, it
-// returns (0,1,0). Every "pick an axis at right angles to the wire" guard in
-// this file was written as `if (Vec3Len(cross) < 1e-4f) cross = fallback`,
-// which can therefore NEVER fire — the substitution hands back a vector of
-// length 1, and the fallback is skipped.
-//
-// For a HORIZONTAL wire that was harmless, because the substitution only
-// triggers when cross(wire, up) is parallel to up, i.e. when the wire is
-// vertical. For a VERTICAL wire it is fatal: s2 comes back as (0,1,0), which is
-// parallel to the wire, u2 is built from cross(s2, tang) and comes back as
-// (0,1,0) too, so every ring vertex is offset along the wire's own axis by
-// +/-radius instead of radially. All four vertices of a ring land on the axis
-// and every triangle is zero-area: the tube is built, uploaded, and
-// rasterises NOTHING. A service drop with a vertical run therefore rendered its
-// termination fitting (an AddCylinder, which is unaffected) hanging in the sky
-// with no wire holding it up — the "flying cylinders".
-//
-// Choosing the reference axis by testing v.y, and crossing, guarantees a result
-// of length >= 0.1 for any unit v, so it can never collapse.
-//
-// The ORDER of the cross product is part of the contract, not a detail:
-// Vec3PerpTo(v) must equal normalize(cross(v, up)) for a non-vertical v, which
-// is what every call site used before. Crossing the other way returns the
-// negated vector, which flips cross(side, dir) and therefore flips the sign of
-// `up` -- and since WirePoint offsets by -up*(sag), that silently turns every
-// catenary in the scene from a sag into a bow.
 static inline Vec3 Vec3PerpTo(const Vec3 &v) {
   const Vec3 ref = (std::fabs(v.y) < 0.9f) ? Vec3{0, 1, 0} : Vec3{1, 0, 0};
   return Vec3Norm(Vec3Cross(v, ref));
@@ -224,21 +168,11 @@ static Program LinkProgram(const char *vsPath, const char *fsPath) {
 static const char *const gName = "ElectroBench - Scene 4 (Lain)";
 static const int WIDTH = 1280, HEIGHT = 720;
 static const float kGroundY = 0.0f;
-// dusk sun: LOW and AHEAD of the dolly camera (up the corridor), slightly
-// left — wires cross the sun disc, poles read as silhouettes, long shadows
-// come back toward the viewer. BUILD-P2 hyper-realism pass.
-// BUILD-P6: kSunDir is the T=0 state; SunDirNow() advances azimuth/elevation
-// with the sim clock so the sky, lighting and shadows all move together.
 static const Vec3 kSunDir{-0.30f, 0.20f, 0.93f};
 
-// BUILD-P6 MOVING SUN: the dusk sun crawls azimuthally and sinks over the
-// run (45 s bench = a visible slow sunset). Everything downstream follows:
-// the sky bloom, the object lighting AND the ground shadows. Sinking is
-// clamped so the sun never fully sets inside the bench window.
 static Vec3 SunDirNow(double t) {
-  float az = -0.30f - 0.004f * (float)t;                // ~10 deg over the run
-  float el = 0.20f - 0.0011f * (float)t;                // slow sink (2.7 deg
-                                                        // over the 45 s run)
+  float az = -0.30f - 0.004f * (float)t;               
+  float el = 0.20f - 0.0011f * (float)t;                
   if (el < 0.15f) el = 0.15f;
   Vec3 s{az, el, 0.93f};
   return Vec3Norm(s);
@@ -269,7 +203,6 @@ static double gResultsElapsed = 0.0, gResultsFps = 0.0, gResultsScore = 0.0;
 static const double kResultsScreenSeconds = 4.0;
 double gFusedPoleScore = 0.0;      // read by main.cxx for the combined screen
 
-// headless visual-test state (same flags as the other scenes)
 static const char *gScreenshotPath = nullptr;
 static std::vector<float> gShotTimes;
 static size_t gNextShot = 0;
@@ -281,23 +214,11 @@ static Vec3 gCamPos{0.0f, 2.0f, 4.0f};
 static float gCamYaw = 0.0f, gCamPitch = -0.06f, gCamDist = 7.0f;
 
 static void UpdateAutoCamera(float t) {
-  // Dolly along the line: the camera walks the gravel path beside the poles,
-  // the wire catenaries sweeping overhead pole after pole. Wrap around so
-  // the 45 s bench never leaves the grid.
   const float span = 161.0f;   // 13 spans of the 15-pole corridor
   float z = 4.0f + std::fmod(t * 2.6f, span);
-  // BUILD-P5: the camera drives the road's right lane (the road is centred
-  // at x = +2.6), hugging the centreline so the poles stream past on the left
   gCamPos = {2.0f + std::sin(t * 0.05f) * 0.30f,         // gentle weave
              1.55f + 0.18f * std::sin(t * 0.11f),        // breathing height
              z};
-  // BUILD-P12: AIM HIGHER. The reference photograph is taken from the pavement
-  // looking UP, and the subject of the shot is the top of the pole: the
-  // crossarms, the insulators, the transformer and the cable web. Aiming at
-  // 5.5 m framed the middle of the shaft instead, which is the least
-  // interesting 3 m of it. The aim point now sits just under the main arm, so
-  // the upper half of every pole fills the frame and the web reads against the
-  // sky rather than against more poles.
   Vec3 target{-1.15f, 7.6f, z + 17.0f};
   Vec3 f = Vec3Norm(Vec3Sub(target, gCamPos));
   gCamYaw = std::atan2(-f.x, -f.z);
@@ -313,22 +234,10 @@ static Vec3 OrbitCamPos() {
   if (pos.y < 0.5f) pos.y = 0.5f;                        // never under the ground
   return pos;
 }
-
-// ------------------------------------------------------------------- the grid
-// Per-vertex colour geometry: position(3) + normal(3) + colour(3) +
-// material(1) + alpha(1).
-//
-// BUILD-P7: the material id is what lets ONE fragment shader give asphalt,
-// creosote bark, siding and pantile their own surface detail instead of
-// painting every surface with the same flat ramp. Alpha is only used by the
-// streamed ground shadows (the pass is alpha-blended and multiplies what is
-// already in the framebuffer); it stays 1.0 everywhere else.
 struct ObjVertex { float x, y, z, nx, ny, nz, r, g, b, mat, alpha; };
 static std::vector<ObjVertex> gVerts;
 static std::vector<unsigned int> gIdx;
 
-// material ids — MUST match the kMat* constants in
-// shaders/pole/object_frag.glsl.
 static const float kMatPaint = 0.0f;      // generic, no detail
 static const float kMatWood = 1.0f;
 static const float kMatGround = 2.0f;
@@ -342,31 +251,10 @@ static const float kMatRoof = 9.0f;
 static const float kMatGlass = 10.0f;
 static const float kMatLeaf = 11.0f;
 static const float kMatShadow = 12.0f;
-static const float kMatGlow = 13.0f;     // emissive: lit signs at dusk
-// BUILD-P9: galvanized steel. The poles stopped being creosote timber and
-// became hot-dip galvanized steel, and that needed its OWN shader branch —
-// zinc is a bright, semi-specular, vertically weathered surface, and running it
-// through the wood or metal branches gave the same flat dark post it had
-// before (the "poles look like plain wooden sticks" complaint). The branch adds
-// zinc spangle, rain-washed streaks, rust blooming at the foot and a much
-// sharper specular than paint.
+static const float kMatGlow = 13.0f;     
 static const float kMatSteel = 14.0f;
-// BUILD-P10: cast concrete kerb (must match kMatKerb in object_frag.glsl)
 static const float kMatKerb = 15.0f;
-// BUILD-P12: weathered precast concrete pole shaft (must match kMatConcrete in
-// object_frag.glsl). Japanese distribution poles are overwhelmingly CONCRETE,
-// not timber and not steel — a round shaft with a weathered grey skin, which
-// is what the reference photograph actually shows.
 static const float kMatConcrete = 16.0f;
-// BUILD-P18: the shaft was reading as a bright, warm, clean-edged vertical --
-// which is to say, as TIMBER, and as the most prominent object in the frame
-// after the sky. Two things were wrong with it. The albedo was too high
-// (0.29 mean), so every shaft sat close to the sky in value, and it was
-// warm-biased (R > B), which the dusk sun tint and the warm highlight grade
-// then pushed further into orange. A weathered precast concrete shaft in the
-// shade of its own crossarm is a mid-dark NEUTRAL grey, and the blue channel
-// must be allowed to lead or the whole corridor reads as a row of wooden
-// sticks. Down 27%, and cool.
 static const Vec3 kConcreteGrey{0.212f, 0.216f, 0.218f};
 
 static const Vec3 kWoodDark{0.165f, 0.115f, 0.085f};   // creosote (treeline)
@@ -374,39 +262,22 @@ static const Vec3 kWoodOld{0.230f, 0.180f, 0.140f};   // weathered timber
 static const Vec3 kCeramic{0.780f, 0.760f, 0.700f};   // insulator glaze
 static const Vec3 kCable{0.055f, 0.050f, 0.055f};    // rubber wire
 static const Vec3 kCableOld{0.085f, 0.075f, 0.070f};
-static const Vec3 kMetal{0.190f, 0.195f, 0.200f};    // transformer can
-// BUILD-P18: same correction as kConcreteGrey, on line B's shafts. Zinc is
-// bright, and the steel branch also carried the largest rim sheen in the
-// scene, so the second line of poles was the brightest vertical of the two.
+static const Vec3 kMetal{0.190f, 0.195f, 0.200f};   
 static const Vec3 kSteelGalv{0.252f, 0.261f, 0.273f}; // hot-dip zinc, trunk
 static const Vec3 kSteelArm{0.265f, 0.272f, 0.282f};  // angle iron, brackets
 static const Vec3 kSteelPlate{0.560f, 0.545f, 0.505f};// pole number plate
-static const Vec3 kGravel{0.330f, 0.272f, 0.205f};   // BUILD-P8: dry dirt is
-                                                     // ~0.3 albedo, not 0.52
-
-// BUILD-P7 ROAD GEOMETRY. The road was rebuilt because build P6 laid it out
-// as three coplanar strips with a 0.35 m HOLE down the left side (the body
-// started 0.35 m inboard of where the edge strip ended), which showed up on
-// the user's box as a pale diagonal band of bare gravel running the length
-// of the road. The heights below are the anti-z-fight ladder: ground 0,
-// road kRoadY, paint kPaintY, shadows kShadowY, each with centimetre-scale
-// separation that survives the 0.1..900 m depth range at 100 m out.
+static const Vec3 kGravel{0.330f, 0.272f, 0.205f};  
 static const float kRoadX = 2.6f;       // road centre (matches uRoadX)
 static const float kRoadHalf = 2.7f;    // 5.4 m carriageway
 static const float kRoadY = 0.030f;
 static const float kPaintY = 0.050f;
 static const float kShadowY = 0.075f;
-// BUILD-P10: the kerb stands 16 cm proud of the carriageway, top at kKerbTopY,
-// and its gutter face carries the standing water the road shader reflects.
 static const float kKerbTopY = 0.190f;
 
 static void PushVert(const Vec3 &p, const Vec3 &n, const Vec3 &c,
                      float mat = kMatPaint, float alpha = 1.0f) {
   gVerts.push_back({p.x, p.y, p.z, n.x, n.y, n.z, c.x, c.y, c.z, mat, alpha});
 }
-
-// Cylinder between two points (solid, capped): the pole trunk, insulators,
-// the transformer can, stray posts.
 static void AddCylinder(const Vec3 &base, const Vec3 &top, float rBase, float rTop,
                         int segs, const Vec3 &color, float mat = kMatPaint) {
   Vec3 axis = Vec3Norm(Vec3Sub(top, base));
@@ -449,33 +320,14 @@ static void AddCylinder(const Vec3 &base, const Vec3 &top, float rBase, float rT
 static void AddWire(const Vec3 &a, const Vec3 &b, float sag, float radius,
                     int samples, const Vec3 &color, float mat = kMatCable);
 
-// BUILD-P8: the exact point of a sagging wire at parameter t, shared by the
-// tube builder and by everything that has to ATTACH to a wire. Build P7
-// computed telecom drop points on the straight line between the two span
-// ends, but the bundle sags up to 0.75 m below that line — so every drop's
-// top end and every clamp bead floated clear of the cable it belonged to
-// (the "small cylinders sitting mid air" report). One evaluator, used by
-// both, so the attachment can never drift from the geometry again.
 static Vec3 WirePoint(const Vec3 &a, const Vec3 &b, float sag, float t) {
   Vec3 delta = Vec3Sub(b, a);
   float len = Vec3Len(delta);
   if (len < 1e-3f) return a;
   Vec3 dir = Vec3Scale(delta, 1.0f / len);
-  // BUILD-P17: same broken guard as in AddWire. Here it was less damaging --
-  // the curve still had the right endpoints -- but `up` came back parallel to
-  // a vertical wire, so the sag was applied ALONG the wire instead of across
-  // it. See Vec3PerpTo.
   Vec3 side = Vec3PerpTo(dir);
   Vec3 up = Vec3Norm(Vec3Cross(side, dir));
   float halfSpan = len * 0.5f;
-  // BUILD-P8 CRITICAL: `x` is measured FROM THE MIDPOINT, so the curve has to
-  // be based at the midpoint. It used to be added to `a` (the span start),
-  // which put t=0 at a - dir*halfSpan and t=1 at a + dir*halfSpan — i.e.
-  // EVERY wire in the scene was drawn half a span too early, starting at the
-  // midpoint of the previous span and stopping in mid air between poles.
-  // That is the root cause of the "wires are cut" reports: no amount of
-  // careful insulator-top attachment could fix it, because the attachment
-  // points were never where the wire actually began and ended.
   Vec3 mid = Vec3Add(a, Vec3Scale(delta, 0.5f));
   float x = (t - 0.5f) * len;
   float y = sag * (1.0f - 4.0f * (t - 0.5f) * (t - 0.5f));
@@ -484,53 +336,19 @@ static Vec3 WirePoint(const Vec3 &a, const Vec3 &b, float sag, float t) {
   return Vec3Add(Vec3Add(mid, Vec3Scale(dir, x)), Vec3Scale(up, -y - tail));
 }
 
-// BUILD-P7: the drop wires need somewhere REAL to land. AddHouse registers a
-// service anchor (an eave bracket) here; AddTelecomBundle runs a drop to the
-// nearest reachable anchor instead of leaving it hanging in mid air, which is
-// what made build P6 read as "the wires are cut".
 static std::vector<Vec3> gDropAnchors;
-
-// BUILD-P4 TELECOM BUNDLE: a communication cable sags between its two pole
-// brackets, and a bundle of thin DROP WIRES peels off along the span — the
-// drippy ''telephone lines going everywhere'' of every Japanese street.
-// Deterministic (hash of the span index) like everything else in the bench.
-//
-// BUILD-P7 NO CUT ENDS: a drop either runs to a house eave anchor (with the
-// bracket that carries it) or ends in a real termination fitting — the small
-// dark boot + ceramic that a real drop wire is capped with. A bare tube end
-// floating in the air is the exact artefact the user screenshotted.
 static void AddTelecomBundle(const Vec3 &a, const Vec3 &b, int seed,
                              float radius, int samples, const Vec3 &color) {
   float sag = 0.55f + 0.10f * ((seed * 7) % 3);
   AddWire(a, b, sag, radius, samples, color, kMatCable);
-  // BUILD-P16: was 4 + (seed % 3) = 4-6 drop wires per span. Three bundles a
-  // bay on line A at 4-6 drops each is 12-18 wires crossing open sky per bay,
-  // and near the dolly a span subtends a large screen angle: the strands stop
-  // reading as wires and fuse into a dense parallel-stroke mass. Measured with
-  // the material tag pass, dropping the telecom bundles out of kMatCable took
-  // the class from 10303 to 5713 sky pixels and its largest blob from 71 to 38
-  // px — the telecom tier, not the power conductors, owns the artefact.
-  // Halving the drops lets sky through between the strands, which is the
-  // difference between "wires" and "a row of tubes".
-  int drops = 2 + (seed % 2);                    // 2-3 drop wires per span
+  int drops = 2 + (seed % 2);                    
   for (int i = 0; i < drops; i++) {
     float t = 0.18f + 0.62f * (float)((seed * 13 + i * 29) % 100) / 100.0f;
     float drop = 0.35f + 0.55f * (float)((seed * 17 + i * 41) % 100) / 100.0f;
-    // BUILD-P8: peel the drop off the cable where the cable ACTUALLY is, not
-    // where the straight line between the poles would be.
     Vec3 peel = WirePoint(a, b, sag, t);
-    // BUILD-P8: the drop hangs OFF the clamp, so it starts at the clamp's
-    // lower face. It used to start a further `drop` (0.35-0.90 m) below the
-    // cable — i.e. it hung from nothing at all, which the audit measured at
-    // up to 0.895 m from any hardware.
     Vec3 p{peel.x, peel.y - 0.035f, peel.z};
-    // the clamp ferrule the drop is bound to — sitting ON the cable
     AddCylinder(Vec3Add(peel, Vec3{0, -0.035f, 0}), Vec3Add(peel, Vec3{0, 0.035f, 0}),
                 0.030f, 0.030f, 6, kMetal, kMatMetal);
-    // (birds are added once per bundle below, not once per drop wire)
-    // nearest house anchor this drop can plausibly reach. The scan starts at
-    // a per-drop offset so five drops in one span fan out to five different
-    // brackets instead of all bunching on the same eave.
     int best = -1;
     float bestD = 1e9f;
     const size_t n = gDropAnchors.size();
@@ -546,7 +364,6 @@ static void AddTelecomBundle(const Vec3 &a, const Vec3 &b, int seed,
       AddWire(p, q, 0.16f + 0.10f * (float)(i % 2), radius * 0.55f, 9, color,
               kMatCable);
     } else {
-      // service tail: short, and capped with a real fitting
       float len = 1.05f + 0.85f * (float)((seed * 23 + i * 13) % 100) / 100.0f;
       Vec3 q{p.x, p.y - len, p.z};
       AddWire(p, q, 0.08f, radius * 0.55f, 5, color, kMatCable);
@@ -556,16 +373,9 @@ static void AddTelecomBundle(const Vec3 &a, const Vec3 &b, int seed,
                   0.026f, 0.026f, 6, kCeramic, kMatCeramic);
     }
   }
-  // BUILD-P9: the perched birds are GONE. At corridor scale every bird body
-  // crossed the bright sky as a hard black blob, and fifty-one of them
-  // scattered across the wire tangle read as dirt on the lens rather than as
-  // birds — they were the single loudest "this is not a real photograph" tell
-  // in the frame. (Their two-cylinder stand-in body was also drawn with
-  // kMatMetal, so it shaded like a grey lump, not a bird.)
 }
 
-// A sagging wire between two attachment points: a real catenary sampled as a
-// swept tube (the Lain look is ALL about the droop of these cables).
+
 static void AddWire(const Vec3 &a, const Vec3 &b, float sag, float radius,
                     int samples, const Vec3 &color, float mat) {
   Vec3 delta = Vec3Sub(b, a);
@@ -573,18 +383,12 @@ static void AddWire(const Vec3 &a, const Vec3 &b, float sag, float radius,
   if (len < 1e-3f) return;
 
   Vec3 dir = Vec3Scale(delta, 1.0f / len);
-  // BUILD-P17: Vec3PerpTo, not cross(dir, up) with a length guard. See the
-  // helper: the guard could not fire, so a vertical wire got (0,1,0) as its
-  // side vector -- parallel to itself -- and built a zero-radius tube that
-  // rasterised nothing, leaving its termination fitting hanging in the sky.
   Vec3 side = Vec3PerpTo(dir);
   Vec3 up = Vec3Norm(Vec3Cross(side, dir));
   float halfSpan = len * 0.5f;
 
   std::vector<Vec3> centres(samples + 1);
   for (int i = 0; i <= samples; i++) {
-    // catenary: cosh(x/a) shape approximated by the standard sag parabola
-    // plus a cosh tail — visually indistinguishable at wire radii.
     centres[i] = WirePoint(a, b, sag, (float)i / samples);
   }
   unsigned int start = (unsigned int)gVerts.size();
@@ -592,9 +396,6 @@ static void AddWire(const Vec3 &a, const Vec3 &b, float sag, float radius,
     Vec3 t0 = centres[i < samples ? i + 1 : i];
     Vec3 t1 = centres[i > 0 ? i - 1 : i];
     Vec3 tang = Vec3Norm(Vec3Sub(t0, t1));
-    // BUILD-P17: same reason as above -- this is the vector that decides the
-    // ring's shape, and for a vertical run it was coming back parallel to the
-    // wire.
     Vec3 s2 = Vec3PerpTo(tang);
     Vec3 u2 = Vec3Norm(Vec3Cross(s2, tang));
     for (int k = 0; k < 4; k++) {
@@ -639,13 +440,6 @@ static void AddBox(const Vec3 &center, const Vec3 &half, const Vec3 &color,
   }
 }
 
-// One utility pole: trunk, two crossarms with diagonal braces, insulators,
-// an earth wire down the trunk, optional transformer + service spool.
-// BUILD-P2: every wire in the scene ties to a REAL insulator top — these
-// two helpers are the single source of truth for the attachment points.
-// BUILD-P6: poles LEAN (leanX/leanZ = total top displacement); every
-// attachment point interpolates the same linear axis, so wires stay tied
-// to slightly crooked poles like real streets.
 struct PoleSpec {
   float x, z; float height; bool transformer; bool serviceSpool;
   float leanX, leanZ;
@@ -654,40 +448,18 @@ static Vec3 PoleAxisAt(const PoleSpec &p, float h) {
   float f = h / p.height;
   return {p.x + p.leanX * f, h, p.z + p.leanZ * f};
 }
-// BUILD-P8: one source of truth for the trunk radius, so anything mounted on
-// the bark can be measured off it instead of guessing a fixed offset (which is
-// how the service spool and the junction cans ended up hanging in mid air).
-// BUILD-P18: and now it is the SOURCE for the shaft mesh too. AddPole used to
-// spell 0.17f/0.115f out again at its AddCylinder call, so the taper existed
-// twice in the file and could drift apart.
-//
-// The gauge itself came down from 170/115 mm to 132/86 mm. Both numbers were
-// too fat: a Japanese precast distribution shaft is about 190-260 mm across at
-// the base and 120-170 mm at the top, and a 6" galvanized HSS line is 152 mm at
-// the base and ~110 mm at the top. 340 mm at the foot was a trunk, not a pole,
-// and a trunk that size is also the largest silhouette the camera ever puts in
-// frame. Every fitting already measures its stand-off off this function, so the
-// thinner shaft carried its hardware with it.
 static const float kShaftRBase = 0.132f;
 static const float kShaftRTop  = 0.086f;
 static float TrunkRadius(const PoleSpec &p, float h) {
   float f = h / p.height;
   return kShaftRBase + (kShaftRTop - kShaftRBase) * f;
 }
-// BUILD-P8: the telecom arm sits 1.30 m under the power arm and its three
-// bracket stubs stand 0.15 m proud of the wood. The telecom spans used to
-// attach at the BRACKET BASE on the UNLEANED pole x, i.e. up to 0.16 m from
-// any real hardware — another set of wire ends floating just clear of the
-// things meant to hold them.
 static Vec3 TelecomBracketTop(const PoleSpec &p, float off) {
   float telY = p.height - 0.55f - 1.30f;
   Vec3 a = PoleAxisAt(p, telY);
   return {a.x + off, telY + 0.15f, a.z};
 }
 static Vec3 ArmInsulatorTop(const PoleSpec &p, float off) {
-  // crossarm at height-0.55, insulator stack on top of it ends at +0.30 —
-  // BUILD-P7: the old height-0.20 attachment floated 5 cm ABOVE the glaze,
-  // which read (correctly) as a wire stopping short of its insulator
   Vec3 a = PoleAxisAt(p, p.height - 0.25f);
   return {a.x + off, p.height - 0.25f, a.z};
 }
@@ -695,25 +467,15 @@ static Vec3 PoleTopInsulatorTop(const PoleSpec &p) {
   Vec3 a = PoleAxisAt(p, p.height + 0.24f);
   return {a.x, p.height + 0.24f, a.z};
 }
-// BUILD-P9: the SHORTER lower arm finally carries conductors. Build P8 built
-// that arm, hung braces on it and then ran no wires along it at all, so a whole
-// tier of hardware sat under the main arm doing nothing. Same 0.213 m stack, so
-// this is main-arm height minus 0.62 m.
 static Vec3 Arm2InsulatorTop(const PoleSpec &p, float off) {
   Vec3 a = PoleAxisAt(p, p.height - 0.87f);
   return {a.x + off, p.height - 0.87f, a.z};
 }
 
-static std::vector<PoleSpec> gLineA, gLineB;  // kept for per-frame shadows
-
-// BUILD-P9: the hardware side of a steel pole. Everything bolted on goes on
-// the ROAD side of the shaft — that is the side a lineworker can reach and the
-// side the camera walks past, so it is derived from the road centre instead of
-// being another per-pole constant to keep in sync.
+static std::vector<PoleSpec> gLineA, gLineB;  
 static float PoleRoadSide(const PoleSpec &p) { return p.x < kRoadX ? 1.0f : -1.0f; }
 
-// BUILD-P9: ONE pin insulator, 0.213 m from its base pin to the top of the
-// glaze. ArmInsulatorTop / Arm2InsulatorTop both quote that number, so the
+
 // geometry and the wire attachment cannot drift apart again.
 static void AddInsulator(const Vec3 &ib) {
   AddCylinder(ib, Vec3Add(ib, Vec3{0, 0.055f, 0}), 0.044f, 0.040f, 6, kMetal,
@@ -724,39 +486,26 @@ static void AddInsulator(const Vec3 &ib) {
               0.061f, 0.038f, 8, kCeramic, kMatCeramic);
 }
 
-// BUILD-P9: STEP BOLTS — the ladder of alternating studs that lets a lineworker
-// climb the shaft. Cheap, and the strongest "this is a steel distribution pole"
-// tell available, because they break an otherwise unbroken 9 m stick.
 static void AddStepBolts(const PoleSpec &p, float from, float to, float side) {
   int i = 0;
   for (float h = from; h <= to + 1e-3f; h += 0.30f, i++) {
     float s = (i & 1) ? -side : side;
     Vec3 a = PoleAxisAt(p, h);
     float r = TrunkRadius(p, h);
-    // BUILD-P18: 140 mm of stand-off was sized against the old 170 mm shaft.
-    // On a 132 mm shaft the same protrusion is a spike longer than the shaft's
-    // own radius. Real step bolts stand ~100 mm proud.
     AddCylinder({a.x + s * (r - 0.02f), h, a.z}, {a.x + s * (r + 0.10f), h, a.z},
                 0.024f, 0.019f, 5, kSteelArm, kMatSteel);
   }
 }
 
-// BUILD-P9: GUY WIRE + ANCHOR. Every few spans the conductor is too heavy for
-// the pole alone and a steel guy takes the load into a buried block. It is also
-// the only STRAIGHT wire in the scene — every other line is a soft catenary —
-// so it reads as structure rather than decoration, and its anchor blocks break
-// up the empty verge.
 static void AddGuyWire(const PoleSpec &p, float side, float zSign) {
   float hAtt = p.height - 0.95f;
   Vec3 att = PoleAxisAt(p, hAtt);
   float r = TrunkRadius(p, hAtt);
   att.x += side * (r + 0.11f);
-  // attachment plate bolted flat to the shaft, then the turnbuckle eye
   AddBox({att.x - side * 0.06f, att.y, att.z}, {0.05f, 0.13f, 0.09f}, kSteelArm,
          kMatSteel);
   Vec3 mid{att.x + side * 0.13f, att.y - 0.44f, att.z + zSign * 0.28f};
   AddCylinder(att, mid, 0.026f, 0.023f, 5, kSteelGalv, kMatSteel);
-  // the anchor: a rod leaning out of a concrete block on the verge
   Vec3 anc{p.x + side * 0.62f, 0.34f, p.z + zSign * 3.40f};
   AddWire(mid, anc, 0.03f, 0.015f, 5, kSteelGalv, kMatSteel);
   AddCylinder({anc.x - side * 0.30f, -0.10f, anc.z}, {anc.x, 0.42f, anc.z},
@@ -764,28 +513,13 @@ static void AddGuyWire(const PoleSpec &p, float side, float zSign) {
   AddBox({anc.x - side * 0.13f, 0.14f, anc.z}, {0.36f, 0.14f, 0.36f},
          {0.230f, 0.222f, 0.208f}, kMatPaint);
 }
-
-// BUILD-P12: SLACK COIL. The single most recognisable object on a Japanese
-// utility pole: a metre of spare black cable wound into a flat helix and hung
-// off the side of the shaft on a bracket. It is pure silhouette, it costs
-// nothing per pixel, and its absence is why a modelled pole reads as a pole
-// in a diagram rather than a pole in a street.
-//
-// Built from short straight runs rather than one swept tube because AddWire
-// already owns the tube builder and a catenary between two points 4 cm apart
-// is indistinguishable from a straight one — this gets the shape for free.
 static void AddSlackCoil(const PoleSpec &p, float h, float side, int turns,
                          float radius, float pitch) {
   float r0 = TrunkRadius(p, h);
   Vec3 a = PoleAxisAt(p, h);
   float cx = a.x + side * (r0 + radius);
   const int steps = turns * 12;
-  // BUILD-P16: the helix now runs ALONG the corridor instead of stacking
-  // vertically, so consecutive turns need somewhere to go. Turn spacing is a
-  // little over the coil's own cross-section radius, which is what keeps the
-  // windings from touching and reading as one fat tube.
   const float coilRun = (float)turns * radius * 0.62f;
-  // the bracket the coil hangs from — the coil is ATTACHED, not floating
   AddCylinder({a.x + side * (r0 - 0.02f), h + pitch * 0.5f, a.z},
               {cx, h + pitch * 0.5f, a.z}, 0.022f, 0.022f, 5, kSteelArm,
               kMatSteel);
@@ -793,37 +527,16 @@ static void AddSlackCoil(const PoleSpec &p, float h, float side, int turns,
   for (int i = 1; i <= steps; i++) {
     float t = (float)i / (float)steps;
     float ang = t * (float)turns * 6.28318f;
-    // the coil flattens as it hangs: a wound cable under its own weight is an
-    // ellipse, not a circle seen side-on
-    // BUILD-P16: the helix circled in the x/z plane, i.e. HORIZONTALLY, with a
-    // vertical axis — and a horizontal circle viewed from a camera looking
-    // down the corridor is seen exactly edge-on. It projected to a 1.15 m tall
-    // bar 8 cm wide: a hanging cylinder. The winding axis is now the corridor
-    // itself, so the circle lies in the x/y screen plane and the coil reads as
-    // a coil. The x extent is deliberately kept at 0.28r: a coil of real cable
-    // is wider across the pole than it is along it.
     Vec3 cur{cx + radius * 0.28f * std::cos(ang),
              h + pitch * 0.5f + radius * std::sin(ang),
              a.z + coilRun * t};
-    // BUILD-P12 BUG: at five samples per turn and 17 mm radius each segment of
-    // this helix was a 38 cm long, 3.4 cm thick STUBBY TUBE with a visible joint
-    // to the next one — a row of beads hanging off the pole, which read as
-    // exactly the "4-6 hanging cylinders in the sky" the user screenshotted.
-    // Twelve samples a turn and a thinner cable puts every segment under the
-    // size at which the beading is legible, and it is the same silhouette.
     AddWire(prev, cur, 0.0f, 0.0115f, 2, kCable, kMatCable);
     prev = cur;
   }
-  // and the tail, running back up to the shaft: a coil whose cable simply
-  // stops is the same "floating cylinder" mistake as an unterminated stub
   AddWire(prev, {a.x + side * (r0 + 0.03f), h + pitch * 0.5f + 0.06f, a.z},
           0.05f, 0.0115f, 8, kCable, kMatCable);
 }
 
-// BUILD-P12: SLACK LOOP. The big circular bight of service cable left hanging
-// at a drop point so the cable is not pulled taut. Distinct from the coil: one
-// turn, much larger, and it hangs in the plane of the road where it reads
-// against the sky.
 static void AddSlackLoop(const PoleSpec &p, float h, float side, float radius) {
   float r0 = TrunkRadius(p, h);
   Vec3 a = PoleAxisAt(p, h);
@@ -832,14 +545,6 @@ static void AddSlackLoop(const PoleSpec &p, float h, float side, float radius) {
   for (int i = 1; i <= steps; i++) {
     float t = (float)i / (float)steps;
     float ang = 3.14159f * t;
-    // BUILD-P16: the sweep plane was z/y, and the corridor camera looks DOWN
-    // z. A circle in the z/y plane viewed along z projects to its NARROW AXIS,
-    // so a bight built to read as a loop rendered as a vertical bar — one of
-    // the "flying cylinders". Rotating the circle into x/y presents the bight
-    // face to the camera, which is the whole difference between a service loop
-    // and a hanging tube. This is the P13/P14 shape-not-gauge lesson again,
-    // one plane deeper: the object was correctly sized and correctly detailed
-    // and still could not be read, because it was edge-on to the lens.
     Vec3 cur{a.x + side * (r0 + 0.10f + radius * std::sin(ang) * 0.85f),
              h - radius * (1.0f - std::cos(ang)) * 0.5f,
              a.z};
@@ -848,69 +553,19 @@ static void AddSlackLoop(const PoleSpec &p, float h, float side, float radius) {
   }
   AddWire(prev, a, 0.0f, 0.0115f, 2, kCable, kMatCable);
 }
-
-// BUILD-P12: a lattice radio mast. Not decoration: a cell mast standing behind
-// the pole line is one of the few things that puts the corridor at a real
-// scale, and its open truss silhouette is legible at 80 m where a solid box
-// would be a smear. Four legs plus zigzag bracing, 24 m.
-//
-// BUILD-P14 got this wrong TWICE, and BUILD-P15 replaces it outright.
-//
-// P13 blamed a slack coil (a real object, swept too coarsely); P14 blamed the
-// lattice cell mast's legs (also real, drawn too thin at the time). Both fixes
-// were correct about the geometry and neither changed the READ, because both
-// were still asking one object to do a job whose silhouette is a row of thin
-// verticals. Three separate passes thickening members and clustering whips
-// did not converge, and that is the signal: the shape itself is wrong, not
-// its gauge.
-//
-// The measurement that settled it: a debug render with the sky flattened and
-// the mast's radome panels recoloured magenta. The panels -- 0.42 m wide and
-// TEN METRES tall, hung 0.46 m off a truss whose 0.11 m stand-offs are
-// sub-pixel at the 120-160 m these masts actually sit at -- were 4 pale
-// 1-2 px bars per mast with visible sky between them and the truss. That IS
-// "cylinders in the air", verbatim. P14 introduced them.
-//
-// So the answer is not another thickness pass. It is to replace the object
-// with one whose silhouette cannot be mistaken for a tube at any distance:
-//
-//   * a SPLAYED A-FRAME base, 2 x height * 0.175 half-width (9 m of feet on
-//     a 26 m pylon). At 60 m that is 24 px of foot, tapering to 6 px at the
-//     shoulder: an unmistakable triangle, and the single strongest "this is
-//     a transmission pylon" cue there is;
-//   * TWO LONG HORIZONTAL CROSSARMS, 0.34 x height half-length. 18 m of
-//     horizontal at 60 m is ~46 px across the frame. A horizontal bar is the
-//     one shape a vertical tube can never be confused with, and insulator
-//     strings hanging from the tips finish the read;
-//   * no pale radome panels and no whip cluster -- they were the artifact.
-//
-// It is also the more truthful object: a lattice transmission pylon standing
-// behind a Japanese distribution line is a far more characteristic sight than
-// a cell mast, and it carries the scale P12 wanted without needing to be
-// legible member by member.
 static void AddPylon(float x, float z, float height) {
-  // BUILD-P15: dark galvanised lattice steel. A pylon 110-170 m out is behind
-  // the aerial-perspective ramp, which pulls everything toward the haze
-  // colour, so a mid-grey (0.30) member arrives at the eye only a few levels
-  // below the sky and the whole tower reads as a faint smudge. Real
-  // galvanised steelwork silhouettes against a dusk sky as a DARK lattice:
-  // dropping the albedo to 0.17 is what makes the crossarm an actual bar
-  // rather than a slightly-cloudier patch of sky.
   const Vec3 steel{0.170f, 0.172f, 0.180f};
   const Vec3 galv{0.215f, 0.220f, 0.232f};
   const float footHalf = height * 0.175f;   // splayed feet
   const float kneeY = height * 0.34f;       // where the A-frame closes
   const float kneeHalf = footHalf * 0.46f;
   const float topHalf = height * 0.048f;
-
-  // concrete pad footings, so the legs land on something
   for (int c = 0; c < 4; c++) {
     float sx = (c == 0 || c == 3) ? -1.0f : 1.0f;
     float sz = (c < 2) ? -1.0f : 1.0f;
     AddBox({x + sx * footHalf, 0.16f, z + sz * footHalf},
            {0.78f, 0.16f, 0.78f}, {0.255f, 0.250f, 0.238f}, kMatConcrete);
   }
-  // the splayed lower legs: fat enough to survive 4x MSAA at 60 m
   for (int c = 0; c < 4; c++) {
     float sx = (c == 0 || c == 3) ? -1.0f : 1.0f;
     float sz = (c < 2) ? -1.0f : 1.0f;
@@ -918,7 +573,6 @@ static void AddPylon(float x, float z, float height) {
                 {x + sx * kneeHalf, kneeY, z + sz * kneeHalf}, 0.195f,
                 0.145f, 5, steel, kMatSteel);
   }
-  // the near-vertical upper legs, carrying on the same taper
   for (int c = 0; c < 4; c++) {
     float sx = (c == 0 || c == 3) ? -1.0f : 1.0f;
     float sz = (c < 2) ? -1.0f : 1.0f;
@@ -926,8 +580,6 @@ static void AddPylon(float x, float z, float height) {
                 {x + sx * topHalf, height, z + sz * topHalf}, 0.145f, 0.095f,
                 5, steel, kMatSteel);
   }
-  // a wide horizontal knee tie closing the A-frame: more horizontal, and it
-  // sits right at the height the corridor silhouettes against
   for (int s = 0; s < 4; s++) {
     float ax = (s == 0 || s == 3) ? -kneeHalf : kneeHalf;
     float az = (s < 2) ? -kneeHalf : kneeHalf;
@@ -936,9 +588,6 @@ static void AddPylon(float x, float z, float height) {
     AddCylinder({x + ax, kneeY, z + az}, {x + ax, kneeY, z - az}, 0.105f,
                 0.105f, 4, steel, kMatSteel);
   }
-  // lattice web on the splayed section only: this is the one place a real
-  // pylon's bracing is wide enough on screen to be worth drawing, and the
-  // diagonals are the second cue that reads "lattice" rather than "post"
   for (float t = 0.0f; t < 0.94f; t += 0.235f) {
     float h = kneeY * (t + 0.118f);
     float hb = footHalf + (kneeHalf - footHalf) * ((t + 0.118f));
@@ -953,12 +602,6 @@ static void AddPylon(float x, float z, float height) {
                   kMatSteel);
     }
   }
-
-  // ---- the two crossarms: the horizontal that settles the silhouette -----
-  // Each is a real lattice boom built as a chord pair with verticals between
-  // them. At corridor distance the pair reads as one 1.4 m deep bar, which is
-  // exactly what a pylon boom looks like at 60 m, and the verticals keep it
-  // honest when the dolly gets close.
   auto crossarm = [&](float y, float halfLen) {
     AddBox({x, y + 0.38f, z}, {halfLen, 0.38f, 0.42f}, steel, kMatSteel);
     AddBox({x, y - 0.34f, z}, {halfLen, 0.34f, 0.38f}, steel, kMatSteel);
@@ -967,7 +610,6 @@ static void AddPylon(float x, float z, float height) {
       float bx = b * 1.9f;
       AddCylinder({x + bx, y - 0.34f, z}, {x + bx, y + 0.38f, z}, 0.105f,
                   0.105f, 4, steel, kMatSteel);
-      // the knee brace back to the shaft at the inboard ends
       if (std::fabs(bx) > topHalf + 0.4f && std::fabs(bx) < halfLen - 1.0f) {
         float sgn = bx < 0.0f ? -1.0f : 1.0f;
         AddCylinder({x + bx, y - 0.34f, z},
@@ -980,43 +622,20 @@ static void AddPylon(float x, float z, float height) {
   crossarm(upperY, height * 0.345f);
   crossarm(lowerY, height * 0.265f);
 
-  // ---- insulator strings: the detail that says "transmission", not "cell" --
-  // BUILD-P16: THESE WERE THE USER'S "FLYING CYLINDERS", and build P15 shipped
-  // them. Each string was ONE smooth 2.29 m cylinder of pale glaze hung off a
-  // 0.26 m yoke — a capsule dangling from a bar, five per pylon and two
-  // pylons, i.e. ten of them. At 110-170 m a 0.31 m tube is about 2 px wide
-  // and a string is 12-16 px tall, so the eye reads a row of little vertical
-  // pipes with sky between them and the crossarm: precisely the P14 artifact,
-  // rebuilt on a new object.
-  //
-  // Two things are wrong with that, and thinning the tube fixes neither:
-  //   * THE SHAPE. An insulator string is not a cylinder. It is a stack of
-  //     sheds on a core, and the serrated silhouette is the entire reason the
-  //     eye reads ceramic instead of pipe. This is the P13 coil lesson again:
-  //     a swept feature needs its own structure, not just a smaller gauge.
-  //   * THE VALUE. kCeramic is a 0.78 near-white glaze, which is correct for
-  //     a pole insulator six metres from the lens. At 110 m the aerial ramp
-  //     pulls that up to within a few levels of the sky, and a PALE object on
-  //     a BRIGHT sky is exactly the artifact we are chasing. Real HV strings
-  //     at dusk are a dark beaded line. The pole-top insulators keep the
-  //     glaze; only the distant pylon strings go dark.
-  const Vec3 shed{0.300f, 0.288f, 0.262f};   // reads as a silhouette at range
+  const Vec3 shed{0.300f, 0.288f, 0.262f};  
   auto insulator = [&](float ix, float iy) {
     AddBox({ix, iy + 0.13f, z}, {0.24f, 0.19f, 0.24f}, galv, kMatSteel);
-    const float drop = 1.55f;               // string length, was 2.29 m
-    // the core: thin, dark, and continuous so the string still reads as one
-    // hanging object even where the sheds drop below a pixel
+    const float drop = 1.55f;             
     AddCylinder({ix, iy - 0.05f, z}, {ix, iy - drop - 0.05f, z}, 0.055f,
                 0.046f, 5, steel, kMatSteel);
     const int sheds = 7;
     for (int i = 0; i < sheds; i++) {
       float t = (float)(i + 1) / (float)(sheds + 1);
       float y = iy - 0.05f - drop * t;
-      float rr = 0.150f - 0.052f * t;      // tapers toward the conductor
+      float rr = 0.150f - 0.052f * t;     
       AddCylinder({ix, y - 0.042f, z}, {ix, y + 0.042f, z}, rr, rr, 6,
                   shed, kMatCeramic);
     }
-    // the conductor stub the string actually carries
     AddCylinder({ix, iy - drop - 0.04f, z}, {ix, iy - drop - 0.34f, z},
                 0.050f, 0.040f, 6, steel, kMatSteel);
   };
@@ -1033,23 +652,15 @@ static void AddPole(const PoleSpec &p, bool concrete = false) {
   Vec3 base = PoleAxisAt(p, kGroundY);
   Vec3 top = PoleAxisAt(p, p.height);
   const float side = PoleRoadSide(p);
-  // BUILD-P12: the shaft material is per-pole now. Line A is concrete (the
-  // reference), line B stays hot-dip galvanized steel from build P9 — a real
-  // street has both, and the material contrast is what stops fifteen identical
-  // shafts reading as one repeated prop.
   if (concrete)
     AddCylinder(base, top, kShaftRBase, kShaftRTop, 10, kConcreteGrey, kMatConcrete);
   else
     AddCylinder(base, top, kShaftRBase, kShaftRTop, 10, kSteelGalv, kMatSteel);
-  // welded base flange standing in the ring of dirt kicked up around it
   AddCylinder({base.x, kGroundY - 0.02f, base.z}, {base.x, 0.10f, base.z},
               0.52f, 0.34f, 8, {0.30f, 0.24f, 0.18f}, kMatGround);
   AddCylinder({base.x, 0.03f, base.z}, {base.x, 0.29f, base.z}, 0.235f, 0.205f,
               8, kSteelArm, kMatSteel);
 
-  // main crossarm near the top + a shorter one below, both rolled angle iron:
-  // a web plate with a flange top and bottom catches a bright edge from the
-  // sun, which is the whole difference between "steel arm" and "plank".
   float armY = p.height - 0.55f;
   Vec3 armC = PoleAxisAt(p, armY);
   AddBox({armC.x, armY, armC.z}, {1.25f, 0.075f, 0.013f}, kSteelArm, kMatSteel);
@@ -1080,10 +691,6 @@ static void AddPole(const PoleSpec &p, bool concrete = false) {
     AddCylinder({ba.x, by - 0.030f, ba.z}, {ba.x, by + 0.030f, ba.z},
                 br2 + 0.035f, br2 + 0.035f, 8, kSteelArm, kMatSteel);
   }
-
-  // ceramic insulators: three on the main arm, TWO on the lower arm (build P8
-  // built that lower arm and then hung nothing off it — dead hardware), and one
-  // standing on the pole top.
   for (float off : {-1.05f, 0.0f, 1.05f})
     AddInsulator({armC.x + off, armY + 0.087f, armC.z});
   for (float off : {-0.55f, 0.55f})
@@ -1092,18 +699,10 @@ static void AddPole(const PoleSpec &p, bool concrete = false) {
               kMatCeramic);
   AddCylinder(Vec3Add(top, Vec3{0, 0.18f, 0}), Vec3Add(top, Vec3{0, 0.24f, 0}),
               0.058f, 0.038f, 8, kCeramic, kMatCeramic);
-  // lightning rod, sleeved alongside the top insulator so it cannot foul the
-  // conductor that ties off at the glaze
   AddCylinder({top.x + 0.06f, p.height - 0.20f, top.z},
               {top.x + 0.13f, p.height + 0.60f, top.z}, 0.021f, 0.010f, 5,
               kSteelGalv, kMatSteel);
 
-  // earth wire: a bare galvanized strand clipped down the shaft and bonded to
-  // the base flange. BUILD-P7 made it follow the LEANING axis hop by hop;
-  // BUILD-P9 measures the stand-off off TrunkRadius as well — the old fixed
-  // 0.13 m put the first hop 4 cm INSIDE a 0.17 m shaft, i.e. inside the steel,
-  // where nothing can see it. It runs on the back face, clear of the step bolts
-  // and the number plate.
   {
     const float eside = -side;
     Vec3 prev = PoleAxisAt(p, 0.32f);
@@ -1114,10 +713,9 @@ static void AddPole(const PoleSpec &p, bool concrete = false) {
       Vec3 cur = PoleAxisAt(p, h);
       cur.x += eside * (TrunkRadius(p, h) + 0.024f);
       AddWire(prev, cur, 0.012f, 0.012f, 3, kSteelGalv, kMatCable);
-      // the clip, so the strand reads as CLIPPED ON rather than floating off
       Vec3 mid{(prev.x + cur.x) * 0.5f, (prev.y + cur.y) * 0.5f,
                (prev.z + cur.z) * 0.5f};
-      Vec3 clip0 = PoleAxisAt(p, mid.y);      // start ON the shaft, not 5 cm
+      Vec3 clip0 = PoleAxisAt(p, mid.y);   
       AddCylinder(clip0, mid, 0.019f, 0.019f, 4, kSteelArm, kMatSteel);
       prev = cur;
     }
@@ -1139,25 +737,16 @@ static void AddPole(const PoleSpec &p, bool concrete = false) {
     AddBox({pa.x + pr + 0.058f, 2.545f, pa.z}, {0.006f, 0.012f, 0.050f},
            {0.075f, 0.070f, 0.065f}, kMatMetal);
   }
-  // BUILD-P12: SLACK CABLE. Deterministic scatter — a real street has slack
-  // cable on some poles and none on others, and a uniformly clean line is the
-  // giveaway that it was laid out by a loop.
   if (concrete && ((((int)(p.z * 0.5f)) % 3) == 0))
     AddSlackCoil(p, 5.2f, -side, 6, 0.30f, 1.15f);
   if (concrete && ((((int)(p.z * 0.7f)) % 4) == 1))
     AddSlackLoop(p, 6.5f, side, 0.85f);
-
-  // guys on every fourth-ish pole: one back and one forward where there is room
   if ((((int)(p.z * 0.4f)) % 3) == 0) {
     AddGuyWire(p, side, 1.0f);
     if ((((int)(p.z * 0.8f)) % 5) == 0) AddGuyWire(p, side, -1.0f);
   }
 
   if (p.serviceSpool) {
-    // secondary service spool on the other flank (double-attachment poles).
-    // BUILD-P8: measured off the trunk surface, not a fixed offset — at the
-    // old x-0.24 the spool hung ~6 cm clear of the bark. BUILD-P9 gives it the
-    // two flanged cheeks and hub that make it a spool instead of a stud.
     Vec3 sa = PoleAxisAt(p, 5.4f);
     float sr = TrunkRadius(p, 5.4f);
     AddCylinder({sa.x - sr, 5.4f, sa.z}, {sa.x - sr - 0.10f, 5.4f, sa.z}, 0.035f,
@@ -1169,9 +758,6 @@ static void AddPole(const PoleSpec &p, bool concrete = false) {
     AddCylinder({sa.x - sr - 0.17f, 5.4f, sa.z}, {sa.x - sr - 0.22f, 5.4f, sa.z},
                 0.052f, 0.052f, 8, kMetal, kMatMetal);
   }
-
-  // BUILD-P4 TELECOM ARM: a second, lower crossarm carrying the phone/cable
-  // bundles (Japanese poles stack a communications arm under the power arm).
   float telY = armY - 1.30f;
   Vec3 telC = PoleAxisAt(p, telY);
   AddBox({telC.x, telY, telC.z}, {0.95f, 0.05f, 0.014f}, kSteelArm, kMatSteel);
@@ -1182,19 +768,7 @@ static void AddPole(const PoleSpec &p, bool concrete = false) {
                 {telC.x + off, telY + 0.15f, telC.z}, 0.038f, 0.032f, 6, kMetal,
                 kMatMetal);
   }
-
-  // a couple of CableTV-style cylindrical boxes bolted to the trunk (some
-  // poles, deterministic), now with a bolted lid seam so they read as steel
-  // enclosures rather than pipes
   if (((int(p.z * 7.0f)) % 3) == 0) {
-    // BUILD-P9: this can was pinned to base.x/base.z — the pole's GROUND
-    // position — and to a flat +0.20 m standoff. Both are wrong on a leaning,
-    // tapering shaft: the enclosure slid sideways off the side of the pole it
-    // is bolted to (up to lean * 4.2/height ~ 8 cm) and its lid seam and label
-    // block floated with it, which is exactly what a "flying cylinder" is.
-    // Measure off the LEANED axis and off TrunkRadius at the height it is
-    // mounted, embed it 3 cm into the shaft, and hang it on two flat straps
-    // that visibly reach back to the wood.
     Vec3 ca = PoleAxisAt(p, 3.9f);
     float cr = TrunkRadius(p, 3.9f);
     float cx = ca.x + cr + 0.075f;
@@ -1209,19 +783,13 @@ static void AddPole(const PoleSpec &p, bool concrete = false) {
   }
 
   if (p.transformer) {
-    // BUILD-P9: the can hangs OFF the arm in z instead of standing in the arm's
-    // own plane, where it used to run straight through the telecom arm below
-    // it. Cooling fins, a tap-changer box and two cut-outs on the arm front
-    // make it the densest piece of hardware on the pole.
     Vec3 tc{armC.x + 0.62f, armY - 1.42f, armC.z + 0.44f};
-    // hanger straps: two flat bars carrying the can back to the crossarm
     for (float bz : {-0.13f, 0.13f})
       AddBox({tc.x + bz, armY - 0.44f, (tc.z + armC.z) * 0.5f},
              {0.045f, 0.47f, 0.24f}, kSteelArm, kMatSteel);
     AddCylinder(Vec3Add(tc, Vec3{-0.1f, -0.55f, 0}),
                 Vec3Add(tc, Vec3{0.1f, 0.55f, 0}), 0.34f, 0.34f, 10, kMetal,
                 kMatMetal);
-    // radiator fins on the two faces the sun rakes across
     for (int fi = 0; fi < 5; fi++) {
       float fy = tc.y - 0.40f + 0.20f * fi;
       AddBox({tc.x, fy, tc.z + 0.34f}, {0.30f, 0.028f, 0.085f}, kSteelArm,
@@ -1231,12 +799,8 @@ static void AddPole(const PoleSpec &p, bool concrete = false) {
     }
     AddBox({tc.x, tc.y + 0.30f, tc.z}, {0.40f, 0.16f, 0.16f}, kMetal, kMatMetal);
     AddBox({tc.x, tc.y - 0.34f, tc.z}, {0.10f, 0.22f, 0.10f}, kMetal, kMatMetal);
-    // tap changer / terminal box on the side of the can
     AddBox({tc.x + 0.30f, tc.y - 0.10f, tc.z + 0.10f}, {0.10f, 0.16f, 0.13f},
            kSteelArm, kMatSteel);
-    // two ceramic bushings on the can's crown + their drop leads.
-    // BUILD-P8: the leads used to stop in mid-air 0.5 m above the can. They
-    // now run up to the crossarm insulator they actually feed.
     for (float bz : {-0.12f, 0.12f}) {
       Vec3 bt{tc.x, tc.y + 0.46f, tc.z + bz};
       AddCylinder(bt, Vec3Add(bt, Vec3{0, 0.16f, 0}), 0.045f, 0.038f, 6,
@@ -1245,10 +809,6 @@ static void AddPole(const PoleSpec &p, bool concrete = false) {
               ArmInsulatorTop(p, bz < 0.0f ? 0.0f : 1.05f), 0.05f, 0.011f, 6,
               kCable, kMatCable);
     }
-    // BUILD-P9: cut-out fuses and lightning arresters on the arm front. They
-    // hang clear of the arm plane (z + 0.17) so they do not intersect the knee
-    // braces, and they are the small bright verticals that make the pole look
-    // like it is doing real work.
     for (float cx : {-0.42f, 0.42f}) {
       AddCylinder({armC.x + cx, armY - 0.04f, armC.z},
                   {armC.x + cx, armY - 0.04f, armC.z + 0.17f}, 0.020f, 0.020f,
@@ -1269,11 +829,6 @@ static void AddPole(const PoleSpec &p, bool concrete = false) {
     }
   }
 }
-
-// BUILD-P7: a single free quad. The object pass runs with culling OFF (the
-// generators do not share one winding convention) and the fragment shader
-// resolves the normal toward the eye, so winding does not matter here —
-// which makes sloped roof planes a two-line job instead of a matrix helper.
 static void AddQuad(const Vec3 &p0, const Vec3 &p1, const Vec3 &p2,
                     const Vec3 &p3, const Vec3 &color, float mat) {
   Vec3 n = Vec3Norm(Vec3Cross(Vec3Sub(p1, p0), Vec3Sub(p3, p0)));
@@ -1285,16 +840,6 @@ static void AddQuad(const Vec3 &p0, const Vec3 &p1, const Vec3 &p2,
   gIdx.push_back(s); gIdx.push_back(s + 1); gIdx.push_back(s + 2);
   gIdx.push_back(s); gIdx.push_back(s + 2); gIdx.push_back(s + 3);
 }
-
-// BUILD-P6/P7: suburban silhouette houses on both flanks. Build P6 drew plain
-// untextured slabs that read as boxes parked on a flat plane; P7 gives every
-// house a concrete plinth, siding-shaded walls, deep overhanging eaves, a
-// ridge cap, glazed windows with frames and sills and an entry canopy. Each
-// house also registers a SERVICE ANCHOR (an eave bracket on the street side)
-// so the telecom drops terminate on hardware instead of in mid air.
-// BUILD-P8: wall/roof palettes come DOWN a stop. At 0.29-0.52 albedo plus a
-// bright dusk ambient, every house in the mid-distance clipped toward the
-// same cream as the sky and the suburb read as blank white slabs.
 static const Vec3 kWallTints[5] = {
     {0.235f, 0.208f, 0.178f}, {0.285f, 0.256f, 0.214f}, {0.185f, 0.170f, 0.158f},
     {0.330f, 0.300f, 0.246f}, {0.160f, 0.152f, 0.148f}};
@@ -1307,17 +852,14 @@ static void AddHouse(float x, float z, float w, float d, float h, float face) {
                             5.0f);
   const Vec3 &wall = kWallTints[pick];
   const Vec3 &roof = kRoofTints[pick % 3];
-  float streetX = face * w * 0.5f;           // the road-facing wall
+  float streetX = face * w * 0.5f;         
 
-  // concrete plinth: the house sits ON something instead of hovering
   AddBox({x, 0.09f, z}, {w * 0.5f + 0.07f, 0.09f, d * 0.5f + 0.07f},
          {0.150f, 0.142f, 0.132f}, kMatPaint);
-  // body
   AddBox({x, 0.10f + h * 0.5f, z}, {w * 0.5f, h * 0.5f, d * 0.5f}, wall,
          kMatWall);
 
-  // ---- pitched roof: two slanted planes + a thin under-plane for thickness
-  const float ov = 0.42f;                     // eave overhang
+  const float ov = 0.42f;                    
   const float rh = 0.55f + 0.06f * (float)(pick % 3);
   float yEave = 0.10f + h;
   float yRidge = yEave + rh;
@@ -1329,39 +871,21 @@ static void AddHouse(float x, float z, float w, float d, float h, float face) {
   AddQuad(r0, r1, eB, eA, roof, kMatRoof);
   AddQuad(r1, r0, eD, eC, roof, kMatRoof);
   AddQuad(eA, eB, eC, eD, Vec3Add(roof, Vec3{0, 0.10f, 0}), kMatRoof);
-  // ridge cap
   AddCylinder({x0, yRidge + 0.02f, z}, {x1, yRidge + 0.02f, z}, 0.055f, 0.055f,
               5, Vec3Add(roof, Vec3{0.05f, 0.03f, 0.02f}), kMatRoof);
-
-  // ---- BUILD-P8 ROOF CLUTTER: the black plastic water tank on stilts, a TV
-  // aerial and an aircon box. Every tiled roof in Japan carries some
-  // combination, and their silhouettes are most of what makes a distant
-  // roofline read as a house instead of a wedge.
   if (pick % 3 != 1) {
     float tx = x - w * 0.22f, tz = z + d * 0.10f;
     const Vec3 tank{0.055f, 0.058f, 0.062f};
     for (int l = 0; l < 4; l++) {
       float lx = tx + (l & 1 ? 0.26f : -0.26f);
       float lz = tz + (l & 2 ? 0.22f : -0.22f);
-      // legs start well BELOW the roof plane: the roof slopes away from the
-      // ridge, so a leg based at yRidge hovered in the air
       AddCylinder({lx, yRidge - 0.45f, lz}, {lx, yRidge + 0.52f, lz}, 0.045f,
                   0.045f, 4, {0.090f, 0.086f, 0.082f}, kMatMetal);
     }
     AddCylinder({tx, yRidge + 0.52f, tz}, {tx, yRidge + 1.02f, tz}, 0.34f, 0.31f,
                 8, tank, kMatMetal);
   }
-  {   // TV aerial: a mast with two crossbars
-    // BUILD-P16: this read as a floating mast. The roof pitches from the ridge
-    // DOWN to the eaves, so anything parked d*0.22 off the ridge stands on a
-    // surface already rh*0.22*d/(d/2+ov) lower than the ridge line, and the
-    // visible base then ran out exactly ON the roof's top silhouette with sky
-    // beside it and nothing of the mast below the outline. The fix is
-    // placement, not gauge: park it where the water tank parks — close in to
-    // the ridge, with the foot sunk to the same yRidge-0.45 the tank legs use,
-    // so the base disappears INTO the roof instead of stopping on its edge.
-    // The x offset is along the ridge, where the roof does not slope, so it is
-    // left alone.
+  {   
     float ax = x + w * 0.28f, az = z - d * 0.06f;
     AddCylinder({ax, yRidge - 0.45f, az}, {ax, yRidge + 0.95f, az}, 0.028f,
                 0.020f, 4, {0.120f, 0.118f, 0.115f}, kMatMetal);
@@ -1369,13 +893,12 @@ static void AddHouse(float x, float z, float w, float d, float h, float face) {
       AddBox({ax, yRidge + 0.62f + 0.24f * k, az}, {0.30f, 0.016f, 0.016f},
              {0.120f, 0.118f, 0.115f}, kMatMetal);
   }
-  if (pick % 2 == 0) {   // aircon condenser, bracketed ON the wall
+  if (pick % 2 == 0) { 
     float cx2 = x + streetX + face * 0.15f;
     AddBox({cx2, 1.85f, z + d * 0.12f}, {0.20f, 0.17f, 0.28f},
            {0.165f, 0.160f, 0.155f}, kMatMetal);
   }
 
-  // ---- windows: frame + sill + glazing on the street flank and the gable
   const Vec3 frame{0.320f, 0.300f, 0.270f};
   const Vec3 glass{0.060f, 0.075f, 0.095f};
   for (int i = 0; i < 3; i++) {
@@ -1383,14 +906,10 @@ static void AddHouse(float x, float z, float w, float d, float h, float face) {
     float wz = z + (float)(i - 1) * (d * 0.30f);
     float wy = 0.10f + h * 0.60f;
     AddBox({wx + face * 0.02f, wy, wz}, {0.05f, 0.26f, 0.34f}, frame, kMatPaint);
-    // BUILD-P9: at dusk roughly a third of the windows are lit. Warm emissive
-    // panes are the strongest "someone lives in this box" cue a suburban frame
-    // has, and they break up the flat wall slabs that read as untextured grey
-    // boxes in the user's screenshots.
     bool lit = ((i + pick) % 3) == 0;
     AddBox({wx + face * 0.06f, wy, wz}, {0.02f, 0.21f, 0.29f},
            lit ? Vec3{0.96f, 0.71f, 0.40f} : glass, lit ? kMatGlow : kMatGlass);
-    if (lit) {   // glazing bars — a lit pane with no frame reads as a decal
+    if (lit) { 
       AddBox({wx + face * 0.082f, wy, wz}, {0.012f, 0.21f, 0.020f}, frame,
              kMatPaint);
       AddBox({wx + face * 0.082f, wy, wz}, {0.012f, 0.020f, 0.29f}, frame,
@@ -1404,7 +923,6 @@ static void AddHouse(float x, float z, float w, float d, float h, float face) {
   AddBox({x - w * 0.5f + 0.06f * face, 0.10f + h * 0.55f, z + d * 0.22f},
          {0.02f, 0.16f, 0.24f}, glass, kMatGlass);
 
-  // ---- entry canopy over the front door (every other house)
   if (pick % 2 == 0) {
     Vec3 deck{0.290f, 0.270f, 0.240f};
     AddBox({x + streetX + face * 0.55f, 2.32f, z - d * 0.18f},
@@ -1415,8 +933,6 @@ static void AddHouse(float x, float z, float w, float d, float h, float face) {
     AddBox({x + streetX + face * 0.02f, 1.20f, z - d * 0.18f},
            {0.04f, 0.55f, 0.34f}, frame, kMatPaint);
   }
-
-  // ---- SERVICE ANCHOR: the eave bracket the telecom drops land on
   Vec3 anchor{x + streetX + face * 0.16f, 0.10f + h * 0.78f, z + d * 0.30f};
   AddBox({anchor.x - face * 0.04f, anchor.y, anchor.z}, {0.07f, 0.045f, 0.045f},
          kMetal, kMatMetal);
@@ -1426,12 +942,6 @@ static void AddHouse(float x, float z, float w, float d, float h, float face) {
   gDropAnchors.push_back({anchor.x, anchor.y + 0.17f, anchor.z});
 }
 
-// BUILD-P8: PROPERTY LINES. The most Japanese thing about a suburban street is
-// that you never see the neighbours' gardens: every plot is walled off with a
-// concrete block wall under a tiled cap, broken by a gate post now and then,
-// with a hedge behind it. They also give the corridor the mid-ground rhythm
-// the bare verges never had — without them the eye runs straight from the
-// gravel to the house fronts with nothing in between.
 static void AddPropertyLine(float x, float z0, float z1, float mirror) {
   const Vec3 wall{0.150f, 0.145f, 0.135f};
   const Vec3 cap{0.190f, 0.176f, 0.158f};
@@ -1443,11 +953,11 @@ static void AddPropertyLine(float x, float z0, float z1, float mirror) {
     float cz = z + seg * 0.5f;
     AddBox({x, h * 0.5f, cz}, {0.11f, h * 0.5f, seg * 0.5f}, wall, kMatPaint);
     AddBox({x, h + 0.045f, cz}, {0.17f, 0.045f, seg * 0.5f}, cap, kMatRoof);
-    if ((i % 3) == 1) {                       // gate post + cap
+    if ((i % 3) == 1) {                     
       AddBox({x, 1.05f, z}, {0.17f, 1.05f, 0.17f}, cap, kMatPaint);
       AddBox({x, 2.14f, z}, {0.22f, 0.05f, 0.22f}, cap, kMatRoof);
     }
-    if ((i % 2) == 0) {                       // hedge behind the wall
+    if ((i % 2) == 0) {                     
       float hx = x + mirror * (0.95f + 0.55f * (float)((i * 3) % 3) / 3.0f);
       AddBox({hx, 0.58f, cz}, {0.46f, 0.58f, seg * 0.40f},
              {0.048f, 0.078f, 0.040f}, kMatLeaf);
@@ -1457,9 +967,6 @@ static void AddPropertyLine(float x, float z0, float z1, float mirror) {
   }
 }
 
-// BUILD-P8: a streetlight on the road side of a pole — arm, lamp head and a
-// glowing lens. Real poles carry these; their glow is one of the few warm
-// accents that reads at dusk against all that orange.
 static void AddStreetLight(const PoleSpec &p, float side) {
   float armY = p.height - 2.35f;
   Vec3 a = PoleAxisAt(p, armY);
@@ -1468,42 +975,26 @@ static void AddStreetLight(const PoleSpec &p, float side) {
               {0.140f, 0.138f, 0.135f}, kMatMetal);
   AddBox({tipx + side * 0.12f, armY + 0.26f, a.z}, {0.26f, 0.07f, 0.15f},
          {0.150f, 0.148f, 0.145f}, kMatMetal);
-  // lens sits just BELOW the housing (which spans armY+0.19..+0.33) instead
-  // of intersecting it
   AddBox({tipx + side * 0.12f, armY + 0.145f, a.z}, {0.21f, 0.045f, 0.12f},
          {0.88f, 0.68f, 0.42f}, kMatGlow);
 }
-
-// BUILD-P8: a lit drinks machine by the kerb. Vending machines are lit at
-// dusk in every Japanese street and throw the only cool light in the frame.
 static void AddVendingMachine(float x, float z, float face) {
   AddBox({x, 0.78f, z}, {0.42f, 0.78f, 0.32f}, {0.185f, 0.150f, 0.120f},
          kMatMetal);
-  // BUILD-P8: the lit front has to sit ON the cabinet's outer face (0.42 m),
-  // not at 0.33 m where it was buried inside the metal — a hidden emissive
-  // panel is why the machine rendered as nothing at all.
   AddBox({x + face * 0.46f, 0.80f, z}, {0.03f, 0.62f, 0.26f},
          {0.88f, 0.93f, 1.00f}, kMatGlow);
   AddBox({x + face * 0.45f, 0.18f, z}, {0.03f, 0.12f, 0.24f},
          {0.30f, 0.26f, 0.22f}, kMatMetal);
 }
-
-
-// BUILD-P7: the far treeline. An empty plane running to a bare horizon is the
-// other half of "looks unrealistic" — real suburbs have a ragged band of
-// cedar and bamboo closing the view. Cheap silhouette boxes, deterministic,
-// sitting well inside the far plane so they never clip.
 static void AddTreeline() {
   const int kCount = 74;
   for (int i = 0; i < kCount; i++) {
-    // deterministic ring, jittered radius, taller in the middle band
-    float a = (float)i * 2.3999632f;                       // golden-angle
+    float a = (float)i * 2.3999632f;               
     float rad = 205.0f + 95.0f * (float)((i * 7) % 5) / 5.0f;
     float cx = std::sin(a) * rad * 1.25f;
     float cz = 90.0f + std::cos(a) * rad;
     float th = 9.0f + 9.0f * (float)((i * 13) % 7) / 7.0f;
     float wd = 2.6f + 1.8f * (float)((i * 5) % 4) / 4.0f;
-    // cedar green, warmed toward olive near the haze
     float g = 0.55f + 0.45f * (float)((i * 11) % 5) / 5.0f;
     Vec3 leaf{0.088f * g + 0.045f, 0.130f * g + 0.050f, 0.070f * g + 0.035f};
     AddBox({cx, th * 0.5f, cz}, {wd, th * 0.5f, wd * 0.9f}, leaf, kMatLeaf);
@@ -1529,11 +1020,6 @@ static void AddTreeline() {
   gLineA.clear();
   gLineB.clear();
   gDropAnchors.clear();
-
-  // ---- ground: a big warm gravel plane (single quad, cheap as dirt).
-  // BUILD-P7: stretched to +-430 m / z -300..880 so the corridor never shows
-  // its edge and the treeline has ground to stand on. Corners stay inside the
-  // 900 m far plane from the furthest camera position (z = 165 m).
   {
     unsigned int s = (unsigned int)gVerts.size();
     Vec3 n{0, 1, 0};
@@ -1545,116 +1031,45 @@ static void AddTreeline() {
     gIdx.push_back(s); gIdx.push_back(s + 2); gIdx.push_back(s + 3);
   }
 
-  // ---- the main pole line the camera walks beside (BUILD-P2: 15 poles,
-  // tighter 12.4 m spacing — real suburban distribution is 10-14 m spans,
-  // and the long vanishing corridor IS the Lain look). BUILD-P6: every pole
-  // leans a little (deterministic), like real weathered streets.
   std::vector<PoleSpec> lineA;
   for (int i = 0; i < 15; i++)
     lineA.push_back({-3.4f, 2.0f + 12.4f * i, 8.6f + 0.35f * ((i * 5) % 3),
                      i == 1 || i == 6 || i == 11, i == 3 || i == 9,
                      0.10f * ((i * 7) % 3 - 1), 0.08f * ((i * 5) % 3 - 1)});
-  for (const PoleSpec &p : lineA) AddPole(p, /*concrete=*/true);
+  for (const PoleSpec &p : lineA) AddPole(p, true);
   gLineA = lineA;
-  // BUILD-P8: streetlights on alternate line A poles, reaching over the road
   for (int i = 0; i < (int)lineA.size(); i += 2) AddStreetLight(lineA[i], 1.0f);
-
-  // wires along line A: 3 crossarm conductors + the pole-top wire. BUILD-P2
-  // FIX: every span ties INSULATOR TOP to INSULATOR TOP (ArmInsulatorTop /
-  // PoleTopInsulatorTop) — the old below-arm offsets left wire ends hanging
-  // in mid-air beside the insulators.
   for (int i = 0; i + 1 < (int)lineA.size(); i++) {
     const PoleSpec &p = lineA[i];
     const PoleSpec &q = lineA[i + 1];
     float sag = 0.78f + 0.12f * ((i * 3) % 3);
-    // BUILD-P18: every gauge in the corridor moved together. These are the
-    // conductors closest to the lens and they were already legible, so they
-    // take the smallest lift of the three tiers -- but they set the scale the
-    // eye reads the thinner tiers against, so leaving them at the old gauge
-    // would have made the telecom web below them look like string.
     for (float off : {-1.05f, 0.0f, 1.05f})
       AddWire(ArmInsulatorTop(p, off), ArmInsulatorTop(q, off), sag, 0.032f,
               14, kCable, kMatCable);
     AddWire(PoleTopInsulatorTop(p), PoleTopInsulatorTop(q), sag * 0.8f, 0.037f,
             14, kCableOld, kMatCable);
-    // BUILD-P9: two more tiers — the lower-arm conductors. Line A now carries
-    // six spans of wire per bay (3 top arm + pole top + 2 lower arm) instead of
-    // four, and it is that DENSITY, not the sag curve, that reads as a real
-    // distribution corridor.
     for (float off : {-0.55f, 0.55f})
       AddWire(Arm2InsulatorTop(p, off), Arm2InsulatorTop(q, off), sag * 0.74f,
               0.028f, 12, kCable, kMatCable);
   }
 
-  // ---- BUILD-P12: THE CABLE WEB. This is what the reference photograph is
-  // actually about. Six neat distribution conductors read as a power line
-  // DIAGRAM. What makes a real pole is the sixteen thin black telecom drops
-  // and cross-connects strung between the same two poles at different
-  // heights, most of them slack, none of them in a plane — the web that fills
-  // every corner of the frame between the arms. One tube each, and the entire
-  // silhouette of the upper half of the shot.
   for (int i = 0; i + 1 < (int)lineA.size(); i++) {
     const PoleSpec &p = lineA[i];
     const PoleSpec &q = lineA[i + 1];
     for (int k = 0; k < 16; k++) {
       float fk = (float)k;
-      // pseudo-random but DETERMINISTIC offsets along the telecom bracket, so
-      // the same web is generated every run and the benchmark stays comparable
       float u0 = fk * 0.37f;  u0 -= std::floor(u0);
       float u1 = fk * 0.61f + 0.23f; u1 -= std::floor(u1);
       float u2 = fk * 0.29f;  u2 -= std::floor(u2);
       float u3 = fk * 0.83f;  u3 -= std::floor(u3);
       Vec3 a = TelecomBracketTop(p, -0.66f + 1.32f * u0);
       Vec3 b = TelecomBracketTop(q, -0.66f + 1.32f * u1);
-      // BUILD-P18: THIS IS THE WEB, AND IT WAS THE ONE THING IN THE SCENE
-      // THAT COULD NOT BE SEEN. Sixteen strands a bay is the densest cable
-      // run in the corridor, and every one of them was 10-17 mm RADIUS --
-      // a 20-34 mm tube. At 1280x720 and a 52-degree FOV that is 0.26 px at
-      // 60 m and 0.79 px at 20 m, i.e. below the 4x-MSAA coverage floor
-      // everywhere except the nearest span: the samples quantise to 0, 1/4,
-      // 1/2, 3/4, 1 and the wire spends its length flickering between a
-      // quarter-covered grey hair and nothing at all, which the aerial-
-      // perspective mix then lifts toward the haze. So the density the
-      // corridor was built for was in the geometry and absent from the
-      // image -- the "the wires do not show" complaint was a GAUGE bug,
-      // not a density bug, and adding more strands would only have made a
-      // mass of them.
-      //
-      // 21-32 mm radius (42-64 mm cable) is also the honest number. These are
-      // sixteen gathered cross-connects on one bracket, and the Japanese
-      // aerial cable the Lain corridor is named for is insulated
-      // polyethylene-sheathed, not bare: 40-60 mm is a normal span cable.
-      // Samples went 7 -> 10 for the P13 reason: at 2x the gauge a 1.77 m
-      // long segment would have started showing its joints.
-      float r = 0.021f + 0.011f * u3;
       float sag = 0.18f + 0.62f * u2;
       AddWire(a, b, sag, r, 10, kCableOld, kMatCable);
     }
   }
-
-  // ---- BUILD-P12: something tall beyond the pole line. Pure scale cue, but
-  // a street with no vertical past the distribution poles has no distance.
-  //
-  // BUILD-P14 moved the cell masts out of the corridor (the dolly runs
-  // x = +2, z = 4..165, so a mast at (17.5, 101) passed 15 m off the lens).
-  // BUILD-P15 replaces the object outright -- see the long note on AddPylon:
-  // three passes of thickening members had not fixed the read, so the shape
-  // had to change. Placement is now tuned to the dolly's ACTUAL working
-  // range rather than its whole loop: the still and the GIF are shot at
-  // t = 2..17 s, i.e. z = 9..48 m, and at z = 212 the pylons were 190-230 m
-  // out — a 44 px crossarm washed almost to the haze. At z = 140/172 they are
-  // 103-173 m away across the shot window, which puts the crossarm at 46-62 px
-  // and the whole tower at 100-133 px: large enough to read as a pylon, small
-  // enough to stay a scale cue. Both still clear the corridor laterally
-  // (x = +48 and -60 against pole lines at -3.4 and +8.6).
   AddPylon(48.0f, 140.0f, 26.0f);
   AddPylon(-60.0f, 172.0f, 31.0f);
-
-  // ---- a second, closer line: depth + the layered-tangle feel. BUILD-P2:
-  // the 17 m offset put line B so far off-axis it read as flat wallpaper;
-  // 8 m puts a real second plane of poles in frame. Every wire ties
-  // insulator-top to insulator-top (the old wires floated mid-air — the
-  // "wires hanging out" glitch).
   std::vector<PoleSpec> lineB;
   for (int i = 0; i < 6; i++)
     lineB.push_back({8.6f, 6.0f + 15.5f * i, 7.6f, false, i == 1,
@@ -1667,29 +1082,18 @@ static void AddTreeline() {
     for (float off : {-1.05f, 1.05f})
       AddWire(ArmInsulatorTop(p, off), ArmInsulatorTop(q, off), 0.88f, 0.030f,
               12, kCableOld, kMatCable);
-    // BUILD-P9: line B was the sparse one — top-of-pole plus the two lower-arm
-    // spans give it the same tiered look as the main line, which is what turns
-    // the second row from wallpaper into a second plane of poles.
     AddWire(PoleTopInsulatorTop(p), PoleTopInsulatorTop(q), 0.70f, 0.035f, 12,
             kCableOld, kMatCable);
     for (float off : {-0.55f, 0.55f})
       AddWire(Arm2InsulatorTop(p, off), Arm2InsulatorTop(q, off), 0.62f, 0.028f,
               12, kCableOld, kMatCable);
   }
-
-  // ---- the crossing spans: line B feeds into line A (the tangle). BUILD-P2
-  // FIX: crossings now land on real insulator tops of both poles.
   for (int i = 0; i < 4; i++) {
     const PoleSpec &p = lineB[i];
     const PoleSpec &q = lineA[i + 1];
     AddWire(ArmInsulatorTop(p, 1.05f), ArmInsulatorTop(q, -1.05f), 1.30f,
             0.028f, 16, kCable, kMatCable);
   }
-
-  // ---- BUILD-P6/P7: THE SUBURB, built BEFORE the telecom tangle so the drop
-  // wires have real eave brackets to land on. Houses on both flanks (they
-  // give the corridor its depth) and a far treeline so the horizon is not a
-  // bare line between dirt and sky.
   for (int i = 0; i < 8; i++) {
     float z = -4.0f + 19.0f * i + 3.0f * ((i * 7) % 3);
     AddHouse(-11.5f - 2.0f * (i % 3), z, 4.6f + 1.4f * ((i * 3) % 3),
@@ -1700,20 +1104,11 @@ static void AddTreeline() {
     AddHouse(15.0f + 2.5f * (i % 3), z, 4.8f + 1.5f * ((i * 3) % 3),
              5.4f + 1.1f * ((i * 7) % 3), 3.1f + 1.0f * ((i * 5) % 3), -1.0f);
   }
-  // BUILD-P8: the walled property lines between road and front gardens, plus a
-  // couple of lit vending machines at the kerb.
   AddPropertyLine(-9.0f, -14.0f, 168.0f, -1.0f);
   AddPropertyLine(13.0f, -8.0f, 176.0f, 1.0f);
   AddVendingMachine(-7.4f, 30.0f, 1.0f);
   AddVendingMachine(11.6f, 96.0f, -1.0f);
   AddTreeline();
-
-  // ---- BUILD-P4: THE TELECOM TANGLE. Two bundles per span on line A (one
-  // per bracket pair) plus one on line B, and cross-line telecom spans
-  // B->A — this is what makes a Japanese pole street read as a Japanese
-  // pole street: tons and tons of sagging phone wire everywhere. Every drop
-  // now terminates on a house bracket or a real fitting (see
-  // AddTelecomBundle).
   for (int i = 0; i + 1 < (int)lineA.size(); i++) {
     const PoleSpec &p = lineA[i];
     const PoleSpec &q = lineA[i + 1];
@@ -1721,13 +1116,6 @@ static void AddTreeline() {
                      i * 2 + 1, 0.027f, 12, kCable);
     AddTelecomBundle(TelecomBracketTop(p, 0.70f), TelecomBracketTop(q, 0.70f),
                      i * 2 + 2, 0.027f, 12, kCable);
-    // BUILD-P9: the middle bracket was carrying nothing at all. One more
-    // bundle per bay turns the telecom tier from two parallel cables into the
-    // thick three-deep band every Japanese pole line has.
-    // BUILD-P16: that third bundle now runs on every OTHER bay only. A real
-    // pole line is not uniform — some spans carry a third cable and some do
-    // not — and the even/odd split is what stops the tier reading as a solid
-    // three-deep wall of wire from end to end.
     if ((i % 2) == 0)
       AddTelecomBundle(TelecomBracketTop(p, 0.0f), TelecomBracketTop(q, 0.0f),
                        i * 2 + 13, 0.024f, 12, kCableOld);
@@ -1738,19 +1126,12 @@ static void AddTreeline() {
     AddTelecomBundle(TelecomBracketTop(p, 0.0f), TelecomBracketTop(q, 0.0f),
                      i * 3 + 40, 0.024f, 10, kCableOld);
   }
-  // slack cross-line telecom loops B -> A (the messy diagonal drips)
   for (int i = 0; i < 5; i++) {
     const PoleSpec &p = lineB[i];
     const PoleSpec &q = lineA[i + 1];
     AddTelecomBundle(TelecomBracketTop(p, -0.70f), TelecomBracketTop(q, -0.70f),
                      i * 5 + 77, 0.022f, 14, kCable);
   }
-
-  // ---- service drops: from the pole service spool down to the NEAREST house
-  // bracket. BUILD-P7: build P6 dropped these onto two hard-coded wall points
-  // that were over a metre clear of the actual house wall, which is why the
-  // left of frame was full of wires stopping in thin air. Now the destination
-  // is whatever eave bracket the house itself registered.
   for (int side = 0; side < 2; side++) {
     const PoleSpec &p = lineA[side == 0 ? 3 : 9];
     int best = -1;
@@ -1766,25 +1147,15 @@ static void AddTreeline() {
       AddWire(ArmInsulatorTop(p, 1.05f), a, 0.48f, 0.024f, 12, kCableOld,
               kMatCable);
     }
-    // junction cans stay mounted on the pole wall — BUILD-P8: braced against
-    // the measured trunk radius instead of a fixed 0.30 m offset.
     Vec3 ja = PoleAxisAt(p, 3.05f);
     float jr = TrunkRadius(p, 3.05f);
     AddBox({ja.x - jr - 0.06f, 3.10f, ja.z}, {0.16f, 0.10f, 0.12f}, kMetal,
            kMatMetal);
-    // BUILD-P10: the drop stub USED TO JUST STOP. It left the housing at 3.05 m,
-    // angled down and out, and ended at 2.45 m in clear air — a 0.6 m metal
-    // cylinder hanging off a pole with nothing on the end of it, which is
-    // exactly what reads as a flying cylinder at a glance. A real service drop
-    // ends in a weatherhead: a boot where the cable enters, and the cable
-    // itself running away to a termination. Here it runs to the nearest house
-    // eave bracket when one is in range, and otherwise into a drip loop back
-    // onto the pole — which is what an unused drop actually does.
     Vec3 stubEnd{ja.x - jr - 0.10f, 2.45f, ja.z};
     AddCylinder({ja.x - jr, 3.05f, ja.z}, stubEnd, 0.09f, 0.09f, 8, kMetal,
                 kMatMetal);
     AddCylinder(stubEnd, {stubEnd.x - 0.04f, 2.30f, stubEnd.z}, 0.075f, 0.105f,
-                8, kMetal, kMatMetal);   // weatherhead boot
+                8, kMetal, kMatMetal); 
     if (best >= 0) {
       AddWire({stubEnd.x - 0.04f, 2.24f, stubEnd.z}, gDropAnchors[best], 0.42f,
               0.019f, 8, kCableOld, kMatCable);
@@ -1794,16 +1165,6 @@ static void AddTreeline() {
               kMatCable);
     }
   }
-
-  // ---- BUILD-P7: THE ROAD, REBUILT. Build P6 laid it out in three pieces
-  // whose x ranges did not tile: the body ran [rx-2.35, rx+2.35] while the
-  // left shoulder ran [rx-3.05, rx-2.70], leaving a 0.35 m strip of BARE
-  // BRIGHT GRAVEL between them for the whole length of the corridor. At the
-  // camera's grazing angle that strip reads as a pale diagonal band lying
-  // across the road — the artifact the user screenshotted. The carriageway is
-  // now ONE contiguous quad, the shoulders live strictly OUTSIDE it, and the
-  // paint sits on its own level above it (see the kRoadY/kPaintY/kShadowY
-  // ladder). Runs from z=-200 to the treeline at z=520.
   {
     Vec3 n{0, 1, 0};
     const float z0 = -200.0f, z1 = 520.0f;
@@ -1817,8 +1178,6 @@ static void AddTreeline() {
     PushVert({kRoadX - kRoadHalf, kRoadY, z1}, n, road, kMatRoad);
     gIdx.push_back(s); gIdx.push_back(s + 1); gIdx.push_back(s + 2);
     gIdx.push_back(s); gIdx.push_back(s + 2); gIdx.push_back(s + 3);
-    // gravel shoulders, strictly outside the carriageway — no overlap, so no
-    // coplanar z-fighting either
     for (int e = 0; e < 2; e++) {
       float xs = e ? kRoadX + kRoadHalf : kRoadX - kRoadHalf;
       float xe = e ? xs + 0.90f : xs - 0.90f;
@@ -1830,12 +1189,6 @@ static void AddTreeline() {
       gIdx.push_back(es); gIdx.push_back(es + 1); gIdx.push_back(es + 2);
       gIdx.push_back(es); gIdx.push_back(es + 2); gIdx.push_back(es + 3);
     }
-    // BUILD-P10: CAST KERBS. A road that meets the ground in a straight line is
-    // the loudest non-photographic tell in any street shot — there is nothing
-    // in it to catch light, nothing to cast a shadow, and the eye reads the
-    // carriageway as a decal. The kerb is 0.32 m wide, 16 cm proud, and gets
-    // its own material so the shader can put aggregate in the concrete and
-    // standing water in the gutter beside it.
     for (int e = 0; e < 2; e++) {
       float sgn = e ? 1.0f : -1.0f;
       float xc = (e ? kRoadX + kRoadHalf : kRoadX - kRoadHalf) + sgn * 0.16f;
@@ -1843,7 +1196,6 @@ static void AddTreeline() {
              (z1 - z0) * 0.5f},
              {0.245f, 0.238f, 0.225f}, kMatKerb);
     }
-    // centre dashes: 3 m paint, 5 m gap
     for (float z = -60.0f; z < 400.0f; z += 8.0f) {
       unsigned int ds = (unsigned int)gVerts.size();
       PushVert({kRoadX - 0.09f, kPaintY, z}, n, paint, kMatLine);
@@ -1853,7 +1205,6 @@ static void AddTreeline() {
       gIdx.push_back(ds); gIdx.push_back(ds + 1); gIdx.push_back(ds + 2);
       gIdx.push_back(ds); gIdx.push_back(ds + 2); gIdx.push_back(ds + 3);
     }
-    // solid edge lines, inset from the carriageway edge
     for (int e = 0; e < 2; e++) {
       float xl = e ? kRoadX + kRoadHalf - 0.40f : kRoadX - kRoadHalf + 0.26f;
       unsigned int es = (unsigned int)gVerts.size();
@@ -1866,10 +1217,6 @@ static void AddTreeline() {
     }
   }
 
-  // BUILD-P2/P6: long dusk shadows are PER-FRAME now (the sun moves — see
-  // DrawGroundShadows), so nothing shadow-shaped is baked here anymore.
-
-  // upload
   glGenVertexArrays(1, &gObjVao);
   glGenBuffers(1, &gObjVbo);
   glGenBuffers(1, &gObjIbo);
@@ -1927,8 +1274,6 @@ static void BuildSkyMesh() {
   glBindVertexArray(0);
 }
 
-// ------------------------------------------------------------------- HUD
-// (kFontAtlasW/H/Cell come from font_atlas.hxx — shared with every scene.)
 static GLuint gHudVao = 0, gHudVbo = 0;
 static int gHudVertexFloats = 0;
 
@@ -1989,10 +1334,8 @@ static void RenderText(float x, float y, const char *text, float scale = 2.0f) {
 }
 
 static void RenderHUD() {
-  // build tag: on-screen proof of which scene code the exe runs (stale-build
-  // screenshots must be detectable at a glance)
   char line1[128];
-  std::snprintf(line1, sizeof(line1), "FPS: %d   Scene 4   build P20", gFps);
+  std::snprintf(line1, sizeof(line1), "FPS: %d   Scene 4   Release 1 v0.4", gFps);
   RenderText(16.0f, 16.0f, line1);
 }
 
@@ -2020,10 +1363,6 @@ static Mat4 gProj;
 static void DrawSky(const Mat4 &view, const Vec3 &eye, double timeSec) {
   Mat4 vp;
   Mat4Multiply(vp, gProj, view);
-  // BUILD-P7: the dome is drawn LAST, depth-tested against a world that is
-  // already in the framebuffer, so the cloud fbm only runs on the pixels the
-  // scene did not cover — roughly half of them. Previously it shaded the
-  // whole frame and was then painted over.
   glDepthMask(GL_FALSE);
   glDisable(GL_CULL_FACE);
   glUseProgram(gSkyProg.handle);
@@ -2035,7 +1374,7 @@ static void DrawSky(const Mat4 &view, const Vec3 &eye, double timeSec) {
   m[12] = eye.x; m[13] = eye.y; m[14] = eye.z;
   glUniformMatrix4fv(gSkyProg.loc("uModel"), 1, GL_FALSE, m.data());
   glUniform3f(gSkyProg.loc("uEyePos"), eye.x, eye.y, eye.z);
-  Vec3 sd = SunDirNow(timeSec);   // BUILD-P6: the sky follows the moving sun
+  Vec3 sd = SunDirNow(timeSec);
   glUniform3f(gSkyProg.loc("uSunDir"), sd.x, sd.y, sd.z);
   glUniform1f(gSkyProg.loc("uTime"), (float)timeSec);
   glDrawElements(GL_TRIANGLES, gSkyIndexCount, GL_UNSIGNED_INT, nullptr);
@@ -2045,27 +1384,6 @@ static void DrawSky(const Mat4 &view, const Vec3 &eye, double timeSec) {
   glEnable(GL_DEPTH_TEST);
 }
 
-// Per-frame ground shadows: a streamed strip per pole along the CURRENT sun
-// ray. Because this rebuilds every frame, the shadows swing as the sun
-// moves — the "alive street" cue.
-//
-// BUILD-P7: shadows are ALPHA-BLENDED (blendFunc ZERO, ONE_MINUS_SRC_ALPHA),
-// so the pass multiplies whatever is already in the framebuffer instead of
-// stamping opaque brown quads over it. That fixes two things at once: the
-// shadow lying across the road now darkens the painted DASHES too (before, a
-// flat opaque bar covered them), and the strip can fade out along its length
-// into a penumbra instead of ending in a hard edge. Five strips with a
-// decaying alpha ramp, all sharing vertices at the strip boundaries, give a
-// continuous gradient for the cost of ten triangles per pole.
-//
-// BUILD-P6.1 CRITICAL DRIVER FIX: the shadows live in their OWN VAO. The
-// first version rebound the shared object VAO's attribute pointers to the
-// shadow VBO every frame and restored only the element buffer — the object
-// mesh then read its VERTICES from the 84-vertex shadow buffer. Mesa
-// returns zeros for out-of-bounds VBO fetches (invisible), AMD returns
-// garbage: giant misindexed triangles washed over the whole frame (the
-// "soooo glitched" white/orange screenshot). Separate VAO = zero state
-// bleed, on every driver.
 static GLuint gShadowVao = 0, gShadowVbo = 0, gShadowIbo = 0;
 static void DrawGroundShadows(const Mat4 &view, const Vec3 &eye, double t,
                               const std::vector<PoleSpec> &lineA,
@@ -2148,10 +1466,9 @@ static void DrawGroundShadows(const Mat4 &view, const Vec3 &eye, double t,
   glUniform3f(gObjProg.loc("uSunDir"), sunDir.x, sunDir.y, sunDir.z);
   glUniform1f(gObjProg.loc("uTime"), (float)t);
   glUniform1f(gObjProg.loc("uRoadX"), kRoadX);
-  // dst *= (1 - srcAlpha): a real shadow, not a brown sticker
   glEnable(GL_BLEND);
   glBlendFunc(GL_ZERO, GL_ONE_MINUS_SRC_ALPHA);
-  glDepthMask(GL_FALSE);          // shadows must never occlude anything
+  glDepthMask(GL_FALSE);  
   glDrawElements(GL_TRIANGLES, (GLsizei)idx.size(), GL_UNSIGNED_INT, nullptr);
   glDepthMask(GL_TRUE);
   glDisable(GL_BLEND);
@@ -2167,17 +1484,10 @@ static void DrawGrid(const Mat4 &view, const Vec3 &eye, double timeSec) {
   Mat4Identity(model);
   glUseProgram(gObjProg.handle);
   glBindVertexArray(gObjVao);
-  // Two-sided: the CPU generators do not guarantee one winding convention
-  // across cylinders/boxes/quads, and the fragment shader resolves the
-  // normal toward the eye itself. Culling here would clip whole surfaces
-  // (the ground quad) away depending on their generation order.
   glDisable(GL_CULL_FACE);
   glUniformMatrix4fv(gObjProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
   glUniformMatrix4fv(gObjProg.loc("uModel"), 1, GL_FALSE, model.data());
   glUniform3f(gObjProg.loc("uEyePos"), eye.x, eye.y, eye.z);
-  // BUILD-P7: DrawGrid was still uploading the FROZEN build-P2 kSunDir while
-  // the sky and the shadows advanced with SunDirNow() — the sun's disc drifted
-  // but the lighting stayed put. One timebase for all three now.
   Vec3 sd = SunDirNow(timeSec);
   glUniform3f(gObjProg.loc("uSunDir"), sd.x, sd.y, sd.z);
   glUniform1f(gObjProg.loc("uTime"), (float)timeSec);
@@ -2218,7 +1528,6 @@ static void RenderScene() {
 
   Mat4 view;
   {
-    // gaze: up the line at the wire bundle, toward the sun on the horizon
     Vec3 look{-0.45f, 5.5f, gCamPos.z + 26.0f};
     Mat4LookAt(view, eye, look, {0, 1, 0});
   }
@@ -2230,10 +1539,6 @@ static void RenderScene() {
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
   DrawGrid(view, eye, gSimTime);
-  // BUILD-P6: the moving sun re-draws the ground shadows every frame, so
-  // they swing with it (lineA/lineB are built once at startup and kept).
-  // BUILD-P7: they are alpha-blended, so they multiply whatever is under
-  // them — road paint included.
   DrawGroundShadows(view, eye, gSimTime, gLineA, gLineB);
   DrawSky(view, eye, gSimTime);
   RenderHUD();
@@ -2277,8 +1582,6 @@ static void RenderScene() {
   }
 }
 
-// ------------------------------------------------------------------- input
-// ESC is the only control the scene keeps: the dolly camera is fully automatic.
 static void ProcessKeys(const SDL_Event &event) {
   if (event.key.keysym.sym == SDLK_ESCAPE) {
     gQuit = true;
@@ -2292,7 +1595,6 @@ static void ChangeSize(int w, int h) {
   glViewport(0, 0, w, h);
 }
 
-// -------------------------------------------------------- visual-test support
 static bool ParseShotTimes(const char *arg) {
   gShotTimes.clear();
   const char *p = arg;
@@ -2322,9 +1624,6 @@ int PoleSceneParseArgs(int argc, char **argv) {
 }
 
 void PoleSceneSetScreenshot(const char *path) { gScreenshotPath = path; }
-// BUILD-P21: --shot-time S (singular) is main.cxx's documented one-frame flag
-// but only --shot-times ever reached this scene, so the singular form set the
-// path with an EMPTY list and was silently ignored. See scene2.cxx.
 void PoleSceneSetShotTime(float t) {
   if (gShotTimes.empty()) gShotTimes.push_back(t);
 }
@@ -2375,10 +1674,9 @@ static void Setup() {
   glDepthFunc(GL_LEQUAL);
   glEnable(GL_CULL_FACE);
   glCullFace(GL_BACK);
-  glClearColor(0.60f, 0.30f, 0.10f, 1.0f); // dusk amber (only visible on gaps)
+  glClearColor(0.60f, 0.30f, 0.10f, 1.0f);
 }
 
-// ------------------------------------------------------------------ session
 int RunPoleScene(bool *gaveUpOut) {
   if (gaveUpOut) *gaveUpOut = false;
 
@@ -2400,17 +1698,6 @@ int RunPoleScene(bool *gaveUpOut) {
   }
   gWindowWidth = winW;
   gWindowHeight = winH;
-
-  // BUILD-P10: 4x MULTISAMPLE. Nothing else in this pass moves the image closer
-  // to a photograph. The frame is a tangle of 3-4 cm cylinders crossing a
-  // bright sky: without coverage antialiasing every wire is a hard stair-step
-  // and the whole corridor reads as vector art. MSAA fixes exactly that and
-  // costs nothing per fragment on any driver from the GMA 950 up, because it
-  // runs at sample rate, not pixel rate.
-  // Safety: a driver that cannot do MSAA is allowed to fail context creation,
-  // so the whole window is rebuilt with the attributes off rather than
-  // dropping the scene. The result is printed so the active mode is never a
-  // guess.
   bool msaa = true;
   for (int attempt = 0; attempt < 2; attempt++) {
     SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, msaa ? 1 : 0);
@@ -2425,7 +1712,6 @@ int RunPoleScene(bool *gaveUpOut) {
     }
     gContext = SDL_GL_CreateContext(gWindow);
     if (gContext) break;
-    // this driver refused the multisample request: tear it down and go plain
     SDL_DestroyWindow(gWindow);
     gWindow = nullptr;
     msaa = false;
@@ -2437,15 +1723,6 @@ int RunPoleScene(bool *gaveUpOut) {
     if (gaveUpOut) *gaveUpOut = true;
     return 1;
   }
-  // BUILD-P24: FULLSCREEN_DESKTOP, not FULLSCREEN. Exclusive fullscreen hands the
-  // display to the OpenGL driver and the window stops being an ordinary top-level
-  // window, so the desktop compositor has nothing to composite -- and Win+PrtScr
-  // captures the composited desktop, which came out black. Borderless
-  // fullscreen still fills the screen but stays a normal window, so the capture
-  // path works. It also sizes the window to the desktop rather than to the
-  // requested 1280x720, so the drawing size has to be read back: the HUD and
-  // the projection both use gWindowWidth/gWindowHeight, and left at 720p on a
-  // 1080p desktop the scene would be drawn into one corner.
   if (!gWindowedMode) {
     int dw = gWindowWidth, dh = gWindowHeight;
     SDL_GetWindowSize(gWindow, &dw, &dh);
@@ -2458,9 +1735,6 @@ int RunPoleScene(bool *gaveUpOut) {
   int samples = 0;
   SDL_GL_GetAttribute(SDL_GL_SAMPLES, &samples);
   std::printf("Antialiasing: %dx MSAA%s\n", samples, samples > 1 ? "" : " (unavailable)");
-  // BUILD-P25: report the real presentation mode, so "the screenshot is black"
-  // can be told apart into a stale build vs a capture tool that cannot grab the
-  // compositor.
   std::printf("Display: %s %dx%d | capture with Win+PrtScr, or --screenshot FILE\n",
               gWindowedMode ? "windowed" : "borderless fullscreen",
               gWindowWidth, gWindowHeight);
