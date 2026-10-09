@@ -30,8 +30,8 @@
 //     gravity, torn from each pot's crown, picking up the checker sky's
 //     colours as they fly.
 //
-// Controls: drag orbits the camera, wheel zooms, F toggles the auto camera,
-// R re-drops the whole fleet, ESC quits.
+// Controls: ESC quits. The flyover camera is automatic from launch and the
+// fleet's fall / return / resplash loop runs on its own; nothing steers it.
 //
 // Headless flags shared with the other scenes: --screenshot, --shot-times,
 // --width; scene-specific: --pool-only (run just this scene).
@@ -1351,8 +1351,6 @@ static GLuint gEmptyVao = 0;
 static Vec3 gCamPos{0.0f, 2.6f, 7.2f};
 static float gCamYaw = 0.0f, gCamPitch = -0.28f;
 static bool gAutoCam = true;
-static bool gIsHoldingMouse = false;
-static int gXOld = 0, gYOld = 0;
 static float gCamDist = 7.2f;
 
 // results screen + fused-run plumbing (same pattern as scene2.cxx)
@@ -1987,45 +1985,10 @@ static void RenderScene() {
 }
 
 // ------------------------------------------------------------------ input
+// ESC is the only control the scene keeps: the camera is fully automatic.
 static void ProcessKeys(const SDL_Event &event) {
   if (event.key.keysym.sym == SDLK_ESCAPE) {
     gQuit = true;
-  } else if (event.key.keysym.sym == SDLK_f) {
-    gAutoCam = !gAutoCam;
-  } else if (event.key.keysym.sym == SDLK_r) {
-    ResetFleet(gSimTime); // re-drop the whole fleet, staggered from now
-  } else if (event.key.keysym.sym == SDLK_LEFT) {
-    gCamYaw -= 0.05f;
-  } else if (event.key.keysym.sym == SDLK_RIGHT) {
-    gCamYaw += 0.05f;
-  } else if (event.key.keysym.sym == SDLK_UP) {
-    gCamPitch = std::fmin(gCamPitch + 0.03f, -0.05f);
-  } else if (event.key.keysym.sym == SDLK_DOWN) {
-    gCamPitch = std::fmax(gCamPitch - 0.03f, -1.2f);
-  }
-}
-
-static void HandleMouseEvent(const SDL_Event &event) {
-  if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT) {
-    gXOld = event.button.x;
-    gYOld = event.button.y;
-    gIsHoldingMouse = true;
-    gAutoCam = false;
-  } else if (event.type == SDL_MOUSEBUTTONUP && event.button.button == SDL_BUTTON_LEFT) {
-    gIsHoldingMouse = false;
-  } else if (event.type == SDL_MOUSEWHEEL) {
-    gCamDist *= (event.wheel.y > 0) ? 0.90f : 1.10f;
-    if (gCamDist < 2.0f) gCamDist = 2.0f;
-    if (gCamDist > 40.0f) gCamDist = 40.0f;
-  }
-}
-
-static void HandleMouseMotion(const SDL_Event &event) {
-  if (gIsHoldingMouse) {
-    gCamYaw -= (event.motion.x - gXOld) * 0.005f;
-    gXOld = event.motion.x;
-    gCamPitch = std::fmin(std::fmax(gCamPitch + (event.motion.y - gYOld) * 0.004f, -1.2f), -0.05f);
-    gYOld = event.motion.y;
   }
 }
 
@@ -2317,11 +2280,6 @@ int RunPoolScene(bool *gaveUpOut) {
         gQuit = true;
       } else if (event.type == SDL_KEYDOWN) {
         ProcessKeys(event);
-      } else if (event.type == SDL_MOUSEBUTTONDOWN || event.type == SDL_MOUSEBUTTONUP ||
-                 event.type == SDL_MOUSEWHEEL) {
-        HandleMouseEvent(event);
-      } else if (event.type == SDL_MOUSEMOTION) {
-        HandleMouseMotion(event);
       } else if (event.type == SDL_WINDOWEVENT) {
         if (event.window.event == SDL_WINDOWEVENT_RESIZED) {
           ChangeSize(event.window.data1, event.window.data2);

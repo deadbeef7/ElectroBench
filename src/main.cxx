@@ -191,12 +191,10 @@ float pos_x, pos_y, pos_z;
 float angle_x = 30.0f, angle_y = 0.0f;
 int init_time = time(NULL), final_time, frame;
 int fps;
-int x_old = 0, y_old = 0;
 std::string model_name = "assets/UZI.obj";
-bool is_holding_mouse = false;
-bool is_updated = false;
 
-// Orbit camera (drag orbits, mouse wheel dollies)
+// Orbit camera (driven by the flyover path and the --orbit/--dolly flags;
+// there is no interactive control left)
 float cam_azimuth = -25.0f;
 float cam_elevation = 26.0f;
 float cam_dist = 10.5f;
@@ -212,8 +210,8 @@ float cam_target[3] = {0.0f, 0.45f, 0.0f};
 // a high approach that reveals the whole 110-gun array, a low runway pass
 // down its length, then a pull back to the orbit — and it is driven off the
 // run clock, so it is identical on every machine and costs nothing per frame.
-// Any mouse input cancels it and hands control back (same rule the pool-room
-// and power-lines scenes use), and F toggles it.
+// It is ON at launch and nothing can take it away: the only input the app
+// still honours is ESC to quit.
 // ---------------------------------------------------------------------------
 static bool gFlyover = true;
 static bool gFlyoverUserSet = false;
@@ -975,6 +973,14 @@ void renderScene() {
   // same performance counter the fps accounting uses gives scene-relative
   // time.
   if (gShotPath != nullptr && sceneSeconds >= (double)gShotTime) {
+    // The offscreen capture FBO is only allocated on the borderless-fullscreen
+    // path. --screenshot forces windowed mode, where the back buffer is
+    // directly readable, so fall back to the live window size here instead of
+    // reading (and writing) a 0x0 rect.
+    if (gScreenshotFbo == 0 && gScreenshotWidth == 0) {
+      gScreenshotWidth = gWinW;
+      gScreenshotHeight = gWinH;
+    }
     // Render a clean, readable framebuffer snapshot. If a screenshot FBO was
     // allocated (automatic for --screenshot even in fullscreen), blit the
     // current swapchain into it first so glReadPixels always reads a normal
@@ -1277,16 +1283,12 @@ void renderScene() {
   }
 }
 
-// Processes keyboard input.
+// Processes keyboard input. ESC is the only control the app keeps: the
+// flyover camera is automatic from launch and no key or mouse can steer it.
 void processKeys(SDL_Event &event) {
   if (event.key.keysym.sym == SDLK_ESCAPE) {
     SDL_Quit();
     exit(0);
-  }
-  // BUILD-P11: F toggles the flyover back on after the mouse has taken over
-  if (event.key.keysym.sym == SDLK_f) {
-    gFlyover = !gFlyover;
-    printf("Flyover camera: %s\n", gFlyover ? "on" : "off");
   }
 }
 
@@ -1304,46 +1306,6 @@ int printGLError(const char *file, int line) {
     glErr = glGetError();
   }
   return retCode;
-}
-
-void handleMouseEvent(SDL_Event &event) {
-  is_updated = true;
-
-  if (event.type == SDL_MOUSEBUTTONDOWN) {
-    if (event.button.button == SDL_BUTTON_LEFT) {
-      x_old = event.button.x;
-      y_old = event.button.y;
-      is_holding_mouse = true;
-    }
-  } else if (event.type == SDL_MOUSEBUTTONUP) {
-    if (event.button.button == SDL_BUTTON_LEFT) {
-      is_holding_mouse = false;
-    }
-  } else if (event.type == SDL_MOUSEWHEEL) {
-    // multiplicative dolly zoom, clamped so we never clip into the scene
-    cam_dist *= (event.wheel.y > 0) ? 0.90f : 1.10f;
-    if (cam_dist < cam_min_dist)
-      cam_dist = cam_min_dist;
-    if (cam_dist > cam_max_dist)
-      cam_dist = cam_max_dist;
-  }
-}
-
-void handleMouseMotion(SDL_Event &event) {
-  if (is_holding_mouse) {
-    is_updated = true;
-
-    // drag orbits the camera around the scene
-    cam_azimuth += (event.motion.x - x_old) * 0.35f;
-    cam_elevation += (event.motion.y - y_old) * 0.35f;
-    x_old = event.motion.x;
-    y_old = event.motion.y;
-
-    if (cam_elevation > 85.0f)
-      cam_elevation = 85.0f;
-    else if (cam_elevation < -3.0f)
-      cam_elevation = -3.0f;
-  }
 }
 
 void changeSize(int w, int h) {
@@ -1665,21 +1627,6 @@ int main(int argc, char **argv) {
         quit = true;
       } else if (event.type == SDL_KEYDOWN) {
         processKeys(event);
-      } else if (event.type == SDL_MOUSEBUTTONDOWN ||
-                 event.type == SDL_MOUSEBUTTONUP ||
-                 event.type == SDL_MOUSEWHEEL) {
-        handleMouseEvent(event);
-        // BUILD-P22: a scripted headless capture has no user to hand the
-        // camera back to, and SDL delivers a MOTION event on its own when a
-        // window maps and takes focus -- so this cancelled the flyover before
-        // frame 1 and every --screenshot run captured the same static orbit.
-        // That is why docs/screenshots/uzi_flyover.gif shipped with one frame
-        // against the README's "ten frames across the run": the flyover was
-        // already off by the time the first shot was taken.
-        if (gShotPath == nullptr) gFlyover = false;
-      } else if (event.type == SDL_MOUSEMOTION) {
-        handleMouseMotion(event);
-        if (gShotPath == nullptr) gFlyover = false;
       } else if (event.type == SDL_WINDOWEVENT) {
         if (event.window.event == SDL_WINDOWEVENT_RESIZED) {
           gWinW = event.window.data1;

@@ -21,8 +21,8 @@
 //   * Default resolution 1366x768 like the original ElectroBench, 45 s run
 //     and a final score printed to the console.
 //
-// Controls: long-click + move to orbit the camera, mouse wheel to zoom,
-// F to toggle the fly-through camera path, ESC to quit.
+// Controls: ESC to quit. The fly-through camera path is automatic from
+// launch and no key or mouse can steer it.
 //
 // Debug flags:
 //   --screenshot FILE   capture the framebuffer to FILE (PPM) at the times in
@@ -472,8 +472,6 @@ static Vec3 gCamPos = {0.0f, 7.0f, 0.0f};
 static float gCamYaw = 0.0f, gCamPitch = -0.05f;
 static bool gAutoCam = true;
 
-static bool gIsHoldingMouse = false;
-static int gXOld = 0, gYOld = 0;
 static int gCurrentScroll = 10;
 
 static double gStartTime = 0.0;
@@ -991,43 +989,10 @@ static void RenderScene() {
 }
 
 // ------------------------------------------------------------------ input
+// ESC is the only control the scene keeps: the camera is fully automatic.
 static void ProcessKeys(const SDL_Event &event) {
   if (event.key.keysym.sym == SDLK_ESCAPE) {
     gQuit = true;
-  } else if (event.key.keysym.sym == SDLK_f) {
-    gAutoCam = !gAutoCam;
-  } else if (event.key.keysym.sym == SDLK_LEFT) {
-    gCamYaw -= 0.05f;
-  } else if (event.key.keysym.sym == SDLK_RIGHT) {
-    gCamYaw += 0.05f;
-  } else if (event.key.keysym.sym == SDLK_UP) {
-    gCamPitch = std::fmin(gCamPitch + 0.03f, 0.35f);
-  } else if (event.key.keysym.sym == SDLK_DOWN) {
-    gCamPitch = std::fmax(gCamPitch - 0.03f, -0.35f);
-  }
-}
-
-static void HandleMouseEvent(const SDL_Event &event) {
-  if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT) {
-    gXOld = event.button.x;
-    gYOld = event.button.y;
-    gIsHoldingMouse = true;
-    gAutoCam = false; // grabbing the camera takes control, like the original
-  } else if (event.type == SDL_MOUSEBUTTONUP && event.button.button == SDL_BUTTON_LEFT) {
-    gIsHoldingMouse = false;
-  } else if (event.type == SDL_MOUSEWHEEL) {
-    if (event.wheel.y > 0) gCurrentScroll++;
-    else if (event.wheel.y < 0) gCurrentScroll--;
-    if (gCurrentScroll < 1) gCurrentScroll = 1;
-  }
-}
-
-static void HandleMouseMotion(const SDL_Event &event) {
-  if (gIsHoldingMouse) {
-    gCamYaw -= (event.motion.x - gXOld) * 0.005f;
-    gXOld = event.motion.x;
-    gCamPitch = std::fmin(std::fmax(gCamPitch + (event.motion.y - gYOld) * 0.004f, -0.45f), 0.35f);
-    gYOld = event.motion.y;
   }
 }
 
@@ -1200,11 +1165,6 @@ int RunOceanScene(bool *gaveUpOut) {
         gQuit = true;
       } else if (event.type == SDL_KEYDOWN) {
         ProcessKeys(event);
-      } else if (event.type == SDL_MOUSEBUTTONDOWN || event.type == SDL_MOUSEBUTTONUP ||
-                 event.type == SDL_MOUSEWHEEL) {
-        HandleMouseEvent(event);
-      } else if (event.type == SDL_MOUSEMOTION) {
-        HandleMouseMotion(event);
       } else if (event.type == SDL_WINDOWEVENT) {
         if (event.window.event == SDL_WINDOWEVENT_RESIZED) {
           ChangeSize(event.window.data1, event.window.data2);

@@ -22,11 +22,10 @@
 //     catenary wire per bay (real sag: y = midpoint + cosh falloff) built as
 //     swept tubes. One wrap-lighting shader for everything, with aerial
 //     perspective sinking the far poles into the haze.
-//   * The camera dollies along the line under the wires (auto mode), or
-//     orbits with the usual mouse/keys.
+//   * The camera dollies along the line under the wires, automatically from
+//     launch; nothing in the app can steer it.
 //
-// Controls: drag orbits the camera, wheel zooms, F toggles the auto camera,
-// ESC quits. R has no meaning here (nothing falls).
+// Controls: ESC quits.
 //
 // Headless flags shared with the other scenes: --screenshot, --shot-times,
 // --width; scene-specific: --pole-only (run just this scene).
@@ -280,8 +279,6 @@ static int gWindowWidthOverride = 0;
 static bool gAutoCam = true;
 static Vec3 gCamPos{0.0f, 2.0f, 4.0f};
 static float gCamYaw = 0.0f, gCamPitch = -0.06f, gCamDist = 7.0f;
-static float gXOld = 0.0f, gYOld = 0.0f;
-static bool gIsHoldingMouse = false;
 
 static void UpdateAutoCamera(float t) {
   // Dolly along the line: the camera walks the gravel path beside the poles,
@@ -2281,43 +2278,10 @@ static void RenderScene() {
 }
 
 // ------------------------------------------------------------------- input
+// ESC is the only control the scene keeps: the dolly camera is fully automatic.
 static void ProcessKeys(const SDL_Event &event) {
   if (event.key.keysym.sym == SDLK_ESCAPE) {
     gQuit = true;
-  } else if (event.key.keysym.sym == SDLK_f) {
-    gAutoCam = !gAutoCam;
-  } else if (event.key.keysym.sym == SDLK_LEFT) {
-    gCamYaw -= 0.05f;
-  } else if (event.key.keysym.sym == SDLK_RIGHT) {
-    gCamYaw += 0.05f;
-  } else if (event.key.keysym.sym == SDLK_UP) {
-    gCamPitch = std::fmin(gCamPitch + 0.03f, -0.02f);
-  } else if (event.key.keysym.sym == SDLK_DOWN) {
-    gCamPitch = std::fmax(gCamPitch - 0.03f, -1.2f);
-  }
-}
-
-static void HandleMouseEvent(const SDL_Event &event) {
-  if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT) {
-    gXOld = event.button.x;
-    gYOld = event.button.y;
-    gIsHoldingMouse = true;
-    gAutoCam = false;
-  } else if (event.type == SDL_MOUSEBUTTONUP && event.button.button == SDL_BUTTON_LEFT) {
-    gIsHoldingMouse = false;
-  } else if (event.type == SDL_MOUSEWHEEL) {
-    gCamDist *= (event.wheel.y > 0) ? 0.90f : 1.10f;
-    if (gCamDist < 2.0f) gCamDist = 2.0f;
-    if (gCamDist > 60.0f) gCamDist = 60.0f;
-  }
-}
-
-static void HandleMouseMotion(const SDL_Event &event) {
-  if (gIsHoldingMouse) {
-    gCamYaw -= (event.motion.x - gXOld) * 0.005f;
-    gXOld = event.motion.x;
-    gCamPitch = std::fmin(std::fmax(gCamPitch + (event.motion.y - gYOld) * 0.004f, -1.2f), -0.02f);
-    gYOld = event.motion.y;
   }
 }
 
@@ -2523,11 +2487,6 @@ int RunPoleScene(bool *gaveUpOut) {
         gQuit = true;
       } else if (event.type == SDL_KEYDOWN) {
         ProcessKeys(event);
-      } else if (event.type == SDL_MOUSEBUTTONDOWN || event.type == SDL_MOUSEBUTTONUP ||
-                 event.type == SDL_MOUSEWHEEL) {
-        HandleMouseEvent(event);
-      } else if (event.type == SDL_MOUSEMOTION) {
-        HandleMouseMotion(event);
       } else if (event.type == SDL_WINDOWEVENT) {
         if (event.window.event == SDL_WINDOWEVENT_RESIZED) {
           ChangeSize(event.window.data1, event.window.data2);

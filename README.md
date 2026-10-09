@@ -36,7 +36,7 @@ Close-up — mags resting on the ground, shadows clearly visible under each gun:
 
 ![Close-up: UZIs with mags on the ground and per-gun shadows](docs/screenshots/uzi_close.png)
 
-**The flyover** — the opening camera move, ten frames across the run: a high approach that reveals the whole 110-gun array, a low runway pass down its length, then a pull back to the orbit. <kbd>F</kbd> toggles it live, and any mouse input hands the camera back:
+**The flyover** — the opening camera move, ten frames across the run: a high approach that reveals the whole 110-gun array, a low runway pass down its length, then a pull back to the orbit. It plays automatically from launch and nothing in the app can interrupt it:
 
 ![ElectroBench flyover camera: high reveal, low runway pass and pull back over the 110-gun array](docs/screenshots/uzi_flyover.gif)
 
@@ -95,8 +95,8 @@ Renders **110 UZIs** (10×11 grid) on a shadow-mapped concrete floor through the
 pipeline, exactly like a 2001-era title: per-gun compact shadows anchored at each contact point,
 a warm directional sun, and a real-time **FPS + score HUD** drawn in a 5×7 bitmap font.
 
-Controls : long-click + move orbits the camera, mouse wheel zooms (smooth, clamped so you never clip
-into the scene), `ESC` quits. The FPS counter is a true frame-count average (SDL performance counter,
+Controls : the camera is a scripted flyover, automatic from launch; `ESC` quits. The FPS counter is a
+true frame-count average (SDL performance counter,
 every frame accounted) — the on-screen value is a smoothed window, the final score uses **all** frames
 of the run.
 
@@ -142,7 +142,7 @@ make
 ./build/ElectroBench.exe --scene-only      # Windows (MSYS2)
 ```
 
-Controls : `F` toggles the automatic fly-over camera, long-click + move orbits the camera, mouse wheel zooms, arrow keys look around, `ESC` quits.
+Controls : the fly-over camera is automatic from launch; `ESC` quits.
 
 # Scene 3
 
@@ -192,8 +192,8 @@ make
 ./build/ElectroBench.exe --pool-only      # Windows (MSYS2)
 ```
 
-Controls : `F` toggles the automatic camera, long-click + move orbits, mouse wheel zooms, `R` re-drops
-the whole fleet, `ESC` quits.
+Controls : the fly-over camera is automatic from launch; `ESC` quits. The fleet's fall / return /
+resplash loop re-drops itself on its own, no key needed.
 
 # Scene 4:
 
@@ -253,8 +253,7 @@ make
 ./build/ElectroBench.exe --pole-only      # Windows (MSYS2)
 ```
 
-Controls : `F` toggles the automatic dolly camera, long-click + move orbits, mouse wheel zooms,
-`ESC` quits.
+Controls : the dolly camera is automatic from launch; `ESC` quits.
 
 
 - `--screenshot FILE --shot-time S` writes a frame straight out of the
