@@ -139,7 +139,7 @@ utility corridor: warm gravel under an amber dusk, two lines of steel poles marc
 horizon, and a wall of wires over your head.
 
 What it renders :
-- **Concrete utility poles**  AAARGHHHHH this is way too much explaining for your tiny brains ANYWAY-
+- **Concrete utility poles-**  AAARGHHHHH this is way too much explaining for your tiny brains ANYWAY-
 
 Run the power-lines scene on its own with :
 
