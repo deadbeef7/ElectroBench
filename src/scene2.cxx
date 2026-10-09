@@ -1,5 +1,5 @@
 // ElectroBench — the ocean scene of the single ElectroBench binary: a
-// recreation of the 3DMark2001 SE "Nature" pixel shader 1.4 workload
+// recreation of the 3DMark2001 SE pixel shader 1.4 workload
 // (sea + sky + clouds + reflections) on OpenGL 3.3 core.
 //
 // This translation unit is NOT a program of its own. It exports
@@ -7,27 +7,6 @@
 // only ElectroBench executable (the same in-process SDL session; no second
 // binary, no child process).
 //
-// What is rendered, in the spirit of the 2001 original:
-//   * Procedural sky dome with drifting 3D cumulus lobes, analytic boundary
-//     erosion, and multi-scatter sunset lighting, captured once per frame into
-//     a cubemap (the PS1.4-era trick to get dynamic reflections without true
-//     reflectors).
-//   * A large ocean grid displaced by a 6-octave wave function in the vertex
-//     shader (PS1.4 had no vertex textures; this is the GPU-age upgrade).
-//   * The water fragment shader mirrors the phases of an asm ps_1_4 shader:
-//       phase 1 (addressing)      : two scrolled ripple-gradient lookups
-//       phase 2 (dependent read)  : perturbed ray -> environment cubemap
-//       phase 3 (address + blend) : sun glitter, fresnel blend, haze
-//   * Default resolution 1366x768 like the original ElectroBench, 45 s run
-//     and a final score printed to the console.
-//
-// Controls: ESC to quit. The fly-through camera path is automatic from
-// launch and no key or mouse can steer it.
-//
-// Debug flags:
-//   --screenshot FILE   capture the framebuffer to FILE (PPM) at the times in
-//                       --shot-times (default "4,20") and exit; used by the
-//                       headless visual test (llvmpipe has no real GPU sync).
 
 #include <array>
 #include <cmath>
@@ -45,13 +24,11 @@
 
 #include "../lib/asset_path.hxx"
 
-// BUILD-P20: 720p fullscreen is the default presentation; main.cxx clears
-// this for headless capture so the screenshot framebuffer stays pinned.
 extern bool gWindowedMode;
 #include "font_atlas.hxx" // shared HUD font data and atlas layout
 
-// ------------------------------------------------------------------ constants
-#define NAME "ElectroBench - Scene 2 (Dusk Ocean)"
+
+#define NAME "ElectroBench - Scene 2"
 #define WIDTH 1366
 #define HEIGHT 768
 #define BENCH_MILLISECONDS 45000 // 45 s like the original ElectroBench
@@ -64,30 +41,17 @@ static const int kEnvMapSize = 768;      // cubemap face resolution — higher f
 static const int kNoiseSize = 256;       // fBm noise texture size
 static const int kRippleSize = 256;      // ripple gradient texture size
 #define MAX_CLOUDS 9                     // must match sky_frag.glsl and sea_frag.glsl
-// Seven varied cumulus banks surround the orbit while leaving a clear solar
-// corridor. Larger stretched masses establish depth; smaller towers keep the
-// sun-facing composition from becoming a ceiling of featureless puffs.
-// Clouds 7-8 are two THIN high wisps parked above the sun (elevation 0.42+
-// vs the sun's 0.29): small radius + heavy stretch reads as cirrus streaks
-// riding over the dusk glow without ever blocking the sun disc.
+
 static const float kCloudAzim[MAX_CLOUDS] = {0.18f, 0.88f, 1.75f, 2.65f, 3.75f, 4.65f, 5.75f, 0.30f, 0.80f};
 static const float kCloudElev[MAX_CLOUDS] = {0.190f, 0.300f, 0.250f, 0.380f, 0.220f, 0.330f, 0.160f, 0.420f, 0.465f};
 static const float kCloudRad[MAX_CLOUDS]  = {0.048f, 0.037f, 0.030f, 0.043f, 0.027f, 0.036f, 0.050f, 0.026f, 0.030f};
 static const float kCloudStretch[MAX_CLOUDS] = {3.3f, 2.4f, 2.1f, 2.8f, 2.2f, 2.3f, 3.6f, 4.6f, 4.2f};
 static const int kFoamSize = 256;        // foam texture size
 
-// Slow wind drift: cloud azimuths crawl a little every second so the banks
-// slide across the sky. Both the sky pass and the sea's cloud shadows upload
-// the same drifted array, so shadows always sit exactly under their clouds.
-// Signs chosen so no bank drifts into the sun's azimuth (~0.54 rad): the
-// glitter path and sun disc must survive the whole run. The two wisps above
-// the sun drift AWAY from it (0.30 -> 0.20, 0.80 -> 0.87 over the run).
+
 static const float kCloudDrift[MAX_CLOUDS] = {-0.0025f, 0.0032f, -0.0018f, 0.0022f, -0.0027f, 0.0015f, 0.0020f, -0.0015f, 0.0012f};
 static float gCloudAzimDrift[MAX_CLOUDS];
-// Cloud-local aging phase for the lobe-morph noise: derived from the DRIFTED
-// azimuth (x9 keeps the old absolute-time rate at t=0) so the shape noise
-// advects WITH each bank. The old uTime-driven morph counter-scrolled against
-// the drifting clouds and made lobes pop/jitter — the "glitched" look.
+
 static float gCloudPhase[MAX_CLOUDS];
 static void UpdateCloudAzim(float t) {
   for (int i = 0; i < MAX_CLOUDS; i++) {
@@ -231,8 +195,6 @@ static Program LinkProgram(const char *vsPath, const char *fsPath) {
   return p;
 }
 
-// ------------------------------------------------------------- procedural tex
-// Value-noise helpers used to generate all the textures on the CPU at startup.
 static float xf_mod(float x, float m);
 static float yf_mod(float y, float m);
 
@@ -357,10 +319,6 @@ static GLuint CreateFoamTexture() {
   return tex;
 }
 
-// The font data, atlas packing, and half-texel UV calculation live in
-// font_atlas.hxx so the OG fixed-function renderer and this GL 3.3 shader
-// renderer consume the exact same 8x8 atlas.
-
 // ------------------------------------------------------------ geometry + glbin
 struct Mesh {
   GLuint vao = 0;
@@ -419,10 +377,6 @@ static void BuildDomeMesh() {
   std::vector<float> verts;
   std::vector<unsigned int> idx;
   for (int r = 0; r <= rings; r++) {
-    // TRUE full sphere: dir.y = cos(phi) sweeps +1 -> -1. The old mesh used
-    // sin(phi) over 0..pi, which is only the upper hemisphere — the dome
-    // stopped dead at the horizon line and the background showed through as
-    // a thin gap band between the sky and the sea's far edge.
     float phi = (float)r / rings * 3.14159265f;
     float cy = std::cos(phi);   // +1 (top) -> -1 (bottom)
     float cr = std::sin(phi);   // horizontal radius, 0 -> 1 -> 0
@@ -465,8 +419,7 @@ static Program gSeaProg, gSkyProg, gHudProg;
 static GLuint gRippleTex = 0, gNoiseTex = 0, gFoamTex = 0, gFontTex = 0;
 static GLuint gEnvCube = 0, gEnvFbo = 0, gEnvDepth = 0;
 
-static Vec3 gSunDir = {0.824f, 0.287f, 0.489f}; // sun well above the horizon (3DMark Nature framing):
-                                                // warm setting sun ~17 deg up, compact glitter path
+static Vec3 gSunDir = {0.824f, 0.287f, 0.489f};
 
 static Vec3 gCamPos = {0.0f, 7.0f, 0.0f};
 static float gCamYaw = 0.0f, gCamPitch = -0.05f;
@@ -475,33 +428,17 @@ static bool gAutoCam = true;
 static int gCurrentScroll = 10;
 
 static double gStartTime = 0.0;
-// BUILD-P23: the SCENE clock, in seconds since the scene started. The camera
-// has always used (now - gStartTime), but the sea and sky shaders were handed
-// raw NowSeconds() — the performance counter since boot. So water and clouds
-// animated against wall-clock while the camera animated against scene time,
-// and two identical runs at the same --shot-time produced DIFFERENT frames
-// (0.63 max per-pixel difference in the sky). Scenes 1, 3 and 4 were already
-// scene-relative; this puts scene 2 in step.
 static double gSceneTime = 0.0;
 
-// Results screen: when the run ends the scene is cleared and the final score
-// is drawn on the window for a few seconds (ESC skips the wait).
+
 static bool gResultsShown = false;
 static double gResultsElapsed = 0.0, gResultsFps = 0.0, gResultsScore = 0.0;
 static double gResultsShownAt = 0.0;
-// The combined per-scene + average screen is shown right after this one, so
-// keep the single-scene display short.
+
 static const double kResultsScreenSeconds = 4.0;
-// Label shown on this scene's results screen (distinguishes it from the OG's).
 static const char *gSceneName = "Scene 2";
-// Final score of this scene, read by main.cxx for the combined per-scene +
-// average results screen.
 double gFusedTideScore = 0.0;
-// When the results screen is done, hand control back to main.cxx instead of
-// exiting the process (the OG scene then shows the combined screen).
 static bool gFusedDone = false;
-// --scene-only: this scene runs on its own (no OG scene first), so its own
-// results screen is the last thing the user sees and it exits the process.
 static bool gStandaloneScene = false;
 static int gFrame = 0, gFps = 0, gFrameAccum = 0;
 static double gFpsTimer = 0.0;
@@ -509,7 +446,6 @@ static double gSmoothFps = 0.0;
 
 static bool gQuit = false;
 
-// Headless visual-test state (see the debug flags in the header comment).
 static const char *gScreenshotPath = nullptr; // current capture target
 static std::vector<float> gShotTimes;         // seconds at which to capture
 static size_t gNextShot = 0;
@@ -520,15 +456,9 @@ static bool gDumpEnvDone = false;
 static GLuint gHudVao = 0, gHudVbo = 0;
 static int gHudQuadCount = 0;
 
-// ------------------------------------------------------------- camera path
-// A gentle banking fly-over: forward glide plus a slow orbit, like the
-// Nature camera drifting over the ocean. The view faces the sun azimuth with
-// a slow sway so the dusk reference framing — sun disc above the horizon with
-// its glitter path running toward the camera — dominates the benchmark,
-// occasionally drifting away for variety.
 static void UpdateAutoCamera(float t) {
-  float a = t * 0.16f;                                   // orbit: 1.6x faster (user-requested speedup)
-  float radius = 42.0f + std::sin(t * 0.042f) * 10.0f;   // breathe in/out at 2x
+  float a = t * 0.16f;                                  
+  float radius = 42.0f + std::sin(t * 0.042f) * 10.0f;   
 
   Vec3 eye;
   eye.x = std::cos(a) * radius;
@@ -586,23 +516,16 @@ static void CreateEnvResources() {
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
-// --------------------------------------------------------------- env cubemap
-// Shared sky-dome uniforms so the cubemap capture and the on-screen dome draw
-// the exact same sky (same palette, same clouds, same time).
+
 static void BindSkyUniforms(const Mat4 &vp) {
   glUseProgram(gSkyProg.handle);
   glUniformMatrix4fv(gSkyProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
   glUniform3f(gSkyProg.loc("uSunDir"), gSunDir.x, gSunDir.y, gSunDir.z);
   glUniform1f(gSkyProg.loc("uTime"), (float)gSceneTime);
-  // Dusk palette (HDR, linear): deep blue-black zenith shading into a warm
-  // horizon band around the setting sun (3DMark Nature look).
   glUniform3f(gSkyProg.loc("uZenithColor"), 0.012f, 0.016f, 0.048f);  // deep blue-black overhead
   glUniform3f(gSkyProg.loc("uMidColor"), 0.028f, 0.022f, 0.048f);     // dark slate-mauve mid sky
   glUniform3f(gSkyProg.loc("uHorizonColor"), 0.115f, 0.055f, 0.062f); // warm maroon horizon band
   glUniform3f(gSkyProg.loc("uSunColor"), 1.55f, 0.72f, 0.30f);        // deeper orange sun
-
-  // Re-upload the small cloud layout every draw. The 36 floats are negligible,
-  // so the env cubemap can carry the same nine banks the on-screen dome renders.
   glUniform1i(gSkyProg.loc("uCloudCount"), MAX_CLOUDS);
   glUniform1fv(gSkyProg.loc("uCloudAzim"), MAX_CLOUDS, gCloudAzimDrift);
   glUniform1fv(gSkyProg.loc("uCloudPhase"), MAX_CLOUDS, gCloudPhase);
@@ -629,26 +552,16 @@ static void DrawSkyToEnvMap(const Mat4 &proj) {
   for (int i = 0; i < 6; i++) {
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, faces[i], gEnvCube, 0);
     Mat4Identity(view);
-    // camera at the dome centre (origin), looking along each face
     Mat4LookAt(view, {0, 0, 0}, fwd[i], up[i]);
     Mat4 vp;
     Mat4Multiply(vp, proj, view);
     BindSkyUniforms(vp);
-    // BUILD-P5 SPECK FIX: bake only the 7 base cloud banks into the env
-    // cubemap. The two cirrus wisps (added post-v0.3, parked above the sun)
-    // bake HDR-hot silver linings that the sea then mirrors as isolated
-    // bright dots down the glitter column — v0.3 never had them in its
-    // reflections. The LIVE sky keeps the wisps; the reflections match v0.3.
     glUniform1i(gSkyProg.loc("uCloudCount"), 9);
-    // env capture: dome centred at the origin, small radius, HDR output
     glUniform3f(gSkyProg.loc("uCenter"), 0.0f, 0.0f, 0.0f);
     glUniform1f(gSkyProg.loc("uRadius"), 10.0f);
     glUniform1f(gSkyProg.loc("uTonemap"), 0.0f);
     glDrawElements(GL_TRIANGLES, gDomeMesh.indexCount, GL_UNSIGNED_INT, nullptr);
   }
-  // mip chain for the cube: LINEAR_MIPMAP_LINEAR on an unmipped texture is
-  // incomplete (black) on strict drivers, and mips also smooth the magnified
-  // sky when the sea reflects it
   glBindTexture(GL_TEXTURE_CUBE_MAP, gEnvCube);
   glGenerateMipmap(GL_TEXTURE_CUBE_MAP);
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -698,13 +611,9 @@ static void BuildFontAtlas() {
 }
 
 static void RenderText(float x, float y, const char *text, float scale = 2.0f) {
-  // Append one quad per glyph to a streaming buffer (position xy + uv).
-  // Glyph quads are CCW in pixel space; the HUD vertex shader maps that to CW
-  // in clip space (y-down pixel -> y-up NDC), so face culling must be off
-  // while drawing text or every glyph is discarded.
   static std::vector<float> buf;
   buf.clear();
-  float pen = x; // atlas cells scaled up (default 2 -> 16px on screen)
+  float pen = x;
   for (const char *p = text; *p; ++p) {
     unsigned char c = (unsigned char)*p;
     if (!FontAtlasHasGlyph(c)) {
@@ -716,7 +625,6 @@ static void RenderText(float x, float y, const char *text, float scale = 2.0f) {
     const float u0 = uv[0], v0 = uv[1], u1 = uv[2], v1 = uv[3];
     const float glyphSize = (float)kFontAtlasCell * scale;
     float x0 = pen, y0 = y, x1 = pen + glyphSize, y1 = y + glyphSize;
-    // two triangles, CCW in screen space (y down)
     auto push = [&](float px, float py, float u, float v) {
       buf.push_back(px); buf.push_back(py); buf.push_back(u); buf.push_back(v);
     };
@@ -736,7 +644,7 @@ static void RenderText(float x, float y, const char *text, float scale = 2.0f) {
   glEnable(GL_BLEND);
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
   glDisable(GL_DEPTH_TEST);
-  glDisable(GL_CULL_FACE); // glyph quads are CW in clip space
+  glDisable(GL_CULL_FACE);
   glBindVertexArray(gHudVao);
   glDrawArrays(GL_TRIANGLES, 0, gHudQuadCount);
   glBindVertexArray(0);
@@ -751,14 +659,14 @@ static void Setup() {
   BuildDomeMesh();
   BuildFontAtlas();
 
-  glGenVertexArrays(1, &gEmptyVao); // for the fullscreen triangle pass
+  glGenVertexArrays(1, &gEmptyVao)
   glGenVertexArrays(1, &gHudVao);
   glGenBuffers(1, &gHudVbo);
   glBindVertexArray(gHudVao);
   glBindBuffer(GL_ARRAY_BUFFER, gHudVbo);
-  glEnableVertexAttribArray(0); // pixel pos
+  glEnableVertexAttribArray(0);
   glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void *)0);
-  glEnableVertexAttribArray(1); // uv
+  glEnableVertexAttribArray(1);
   glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void *)(2 * sizeof(float)));
   glBindVertexArray(0);
 
@@ -803,9 +711,6 @@ static void DrawSea(const Mat4 &view, double timeSec, const Vec3 &eye) {
   glBindTexture(GL_TEXTURE_2D, gFoamTex);
   glUniform1i(gSeaProg.loc("uFoamTex"), 2);
 
-  // cloud layout, shared with the sky shader: the sea projects fragments to
-  // the sky along sun rays and evaluates the SAME analytic puffs, so the
-  // cloud shadows on the water land exactly under the clouds that cast them.
   glUniform1i(gSeaProg.loc("uCloudCount"), MAX_CLOUDS);
   glUniform1fv(gSeaProg.loc("uCloudAzim"), MAX_CLOUDS, gCloudAzimDrift);
   glUniform1fv(gSeaProg.loc("uCloudPhase"), MAX_CLOUDS, gCloudPhase);
@@ -817,23 +722,17 @@ static void DrawSea(const Mat4 &view, double timeSec, const Vec3 &eye) {
 }
 
 static void DrawSkyScreen(const Mat4 &view, const Vec3 &eye) {
-  // The visible sky is the procedural dome drawn DIRECTLY to the screen at
-  // full framebuffer resolution. (It used to be reconstructed from the env
-  // cubemap, which magnified each texel into the blocky squares the user saw
-  // on real hardware.) The cubemap is now only used for sea reflections and
-  // the sea haze target, where its low resolution is an advantage (blur).
   Mat4 vp;
   Mat4Multiply(vp, gProj, view);
 
   glDisable(GL_DEPTH_TEST);
-  glDepthMask(GL_FALSE); // sky is background; it must not occlude the sea
-  glDisable(GL_CULL_FACE); // camera is inside the dome sphere
+  glDepthMask(GL_FALSE);
+  glDisable(GL_CULL_FACE); 
   glBindVertexArray(gDomeMesh.vao);
   BindSkyUniforms(vp);
-  // dome centred at the eye, radius kept inside the far plane
   glUniform3f(gSkyProg.loc("uCenter"), eye.x, eye.y, eye.z);
   glUniform1f(gSkyProg.loc("uRadius"), 5000.0f);
-  glUniform1f(gSkyProg.loc("uTonemap"), 1.0f); // LDR out on screen
+  glUniform1f(gSkyProg.loc("uTonemap"), 1.0f); 
   glDrawElements(GL_TRIANGLES, gDomeMesh.indexCount, GL_UNSIGNED_INT, nullptr);
   glBindVertexArray(0);
   glEnable(GL_CULL_FACE);
@@ -842,14 +741,11 @@ static void DrawSkyScreen(const Mat4 &view, const Vec3 &eye) {
 }
 
 static void RenderHUD() {
-  // clean single readout: just the live FPS. The score belongs to the final
-  // results line, not on screen during the run.
   char line1[128];
   std::snprintf(line1, sizeof(line1), "FPS: %d", gFps);
   RenderText(16.0f, 16.0f, line1);
 }
 
-// Results screen: clear the window and show the final score big and centred.
 static void RenderResults() {
   glViewport(0, 0, gWindowWidth, gWindowHeight);
   glClearColor(0.012f, 0.012f, 0.022f, 1.0f);
@@ -868,7 +764,6 @@ static void RenderResults() {
   RenderText(cx - (float)std::strlen(hint) * 8.0f, cy + 64.0f, hint);
 }
 
-// Renders the scene and calculates FPS (same pattern as the original bench).
 static void WriteScreenshotPPM(const char *path);
 
 static void RenderScene() {
@@ -883,27 +778,17 @@ static void RenderScene() {
         SDL_Quit();
         std::exit(0);
       }
-      gFusedDone = true; // back to the OG's combined results screen
+      gFusedDone = true; 
     }
     return;
   }
 
-  float t = (float)(now - gStartTime); // camera time is benchmark-relative so --shot-times are deterministic
-  // BUILD-P28 (deterministic shot clock): --shot-time S fired on the first frame
-  // whose wall clock had CROSSED S. On llvmpipe a frame costs ~2 s of sim time,
-  // so "the first frame past 36 s" is any sim state in [36, 38+) chosen by load
-  // noise — two runs of IDENTICAL code landed 8.4% apart in edge density and
-  // made every A/B verdict this pipeline ever produced unfalsifiable (the P27
-  // control experiment). Fix: once a shot is armed and the sim clock has reached
-  // the FIRST pending target, clamp the sim clock to that exact target. Every
-  // frame from then on renders the identical scene state until the shot fires,
-  // so --shot-time T is now a pure function of T. No shot armed -> no clamp, and
-  // normal benchmarking is untouched.
+  float t = (float)(now - gStartTime); 
   if (!gShotTimes.empty() && gNextShot < gShotTimes.size() &&
       t >= gShotTimes[gNextShot]) {
     t = gShotTimes[gNextShot];
   }
-  gSceneTime = (double)t;                // BUILD-P23: shaders get the SAME clock as the camera
+  gSceneTime = (double)t;               
   UpdateCloudAzim(t);
 
   // ---- camera ----
@@ -922,10 +807,7 @@ static void RenderScene() {
   }
 
   float aspect = (float)gWindowWidth / (float)gWindowHeight;
-  Mat4Perspective(gProj, 45.0f, aspect, 0.5f, 6000.0f); // far plane past the 4096 m sea patch diagonal
-
-  // ---- pass 1: sky -> env cubemap (90 deg per face so every cube face is
-  // fully covered by the dome) ----
+  Mat4Perspective(gProj, 45.0f, aspect, 0.5f, 6000.0f); 
   Mat4 envProj;
   Mat4Perspective(envProj, 90.0f, 1.0f, 0.1f, 20.0f);
   DrawSkyToEnvMap(envProj);
@@ -940,11 +822,9 @@ static void RenderScene() {
   DrawSea(view, gSceneTime, eye);
   RenderHUD();
 
-    // Visual-test captures: read the framebuffer back before the swap so the
-    // pixels we analyse are exactly what this frame rendered.
     if (gScreenshotPath && gNextShot < gShotTimes.size() &&
         now - gStartTime >= (double)gShotTimes[gNextShot]) {
-      WriteScreenshotPPM(gScreenshotPath);   // %d targets advance per shot
+      WriteScreenshotPPM(gScreenshotPath);
       gNextShot++;
       if (gNextShot >= gShotTimes.size()) {
         SDL_Quit();
@@ -970,16 +850,12 @@ static void RenderScene() {
   }
   if ((now - gStartTime) * 1000.0 >= (double)BENCH_MILLISECONDS) {
     double elapsed = now - gStartTime;
-    // Score from ALL frames of the run (not the last smoothing window),
-    // matching the original bench: score = fps^2 * 2.
     double fps = (double)gFrame / elapsed;
     double score = fps * fps * 2.0;
     std::printf("Benchmark Results - Time : %.1fs, Average FPS : %.1f, Score : %.0f\n",
                 elapsed, fps, score);
     std::fflush(stdout);
-    gFusedTideScore = score; // for the combined results screen in main.cxx
-    // Hand over to the results screen: the scene is cleared and the score is
-    // drawn on the window for kResultsScreenSeconds (ESC exits immediately).
+    gFusedTideScore = score; 
     gResultsElapsed = elapsed;
     gResultsFps = fps;
     gResultsScore = score;
@@ -988,8 +864,6 @@ static void RenderScene() {
   }
 }
 
-// ------------------------------------------------------------------ input
-// ESC is the only control the scene keeps: the camera is fully automatic.
 static void ProcessKeys(const SDL_Event &event) {
   if (event.key.keysym.sym == SDLK_ESCAPE) {
     gQuit = true;
@@ -1019,9 +893,6 @@ static bool ParseShotTimes(const char *arg) {
   return !gShotTimes.empty();
 }
 
-// ------------------------------------------------ option plumbing for main()
-// There is one executable now, so main.cxx owns the command line and forwards
-// the ocean scene's own flags here. Returns EXIT_FAILURE on a bad option.
 int OceanSceneParseArgs(int argc, char **argv) {
   for (int i = 1; i < argc; i++) {
     if (!std::strcmp(argv[i], "--shot-times") && i + 1 < argc) {
@@ -1038,20 +909,12 @@ int OceanSceneParseArgs(int argc, char **argv) {
   return EXIT_SUCCESS;
 }
 
-// Shares main.cxx's --screenshot target with this scene.
 void OceanSceneSetScreenshot(const char *path) { gScreenshotPath = path; }
 
-// BUILD-P21: --shot-time S (singular) is the flag main.cxx documents for
-// "one frame at S seconds", but this scene only ever read --shot-times, so
-// passing the singular form set the path and left the list EMPTY: the scene
-// ignored the request, ran the full 45 s bench and exited having written
-// nothing, with no error anywhere. The singular form is now the one-element
-// list. An explicit --shot-times always wins.
 void OceanSceneSetShotTime(float t) {
   if (gShotTimes.empty()) gShotTimes.push_back(t);
 }
 
-// --scene-only: this scene runs (and ends) on its own.
 void OceanSceneSetStandalone(bool standalone) { gStandaloneScene = standalone; }
 
 static void WriteScreenshotPPM(const char *path) {
@@ -1065,17 +928,12 @@ static void WriteScreenshotPPM(const char *path) {
     return;
   }
   std::fprintf(f, "P6\n%d %d\n255\n", w, h);
-  for (int y = h - 1; y >= 0; y--) // GL rows are bottom-up; PPM is top-down
+  for (int y = h - 1; y >= 0; y--) 
     std::fwrite(&rgb[(size_t)y * w * 3], 1, (size_t)w * 3, f);
   std::fclose(f);
   std::printf("Screenshot written: %s\n", path);
   std::fflush(stdout);
 }
-
-// ------------------------------------------------------ scene entry point
-// Runs the ocean scene on the SDL session handed over by main.cxx (either
-// straight after the OG gun scene, or alone with --scene-only). Sets
-// *gaveUp = true when the GL 3.3 core context could not be created.
 int RunOceanScene(bool *gaveUpOut) {
   if (gaveUpOut) *gaveUpOut = false;
 
@@ -1092,7 +950,6 @@ int RunOceanScene(bool *gaveUpOut) {
 
   int winW = WIDTH, winH = HEIGHT;
   if (gWindowWidthOverride > 0) {
-    // Test mode: fixed-width window, height follows the 16:9 benchmark aspect.
     winW = gWindowWidthOverride;
     winH = (gWindowWidthOverride * HEIGHT + WIDTH / 2) / WIDTH;
   }
@@ -1100,15 +957,6 @@ int RunOceanScene(bool *gaveUpOut) {
   gWindow = SDL_CreateWindow(NAME, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, winW, winH,
                              SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE
                              | (gWindowedMode ? 0u : SDL_WINDOW_FULLSCREEN_DESKTOP));
-  // BUILD-P24: FULLSCREEN_DESKTOP, not FULLSCREEN. Exclusive fullscreen hands the
-  // display to the OpenGL driver and the window stops being an ordinary top-level
-  // window, so the desktop compositor has nothing to composite -- and Win+PrtScr
-  // captures the composited desktop, which came out black. Borderless
-  // fullscreen still fills the screen but stays a normal window, so the capture
-  // path works. It also sizes the window to the desktop rather than to the
-  // requested 1280x720, so the drawing size has to be read back: the HUD and
-  // the projection both use gWindowWidth/gWindowHeight, and left at 720p on a
-  // 1080p desktop the scene would be drawn into one corner.
   if (!gWindow) {
     std::fprintf(stderr, "Window could not be created! SDL_Error: %s\n", SDL_GetError());
     return EXIT_FAILURE;
@@ -1124,27 +972,23 @@ int RunOceanScene(bool *gaveUpOut) {
     }
   }
   if (gWindowWidthOverride > 0) {
-    gWindowWidth = winW;   // a headless WM may never send a RESIZED event
+    gWindowWidth = winW;  
     gWindowHeight = winH;
     glViewport(0, 0, winW, winH);
   }
   gContext = SDL_GL_CreateContext(gWindow);
   if (!gContext) {
-    // No GL 3.3 core context on this device: skip the scene, keep the OG result.
     std::printf("Dusk ocean scene: OpenGL 3.3 core context unavailable — skipping this scene\n");
     std::fflush(stdout);
     SDL_Quit();
     if (gaveUpOut) *gaveUpOut = true;
     return 1;
   }
-  // BUILD-P25: report the real presentation mode, so "the screenshot is black"
-  // can be told apart into a stale build vs a capture tool that cannot grab the
-  // compositor.
   std::printf("Display: %s %dx%d | capture with Win+PrtScr, or --screenshot FILE\n",
               gWindowedMode ? "windowed" : "borderless fullscreen",
               gWindowWidth, gWindowHeight);
   std::fflush(stdout);
-  SDL_GL_SetSwapInterval(0); // unclamped, like a benchmark should be
+  SDL_GL_SetSwapInterval(0);
 
   if (glewInit() != GLEW_OK) {
     std::fprintf(stderr, "glewInit failed\n");
@@ -1177,6 +1021,6 @@ int RunOceanScene(bool *gaveUpOut) {
   SDL_GL_DeleteContext(gContext);
   SDL_DestroyWindow(gWindow);
   SDL_Quit();
-  if (gQuit) return 2; // user quit during this scene: exit the whole bench
+  if (gQuit) return 2;
   return 0;
 }
