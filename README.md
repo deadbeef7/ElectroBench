@@ -27,27 +27,15 @@ OS : Any.
 
 # Screenshots
 
-The 110 UZIs lying on the shadow-mapped concrete floor — every gun casts its own compact shadow anchored at its contact point (warm sun from the upper left). The floor is power-trowelled concrete: burnish sweeps, exposed aggregate, saw-cut control joints, a real sun specular lobe and aerial perspective out to the horizon:
-
 ![Original GL 2.1 benchmark: 110 UZIs on a shadow-mapped concrete floor](docs/screenshots/uzi_wide.png)
-
-Close-up — mags resting on the ground, shadows clearly visible under each gun:
 
 ![Close-up: UZIs with mags on the ground and per-gun shadows](docs/screenshots/uzi_close.png)
 
-**The flyover** — the opening camera move, ten frames across the run: a high approach that reveals the whole 110-gun array, a low runway pass down its length, then a pull back to the orbit. It plays automatically from launch and nothing in the app can interrupt it:
-
 ![ElectroBench flyover camera: high reveal, low runway pass and pull back over the 110-gun array](docs/screenshots/uzi_flyover.gif)
-
-The dusk ocean scene — long cloud banks with sunward silver linings, two thin cirrus wisps riding high above the sun, a narrow orange glitter path down the middle of the sea, dark blue-purple water either side, raised swell banks:
 
 ![ElectroBench scene 2: the dusk ocean under volumetric clouds](docs/screenshots/ps14_dusk_t36.png)
 
-The pool room — an infinite white-and-red checkerboard sky mirrored on open water, lit by a visible luminous ceiling panel whose reflection lies stretched down the pool, with grouted tiles and projected caustics crawling over the room, and two waves of teapots raining down in scattered positions, splashing on impact, then parking right where they fell (no bobbing, no righting — they stay put):
-
 ![ElectroBench scene 3: the checkerboard pool room with the luminous ceiling panel mirrored on the water](docs/screenshots/pool_teapot.png)
-
-The power-line corridor — an orange dusk under a real atmosphere (Rayleigh sky, a tight limb-darkened sun disc sitting on the haze band, wind-blown cumulus with sunward silver linings). The camera aims at the **top** of the pole, because that is the subject: concrete shafts, three tiers of pin insulators, transformers and cut-outs, a **dense web of thin slack telecom cable** strung between the same two poles at a dozen heights, coils of spare cable hung off the brackets, and lattice transmission pylons standing behind the line. Below it, cast concrete kerbs and a damp road mirroring the sunset:
 
 ![ElectroBench scene 4: concrete and galvanised utility poles with a catenary cable web and open lattice transmission pylons against an orange dusk sky](docs/screenshots/lain_lines.png)
 
@@ -128,39 +116,10 @@ Controls : the fly-over camera is automatic from launch; `ESC` quits.
 pool-room illusion: an infinite checkerboard ceiling-sky mirrored perfectly on open water.
 
 What it renders :
-- A **checkerboard sky dome** of bold, equal red and white squares at a constant angular size (14°
-  tiles, analytically antialiased) with a soft directional wash toward a **hidden light source** —
-  there is no sun disc, no lamp model: the light is only ever visible through the shading it produces
-- **Open water** that reads as deep blue with a faint tile sheen (0.9 water / 0.1 sky), mirroring the
-  same angular tile grid the sky uses so the reflection lines up across the horizon, plus a red-absorbing blue body, distance haze, an energy-true GGX light glint, caustic volume shimmer, and foam trails that linger and fade behind each splash
-- **Two waves of teapots**:  18 in total. Wave one rains down over the first ten seconds; wave two opens
-  up on the pool's outer ring from ~11 s and the camera stays at water-plane
-  level while they fall: the drops come down INTO frame, it never chases or
-  rises after the fleet. Each pot has scattered positions, sizes and drop heights
-  on a staggered timeline, with real-ish physics: gravity and tumble in the air, a splash that
-  fully absorbs the plunge (quadratic cavity drag below the surface), then heavy underwater drag
-  as the pot settles a few centimetres and **parks at the fall point** no buoyancy, no bob, no
-  righting; it keeps the orientation it landed in and stays there, with a bright contact-foam
-  collar, a meniscus bump and a real anchored mirror reflection painted around its hull. Falling pots carry air drag, a
-  drift arc and a two-axis tumble, and the whole simulation runs on a fixed 1/120 s substep so
-  trajectories are frame-rate independent. `R` re-drops the whole fleet
-- **Splash FX**: a GPU-animated **Worthington crown**, a STEEP translucent POOL-WATER sheet
-  (the walls point almost straight up: the radius stays at the pot's footprint while the height
-  ramps to ~2 m, and the rim tapers inward) with a foam collar at the water line, that erupts
-  around the impact and tears into **crawling fingers** only in the last third of its life (the
-  sheet holds together while it climbs) — plus near-vertical ballistic **droplet streaks**
-  stretched along their velocity (wave-two impacts throw double ejecta with torn sheet
-  fragments), expanding **ripple rings** with residual foam-trail halos that disturb the
-  reflection, and a slender delayed central **Rayleigh jet** — its punch scaled by the impact —
-  that fires on the cavity's inertial collapse and falls back with its own ring — the crown's
-  light sweep follows the actual reflected-ray azimuth, the surface around a live crown shows its
-  bright churn, the collapsed cavity boils out micro-rings for a couple of seconds after each
-  splash, and fast landing droplets throw tiny secondary ejecta back up. Under each impact
-  point the entrained cavity breathes out a **subsurface bubble plume** — a few dozen
-  wobbling specks that rise from staggered depths at buoyancy speeds, thin out over a couple
-  of seconds and pop into micro-rings at the surface, each painted at its parallax-corrected
-  apparent position so the plume slides correctly with the low grazing camera. The pots wear an energy-corrected GGX ceramic glaze with animated underwater caustics, refraction-offset submerged shading, and a wet waterline. All CPU cost is a
-  handful of uniforms; the geometry animates in the vertex shader.
+- A **checkerboard sky dome**.
+- **Open water** with reflections and GGX.
+- **Two waves of teapots**: 18 in total
+- **Splash FX** (Worthington crown...)
 
 Run the pool scene on its own with :
 
