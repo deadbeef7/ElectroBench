@@ -1064,6 +1064,7 @@ static void AddTreeline() {
       float u3 = fk * 0.83f;  u3 -= std::floor(u3);
       Vec3 a = TelecomBracketTop(p, -0.66f + 1.32f * u0);
       Vec3 b = TelecomBracketTop(q, -0.66f + 1.32f * u1);
+      float r = 0.021f + 0.011f * u3;
       float sag = 0.18f + 0.62f * u2;
       AddWire(a, b, sag, r, 10, kCableOld, kMatCable);
     }
