@@ -12,3 +12,6 @@ build-*/
 *.ppm
 scratch_*.py
 __pycache__/
+
+# Audit/dev scripts (untracked per request)
+scripts/
