@@ -336,6 +336,25 @@ Scene selection flags: `--og-only` runs just the gun scene even on GL 3.3-capabl
 `--scene-only` runs just the ocean scene, `--pool-only` runs just the pool-room scene,
 `--pole-only` runs just the power-line scene.
 
+# PlayStation Vita port
+
+This branch also carries a port of **scene 2 and scene 4 only** to the PS Vita,
+built as a single installable `ElectroBench-vita.vpk` at the branch root:
+
+```sh
+sh vitaport/tools/build_deps.sh     # once: builds vitaGL + vitaShaRK into $VITASDK
+make vita                           # -> ./ElectroBench-vita.vpk
+```
+
+The scenes themselves are the desktop sources, compiled unchanged against the
+SDL2/GLEW stand-ins in `vitaport/include` and linked against vitaGL; only the
+shaders are rewritten (GLSL 1.00-style, generated + validated by
+`make -f vitaport/Makefile check`). It needs `libshacccg.suprx` on the console,
+like any vitaGL homebrew. Full details, controls, deliberate differences and the
+list of what has and has not been verified are in [`vitaport/README.md`](vitaport/README.md).
+
+The desktop build above is unaffected by any of this.
+
 # Windows (MSYS2)
 
 On Windows the easiest route is [MSYS2](https://www.msys2.org/), which provides gcc, cmake and prebuilt SDL2/GLEW/GLU packages. The single binary builds and runs unmodified.

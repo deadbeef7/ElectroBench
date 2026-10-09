@@ -37,6 +37,19 @@ inline bool assetFileExists(const std::string &p) {
 // instead of inferred from a frame that matches nothing.
 inline std::string resolveAssetPath(const char *path) {
   const std::string p(path);
+#ifdef ELECTROBENCH_VITA
+  // PS Vita port (vitaport/): assets are packed into the .vpk and read from the
+  // app0: mount, so there is no CWD-relative or exe-relative search to do --
+  // and no SDL_GetBasePath() to do it with either. The path is still existence
+  // checked so a missing shader reports the same way as on desktop.
+  const std::string fromApp = "app0:/" + p;
+  if (assetFileExists(fromApp)) {
+    if (assetTraceSelected()) std::printf("  asset %-34s -> %s\n", path, fromApp.c_str());
+    return fromApp;
+  }
+  if (assetTraceSelected()) std::printf("  asset %-34s -> NOT FOUND (%s)\n", path, fromApp.c_str());
+  return fromApp;
+#else
   if (assetFileExists(p)) {
     if (assetTraceSelected()) std::printf("  asset %-34s -> %s\n", path, p.c_str());
     return p;
@@ -59,6 +72,7 @@ inline std::string resolveAssetPath(const char *path) {
   }
   if (assetTraceSelected()) std::printf("  asset %-34s -> NOT FOUND\n", path);
   return p;
+#endif
 }
 
 // Byte size of an ALREADY-RESOLVED path, or -1. Takes the resolved path rather

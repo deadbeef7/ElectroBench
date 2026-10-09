@@ -207,6 +207,23 @@ run: $(BIN)
 # Info
 # ------------------------------------------------------------
 
+# ------------------------------------------------------------
+# PlayStation Vita port (scenes 2 and 4 only)
+#
+# Delegates to vitaport/Makefile, which cross-compiles for the Vita and packs
+# ./ElectroBench-vita.vpk. It is a different platform's artifact, not a second
+# desktop binary: the rules above still define exactly one of those.
+# See vitaport/README.md.
+# ------------------------------------------------------------
+
+.PHONY: vita
+vita:
+	$(MAKE) -f vitaport/Makefile
+
+# ------------------------------------------------------------
+# Info
+# ------------------------------------------------------------
+
 .PHONY: info
 info:
 	@echo "ElectroBench build configuration"
