@@ -2,8 +2,6 @@
 ElectroBench is a 45+60+45+45 second long four-scene benchmark specifically designed to run on old and modern PCs, don't critise it by it using OpenGL 2.1, and GLSL 1.2, Even office PCs have low scores at it.
 It uses OpenGL 2.1/3.3, and C++, and uses make for compilation. It is designed to be a replacement for glmark (even though it is great and I used it before).
 
-Every scene is meant to stand up as a screenshot, not just as a frame counter: scene 1 now has a real sky and a real concrete floor instead of a flat slab in a void, and it opens on a scripted flyover. Scene 1's camera flags are `--flyover` / `--no-flyover`, and <kbd>F</kbd> toggles it live (any mouse input hands control back to you).
-
 It ships **one** executable that contains **all four** scenes — no second binary, no child process:
 
 All four scenes present at **1280x720 fullscreen**. Pass `--windowed` to run in a window instead;
@@ -13,10 +11,19 @@ headless capture pipeline can still pin the framebuffer exactly.
 | Scene | Renderer | Contents |
 |---|---|---|
 | **Scene 1 — ElectroBench** (the OG) | OpenGL 2.1 / GLSL 1.2, fixed-function pipeline | **110 UZIs** on a power-trowelled concrete floor under a generated dusk sky, lit by a warm sun, opened by a three-act **flyover camera** (approach, runway pass down the array, pull back) |
-| **Scene 2 — Dusk ocean** | OpenGL 3.3 core, pixel-shader workloads | An ocean under volumetric clouds (3DMark2001 SE "Nature" recreation) |
-| **Scene 3 — Pool room** | OpenGL 3.3 core, analytic shaders | A white-and-red checkerboard-sky pool room lit by a visible luminous ceiling panel (with its own reflection lying down the water), grouted tiles, projected caustics and two waves of falling, splashing teapots (18 total) |
-| **Scene 4 — Power lines** | OpenGL 3.3 core, analytic shaders | A utility corridor at amber dusk under a **physically-based atmosphere** (Rayleigh + Mie, limb-darkened sun disc, wind-blown cumulus): weathered **concrete** pole shafts carrying the hardware the reference photograph shows — three tiers of pin insulators, transformer, cut-out fuses, step bolts, guy wires into buried anchors — wrapped in a **dense web of 16 thin slack telecom cables per bay** plus **hanging slack coils and service loops**, two lattice cell masts for scale, a **damp asphalt road with cast concrete kerbs that mirrors the sunset**, houses with lit windows. 4x MSAA |
+| **Scene 2** | OpenGL 3.3 core, pixel-shader workloads | An ocean under volumetric clouds (3DMark2001 SE "Nature" recreation) |
+| **Scene 3** | OpenGL 3.3 core, analytic shaders | A white-and-red checkerboard-sky pool room lit by a visible luminous ceiling panel (with its own reflection lying down the water), grouted tiles, projected caustics and two waves of falling, splashing teapots (18 total) |
+| **Scene 4** | OpenGL 3.3 core, analytic shaders | A utility corridor at amber dusk under a **physically-based atmosphere** (Rayleigh + Mie, limb-darkened sun disc, wind-blown cumulus): weathered **concrete** pole shafts carrying the hardware the reference photograph shows — three tiers of pin insulators, transformer, cut-out fuses, step bolts, guy wires into buried anchors — wrapped in a **dense web of 16 thin slack telecom cables per bay** plus **hanging slack coils and service loops**, two lattice cell masts for scale, a **damp asphalt road with cast concrete kerbs that mirrors the sunset**, houses with lit windows. 4x MSAA |
 
+# System requirements : 
+
+CPU : Any single core CPU @ 500 MHz or more.
+
+RAM : 128MB+
+
+GPU : Technically any GPU that has OpenGL 2.1 support or more, but GPUs that OpenGL 2.1-only will only run scene 1 and the HUD may or may not be available, but any OpenGL 3.3 GPU (2010 GPU onwards) will run it.
+
+OS : Any.
 
 
 # Screenshots
@@ -41,22 +48,18 @@ The pool room — an infinite white-and-red checkerboard sky mirrored on open wa
 
 ![ElectroBench scene 3: the checkerboard pool room with the luminous ceiling panel mirrored on the water](docs/screenshots/pool_teapot.png)
 
-**In motion** — the full 18-second run (both teapot waves), captured headless frame-by-frame (1 s between frames): each impact runs the real Worthington timeline — a smooth circular collar of water leaves the surface and rises over 90 ms, the cavity pinches off and the sheet tears into crawling fingers over the next 210 ms, and a graded corona of small power-law droplets (5-26 mm, released progressively from the lip down) throws up on ballistic arcs while ripple rings expand and the mirrored checkerboard shatters across the surface. Each pot's reflection is a flat 2D black ghost smear anchored at its waterline, wobbling and breaking apart with every ring — the way real reflections die on disturbed water:
-
-![Scene 3 in motion: teapot splash crowns, droplet streaks and ripple rings propagating across the checkerboard-mirrored water](docs/screenshots/pool_splash.gif)
-
 The power-line corridor — an orange dusk under a real atmosphere (Rayleigh sky, a tight limb-darkened sun disc sitting on the haze band, wind-blown cumulus with sunward silver linings). The camera aims at the **top** of the pole, because that is the subject: concrete shafts, three tiers of pin insulators, transformers and cut-outs, a **dense web of thin slack telecom cable** strung between the same two poles at a dozen heights, coils of spare cable hung off the brackets, and lattice transmission pylons standing behind the line. Below it, cast concrete kerbs and a damp road mirroring the sunset:
 
 ![ElectroBench scene 4: concrete and galvanised utility poles with a catenary cable web and open lattice transmission pylons against an orange dusk sky](docs/screenshots/lain_lines.png)
 
-**In motion** — the auto-dolly walking the corridor (four positions down the run): the cable web sweeping overhead pole after pole, slack coils swinging past, guy wires pulling into their anchor blocks, and the telecom bundles peeling off toward the eaves:
+**In motion - but very slow** — the auto-dolly walking the corridor (four positions down the run): the cable web sweeping overhead pole after pole, slack coils swinging past, guy wires pulling into their anchor blocks, and the telecom bundles peeling off toward the eaves:
 
 ![Scene 4 in motion: concrete poles, guy wires and catenary spans over the dolly camera](docs/screenshots/lain_lines.gif)
 
 # How to build ?
 
 Dependencies : `make`, `g++`, SDL2, GLEW, GLU (+ dev headers). On Debian/Ubuntu that is
-`libsdl2-dev libglew-dev libglu1-mesa-dev`; on Windows use MSYS2 (`pacman -S mingw-w64-x86_64-{gcc,SDL2,glew}`); on macOS `brew install sdl2 glew` (you may need `brew install make` for a GNU make).
+`libsdl2-dev libglew-dev libglu1-mesa-dev`; on Windows use MSYS2 (`pacman -S mingw-w64-x86_64-{gcc,SDL2,glew} make`); on macOS `brew install sdl2 glew` (you may need `brew install make` for a GNU make).
 
 ```sh
 make            # builds the single ElectroBench binary (all four scenes linked in)
@@ -97,7 +100,7 @@ into the scene), `ESC` quits. The FPS counter is a true frame-count average (SDL
 every frame accounted) — the on-screen value is a smoothed window, the final score uses **all** frames
 of the run.
 
-# Scene 2 — Dusk ocean
+# Scene 2
 
 **Scene 2** lives in the same ElectroBench binary and is written in **OpenGL 3.3 core**.
 It pushes a heavy, realistic ocean workload —
@@ -141,7 +144,7 @@ make
 
 Controls : `F` toggles the automatic fly-over camera, long-click + move orbits the camera, mouse wheel zooms, arrow keys look around, `ESC` quits.
 
-# Scene 3 — Pool room
+# Scene 3
 
 **Scene 3** lives in the same ElectroBench binary and is also **OpenGL 3.3 core**. It is the
 pool-room illusion: an infinite checkerboard ceiling-sky mirrored perfectly on open water.
@@ -152,19 +155,18 @@ What it renders :
   there is no sun disc, no lamp model: the light is only ever visible through the shading it produces
 - **Open water** that reads as deep blue with a faint tile sheen (0.9 water / 0.1 sky), mirroring the
   same angular tile grid the sky uses so the reflection lines up across the horizon, plus a red-absorbing blue body, distance haze, an energy-true GGX light glint, caustic volume shimmer, and foam trails that linger and fade behind each splash
-- **Two waves of teapots** — 18 in total (the real Utah teapot, `assets/teapot.obj`, one material,
-  placeholder texture you can swap). Wave one rains down over the first ten seconds; wave two opens
-  up on the pool's outer ring from ~11 s — and the camera stays at water-plane
+- **Two waves of teapots**:  18 in total. Wave one rains down over the first ten seconds; wave two opens
+  up on the pool's outer ring from ~11 s and the camera stays at water-plane
   level while they fall: the drops come down INTO frame, it never chases or
   rises after the fleet. Each pot has scattered positions, sizes and drop heights
   on a staggered timeline, with real-ish physics: gravity and tumble in the air, a splash that
   fully absorbs the plunge (quadratic cavity drag below the surface), then heavy underwater drag
-  as the pot settles a few centimetres and **parks at the fall point** — no buoyancy, no bob, no
+  as the pot settles a few centimetres and **parks at the fall point** no buoyancy, no bob, no
   righting; it keeps the orientation it landed in and stays there, with a bright contact-foam
   collar, a meniscus bump and a real anchored mirror reflection painted around its hull. Falling pots carry air drag, a
   drift arc and a two-axis tumble, and the whole simulation runs on a fixed 1/120 s substep so
   trajectories are frame-rate independent. `R` re-drops the whole fleet
-- **Splash FX**: a GPU-animated **Worthington crown** — a STEEP translucent POOL-WATER sheet
+- **Splash FX**: a GPU-animated **Worthington crown**, a STEEP translucent POOL-WATER sheet
   (the walls point almost straight up: the radius stays at the pot's footprint while the height
   ramps to ~2 m, and the rim tapers inward) with a foam collar at the water line, that erupts
   around the impact and tears into **crawling fingers** only in the last third of its life (the
@@ -180,7 +182,7 @@ What it renders :
   wobbling specks that rise from staggered depths at buoyancy speeds, thin out over a couple
   of seconds and pop into micro-rings at the surface, each painted at its parallax-corrected
   apparent position so the plume slides correctly with the low grazing camera. The pots wear an energy-corrected GGX ceramic glaze with animated underwater caustics, refraction-offset submerged shading, and a wet waterline. All CPU cost is a
-  handful of uniforms; the geometry animates in the vertex shader
+  handful of uniforms; the geometry animates in the vertex shader.
 
 Run the pool scene on its own with :
 
@@ -193,91 +195,7 @@ make
 Controls : `F` toggles the automatic camera, long-click + move orbits, mouse wheel zooms, `R` re-drops
 the whole fleet, `ESC` quits.
 
-**Taking a screenshot of the running bench on Windows.** The bench prints one
-line at startup saying what it is actually doing:
-
-```
-Display: borderless fullscreen 1920x1080 | capture with Win+PrtScr, or --screenshot FILE
-```
-
-If that says **windowed**, you are looking at a different build (or you passed
-`--windowed` / `--width`) — check that first, because it is the single most
-common reason a capture goes black. If it says **borderless fullscreen** and
-`Win`+`PrtScr` *still* gives you a black rectangle, it is Windows, not the
-bench, and there are two things left to try, in order:
-
-1. **Turn off fullscreen optimisations for the exe.** Settings → System →
-   Display → Graphics → `ElectroBench` (or *Browse* to the exe) → Options →
-   set **Fullscreen optimizations** to **Off**. Windows otherwise still hands a
-   "borderless" OpenGL app a private swap chain, and the screen-capture hotkey
-   captures a surface that has nothing composited into it.
-2. **Run it windowed:** `./build/ElectroBench --windowed`. A normal top-level
-   window is always capturable.
-
-The reliable path never goes through the compositor at all:
-
-- `--screenshot FILE --shot-time S` writes a frame straight out of the
-  framebuffer, before the buffer swap. This is what the committed screenshots in
-  `docs/screenshots/` were made with, and it cannot come out black.
-- `--screenshot FILE --shot-times 6,20,38` writes several frames in one run.
-
-Note that borderless fullscreen sizes the window to your **desktop**, not to
-1280x720, so on a 1080p display the bench renders at 1080p. Pass `--width` /
-`--height` to pin the framebuffer to an exact size instead.
-
-**When you rebuild, do both halves.** `static-build-x86-mingw32.sh` rebuilds the
-exe; the GLSL under `shaders/pole/`, `shaders/pool/` and `shaders/ps14/` is
-loaded at runtime and has to be **copied again** beside the new exe. Rebuilding
-alone leaves the previous build's shaders in place.
-
-**Then check that the shaders it loaded are the ones you copied.** Every run
-prints the resolved path and byte size of the four shading-critical shaders:
-
-```
-ElectroBench build P25 (2026-10-05)
-Assets: exe dir C:\bench\build/| cwd wins over the exe dir when it has shaders/
-  shaders/ps14/sea_frag.glsl         26889 bytes  shaders/ps14/sea_frag.glsl
-  ...
-```
-
-The resolved path is the important part. The loader tries the **current working
-directory before the exe's own directory**, so starting the bench from a folder
-that still contains an old `shaders/` tree loads that one and silently ignores
-a freshly copied folder next to the exe — a current binary shading with an old
-shader, a mixture that matches no commit. If the path printed is not the one you
-just copied to, you are running the other copy. Add `--trace-assets` to print
-every resolved asset path, not just those four.
-
-Headless visual-test flags (used to verify the render output in CI-like environments):
-
-```sh
-./build/ElectroBench --og-only   --screenshot /tmp/shot.ppm --shot-time 3
-./build/ElectroBench --scene-only --width 960 --screenshot /tmp/shot.ppm --shot-times 6,20,38
-./build/ElectroBench --pool-only  --width 960 --screenshot /tmp/shot.ppm --shot-times 2,3.2,5,12
-./build/ElectroBench --pole-only  --width 960 --screenshot /tmp/shot.ppm --shot-times 2,9
-```
-
-`--shot-time S` takes ONE frame at second S and works on all four scenes.
-`--shot-times A,B,C` takes a burst, and is **scenes 2-4 only** — scene 1 has no
-burst form, so a multi-frame scene 1 sequence is one process per shot with
-different `--shot-time` values. On scenes 2-4 a `--screenshot` path containing
-`%d` becomes a **frame sequence**: each time entry writes the next numbered
-frame (`frames/f-%03d.ppm` → `f-000.ppm`, `f-001.ppm`, …), so a timed burst
-assembles straight into an animation.
-
-All three loops in this README were captured one process per frame rather than
-as a single multi-shot burst, so each frame could be checked for a clean render
-log before it was encoded. The scene 3 and scene 4 loops pass a single-element
-`--shot-times T`, and the flyover loop is **ten scene 1 runs** at
-t = 2, 5, 7.5, 12, 17, 22, 27, 34.5, 40 and 45 s — spread across all three acts
-of the camera move, not half a second apart — encoded into
-`docs/screenshots/uzi_flyover.gif` at 760x428, 1200 ms a frame. `--width` and
-`--height` are independent on scene 1, so both are passed to pin the
-framebuffer; scenes 2-4 derive their height from the width instead, which is why
-`--width 760` yields 428 rows on scene 4 and 427 on scene 3.
-
-
-# Scene 4 — Power lines
+# Scene 4:
 
 **Scene 4** lives in the same ElectroBench binary and is also **OpenGL 3.3 core**. The
 utility corridor: warm gravel under an amber dusk, two lines of steel poles marching to the
@@ -337,6 +255,49 @@ make
 
 Controls : `F` toggles the automatic dolly camera, long-click + move orbits, mouse wheel zooms,
 `ESC` quits.
+
+
+- `--screenshot FILE --shot-time S` writes a frame straight out of the
+  framebuffer, before the buffer swap. This is what the committed screenshots in
+  `docs/screenshots/` were made with, and it cannot come out black.
+- `--screenshot FILE --shot-times 6,20,38` writes several frames in one run.
+
+Every run prints the resolved path and byte size of the four shading-critical shaders:
+
+```
+ElectroBench build P25 (2026-10-05)
+Assets: exe dir C:\bench\build/| cwd wins over the exe dir when it has shaders/
+  shaders/ps14/sea_frag.glsl         26889 bytes  shaders/ps14/sea_frag.glsl
+  ...
+```
+
+Headless visual-test flags (used to verify the render output in CI-like environments):
+
+```sh
+./build/ElectroBench --og-only   --screenshot /tmp/shot.ppm --shot-time 3
+./build/ElectroBench --scene-only --width 960 --screenshot /tmp/shot.ppm --shot-times 6,20,38
+./build/ElectroBench --pool-only  --width 960 --screenshot /tmp/shot.ppm --shot-times 2,3.2,5,12
+./build/ElectroBench --pole-only  --width 960 --screenshot /tmp/shot.ppm --shot-times 2,9
+```
+
+`--shot-time S` takes ONE frame at second S and works on all four scenes.
+`--shot-times A,B,C` takes a burst, and is **scenes 2-4 only** — scene 1 has no
+burst form, so a multi-frame scene 1 sequence is one process per shot with
+different `--shot-time` values. On scenes 2-4 a `--screenshot` path containing
+`%d` becomes a **frame sequence**: each time entry writes the next numbered
+frame (`frames/f-%03d.ppm` → `f-000.ppm`, `f-001.ppm`, …), so a timed burst
+assembles straight into an animation.
+
+All three loops in this README were captured one process per frame rather than
+as a single multi-shot burst, so each frame could be checked for a clean render
+log before it was encoded. The scene 3 and scene 4 loops pass a single-element
+`--shot-times T`, and the flyover loop is **ten scene 1 runs** at
+t = 2, 5, 7.5, 12, 17, 22, 27, 34.5, 40 and 45 s — spread across all three acts
+of the camera move, not half a second apart — encoded into
+`docs/screenshots/uzi_flyover.gif` at 760x428, 1200 ms a frame. `--width` and
+`--height` are independent on scene 1, so both are passed to pin the
+framebuffer; scenes 2-4 derive their height from the width instead, which is why
+`--width 760` yields 428 rows on scene 4 and 427 on scene 3.
 
 # How the score is calculated ?
 
@@ -407,21 +368,18 @@ GLEW archive consistently; do not compile with the DLL-import GLEW header and th
 `libglew32.a`.
 
 Notes for the direct g++ build :
-- `-march=x86-64 -mtune=generic` is the key: it emits baseline x86-64 code that runs on any 64-bit CPU, so the resulting exe won't illegal-instruction even where the prebuilt MSYS2 tools do.
 - Keep `-lglew32` before `-lSDL2`, and `-lopengl32` last — link order matters on MinGW.
 - Run the exe from the repo root (or copy `SDL2.dll` / `glew32.dll` from `C:\msys64\<env>\bin` next to it) so the DLLs resolve.
-- This was verified end-to-end on a Toshiba Satellite P200 (Core 2 Duo, pre-x86-64-v2) — every scene's shader programs compiled and linked on hardware.
+- This was verified end-to-end on a Toshiba Satellite P200 and a HP ProBook 430 G6, every scene's shader programs compiled and linked on hardware.
 
 Notes :
-- The headless screenshot flags work too — just use a Windows-style path: `./build/ElectroBench.exe --scene-only --width 960 --screenshot shot.ppm --shot-times 6,20,38`
+- The headless screenshot flags work too, just use a Windows-style path, it outputs a ppm file: `./build/ElectroBench.exe --scene-only --width 960 --screenshot shot.ppm --shot-times 6,20,38`
 - Any GPU with drivers from ~2010 onward handles all scenes (the GL 3.3 scenes need GL 3.3; the gun scene's GL 2.1 request gets a compatibility context — drivers ignore the profile hint below 3.2, per spec).
 - Run the exe from the repo root or via `build\...` — the asset resolver checks the current directory and then the executable's parent, so `shaders/` and `assets/UZI.obj` are found either way.
 
 # Contributions
 
 Contributions are welcome, just post a PR / issue.
-
-**PS** : Sorry guys there are some heavy files I used to fix my tablet, until they're hosted in another repo they'll stay stuck here. :( (nvm when you clone only a symlink exists not the 3.6gb files cus it's LFS files)
 
 # Donating
 
