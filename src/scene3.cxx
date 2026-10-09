@@ -7,34 +7,7 @@
 // Like src/scene2.cxx, this translation unit is NOT a program of its own.
 // It exports RunPoolScene(), which main.cxx calls as the third scene of the
 // one and only ElectroBench executable.
-//
-// What is rendered:
-//   * Checkerboard sky dome (shaders/pool/sky_*.glsl): planar-projected
-//     checker with analytic antialiasing and a soft glow toward the hidden
-//     light. No lamp, no sun disc — the light is only ever visible through
-//     shading (the specular path on the water and the teapot).
-//   * Open water (shaders/pool/water_frag.glsl): analytic mirror reflection
-//     of the same checker function, hidden-light specular, and up to six
-//     expanding splash rings driven from the CPU physics each frame.
-//   * THE FLEET: nine teapots (assets/teapot.obj — the real Utah teapot, one
-//     material, placeholder texture the user can swap) fall from the sky at
-//     scattered positions, sizes and drop heights, staggered so the pool is
-//     constantly alive. Each pot splashes on impact, then buoyancy + drag +
-//     bob settles it, rocking to rest. Tumbles in flight, rights itself in
-//     the water.
-//   * Real planar reflections: the whole fleet is re-rendered mirrored about
-//     the water plane, stencil-masked to the visible water pixels and alpha
-//     blended over the water shading — genuine reflections that ripple with
-//     the surface.
-//   * Splash droplets: velocity-stretched water strands with per-droplet
-//     gravity, torn from each pot's crown, picking up the checker sky's
-//     colours as they fly.
-//
-// Controls: ESC quits. The flyover camera is automatic from launch and the
-// fleet's fall / return / resplash loop runs on its own; nothing steers it.
-//
-// Headless flags shared with the other scenes: --screenshot, --shot-times,
-// --width; scene-specific: --pool-only (run just this scene).
+
 
 #include <algorithm>
 #include <array>
@@ -51,25 +24,15 @@
 #include <GL/glew.h>
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_opengl.h>
-// SDL 2.0.5 renamed SDL_GL_MULTISAMPLESAMPLES to SDL_GL_SAMPLES (same enum
-// value, 14). Accept either spelling so the MSAA request still builds against
-// the older SDL2 headers some of these static builds ship.
 #ifndef SDL_GL_SAMPLES
 #define SDL_GL_SAMPLES SDL_GL_MULTISAMPLESAMPLES
 #endif
 
 #include "../lib/asset_path.hxx"
 
-// BUILD-P20: 720p fullscreen is the default presentation; main.cxx clears
-// this for headless capture so the screenshot framebuffer stays pinned.
 extern bool gWindowedMode;
-#include "font_atlas.hxx" // shared HUD font data and atlas layout
+#include "font_atlas.hxx" 
 
-// lodepng.c is compiled into main.o (via lib/util.hxx) as C++ (its symbols
-// are mangled), so declaring the prototype here without extern "C" links
-// against those. Declaring it instead of including lodepng.h avoids pulling
-// the header in twice, which would duplicate the C++ wrapper's inline
-// definitions. (LCT_RGBA = 6, 8-bit depth.)
 enum LodePNGColorType { LCT_GREY = 0, LCT_RGB = 2, LCT_PALETTE = 3,
                         LCT_GREY_ALPHA = 4, LCT_RGBA = 6 };
 unsigned lodepng_decode_file(unsigned char **out, unsigned *w, unsigned *h,
@@ -80,45 +43,22 @@ unsigned lodepng_decode_file(unsigned char **out, unsigned *w, unsigned *h,
 #define NAME "ElectroBench - Scene 3 (Pool Room)"
 #define WIDTH 1366
 #define HEIGHT 768
-#define BENCH_MILLISECONDS 45000 // 45 s, same as the other scenes
+#define BENCH_MILLISECONDS 45000 
 
-#define MAX_RINGS 54             // must match water_frag.glsl; split into
-                                 // private per-pot windows (54/18 = 3 each)
-                                 // per-pot windows below
-#define MAX_BUBBLES 48           // must match water_frag.glsl: subsurface
-                                 // bubble plume slots (BUILD-D8); the scene
-                                 // uploads all 48 in one glUniform4fv plus a
-                                 // live count so idle frames loop zero times
-
-// BUILD-P19: THIS GRID WAS PAYING FOR NOTHING. The water plane is FLAT at
-// y = 0 and the vertex shader (shaders/pool/object_vert.glsl) does
-// uModel * aPos with an identity model and NO displacement of any kind —
-// every ripple, every ring, every reflection is computed analytically in the
-// FRAGMENT shader from vWorld. So the tessellation bought nothing at all:
-// 220x220 is 48,400 vertices and 95,922 triangles submitted every frame to
-// produce exactly the same image as two triangles would, because
-// perspective-correct interpolation of vWorld is exact no matter how large
-// the primitive is. It was pure vertex-stage cost on the heaviest pass in
-// the scene, in front of the heaviest fragment shader in the project.
-//
-// 32 keeps a coarse grid for anything that later wants to displace the
-// surface, and drops the count to 1,922 triangles — a 50x reduction in the
-// pass that scene 3 was measurably slowest on.
-static const int kWaterResolution = 32;   // grid verts per side (display grid;
-                                          // the lighting is analytic per pixel)
-static const float kWaterSize = 300.0f;   // water patch half-size reaches the
-                                          // horizon haze
+#define MAX_RINGS 54             
+#define MAX_BUBBLES 48     
+                      
+static const int kWaterResolution = 32;   
+static const float kWaterSize = 300.0f;   
 static const int kDomeSeg = 48, kDomeRings = 28;
-static const float kDomeRadius = 800.0f;  // inside the far plane
+static const float kDomeRadius = 800.0f; 
 
-// palette — the WHITE & RED pool-room checker. Must match sky_frag.glsl's
-// tileA/tileB (the water shader receives these as uniforms).
-static const float kTileA[3] = {2.30f, 2.30f, 2.26f}; // hot white tile (linear)
-static const float kTileB[3] = {1.50f, 0.008f, 0.010f}; // deep pure red tile
-static const float kLightTint[3] = {0.86f, 0.95f, 1.05f};// cool pool-room glow
 
-// hidden light: direction TOWARD the light, high and behind the default
-// camera so the water specular path lands between camera and teapot
+static const float kTileA[3] = {2.30f, 2.30f, 2.26f}; 
+static const float kTileB[3] = {1.50f, 0.008f, 0.010f};
+static const float kLightTint[3] = {0.86f, 0.95f, 1.05f};
+
+
 static const float kLightDir[3] = {-0.30f, 0.52f, -0.80f};
 
 // ------------------------------------------------------------ tiny math utils
@@ -176,15 +116,11 @@ static void Mat4LookAt(Mat4 &m, const Vec3 &eye, const Vec3 &center, const Vec3 
   m[13] = -Vec3Dot(u, eye);
   m[14] = Vec3Dot(f, eye);
 }
-
-// TRS-ish model matrix for the teapot: translate * rotY(yaw) * rotX(pitch)
-// * uniform scale — the pitch column is the HYPER-REAL falling tumble.
 static void Mat4Model(Mat4 &m, const Vec3 &pos, float yaw, float scale,
                       float pitch = 0.0f) {
   float c = std::cos(yaw), s = std::sin(yaw);
   float cp = std::cos(pitch), sp = std::sin(pitch);
   Mat4Identity(m);
-  // rotY then rotX: columns combine as R = Ry * Rx
   m[0] = c * scale;        m[4] = s * sp * scale;  m[8]  = -s * cp * scale;  m[12] = pos.x;
   m[1] = 0.0f;             m[5] = cp * scale;      m[9]  = sp * scale;       m[13] = pos.y;
   m[2] = s * scale;        m[6] = -c * sp * scale; m[10] = c * cp * scale;   m[14] = pos.z;
@@ -266,10 +202,7 @@ static Program LinkProgram(const char *vsPath, const char *fsPath) {
   return p;
 }
 
-// ------------------------------------------------------------------ OBJ load
-// Minimal v/vt/vn loader for the single-material teapot: fan-triangulates
-// polygons, computes smooth normals when the file has none, re-centres the
-// mesh on its base (y=min) and normalises the bounding radius.
+// minimal obj loading
 struct TeapotMesh {
   GLuint vao = 0, vbo = 0;
   int indexCount = 0;
@@ -316,13 +249,10 @@ static TeapotMesh LoadObjMesh(const char *path, float targetRadius) {
   if (ext[2] > maxDim) maxDim = ext[2];
   float s = targetRadius / (maxDim * 0.5f);
 
-  // Interleaved pos3/normal3/uv2 with a weld map so corners that share a
-  // position share a smoothed normal AND a consistent UV — required by the
-  // real Utah teapot (bare "f v v v" faces, no vt/vn at all).
   struct WeldKey {
     int vi;
-    int uvGen;   // 0 = file UV, 1 = generated (needs vertex position)
-    float u, v;  // generated UV (or file UV baked in)
+    int uvGen;  
+    float u, v;  
     bool operator==(const WeldKey &o) const {
       return vi == o.vi && uvGen == o.uvGen && u == o.u && v == o.v;
     }
@@ -630,37 +560,24 @@ static void BuildDomeMesh() {
   (void)ebo;
 }
 
-// ------------------------------------------------------------ physics state
-// The teapot: dropped from the sky, splashes, then PARKS at the fall point
-// just under the waterline (BUILD-D5: no buoyancy recovery, no bob, no
-// righting — it stays in the position it landed in, hull visible above the
-// surface, and never moves again). Semi-implicit Euler driven by the fixed
-// 1/120 s substepper below — deterministic renders at any frame rate.
+
 struct TeapotPhysics {
   Vec3 pos{0.0f, 8.0f, 0.0f};
   Vec3 vel{0.0f, 0.0f, 0.0f};
   float yaw = 0.0f;
-  float yawVel = 1.1f;      // slow tumble while airborne
-  float pitch = 0.0f;       // HYPER-REAL: forward tumble about the X axis —
-  float pitchVel = 0.0f;    // a dropped pot doesn't just spin on the spot
-  float radius = 0.55f;     // bounding radius (world units, scale 1.0)
+  float yawVel = 1.1f;      
+  float pitch = 0.0f;      
+  float pitchVel = 0.0f;    
+  float radius = 0.55f;     
   bool inWater = false;
   bool splashed = false;
-  double nextBoil = 0.0;    // BUILD-D7: next post-impact boil ring
+  double nextBoil = 0.0;    
   bool settled = false;
-  bool active = false;      // fleet pots spawn on a stagger
+  bool active = false;      
   double spawnAt = 0.0;
   double splashTime = -1.0;
 };
 
-// ---- the fleet ------------------------------------------------------------
-// Two waves of pots at scattered deterministic positions, sizes and drop
-// heights. Wave one (pots 0..8) rains down over the first ten seconds; wave
-// two (pots 9..17) starts once wave one has settled and splashes the OUTER
-// ring of the pool — fresh chaotic impact while the first wave sits sunken
-// on the basin floor.
-// Ripple-ring slots are partitioned per pot (a private window each), so all
-// concurrent splashes never overwrite each other's rings.
 static const int kFleetCount = 18;
 static const int kRingsPerPot = MAX_RINGS / kFleetCount;
 
@@ -687,45 +604,27 @@ static const double kFleetDelay[kFleetCount] = {
     0.0, 1.1, 2.2, 3.3, 4.4, 5.5, 6.6, 7.7, 8.8,
     11.2, 12.1, 13.0, 13.9, 14.8, 15.7, 16.6, 17.5, 18.4};
 
-// rings are POD: x, z, radius, strength — one private window per pot
 struct Ring { float x, z, radius, strength; };
 static Ring gRings[MAX_RINGS];
 static int gRingUsed[kFleetCount] = {};
 static Ring *RingWindow(int pot) { return &gRings[pot * kRingsPerPot]; }
-
-// BUILD-D8 SUBSURFACE BUBBLES: the impact cavity entrains air; a plume of
-// bubbles rises under each impact point for a couple of seconds, wobbling,
-// then pops at the surface into a micro-ring. depth = metres BELOW the
-// surface (positive down); the water shader paints each bubble at its
-// PARALLAX-CORRECTED apparent position so the specks slide correctly under
-// the low grazing camera.
 struct Bubble { float x, z, depth, radius, rise, phase; int owner; };
 static std::vector<Bubble> gBubbles;
 
-// The Worthington crown: a STEEP water sheet (BUILD-D4). The sheet is
-// nearly vertical — crown walls point UP, not outward — the radius stays
-// close to the pot's footprint (r ≈ 1.2x pot radius, growth capped hard)
-// and the height ramps fast to a tall lip. The old wide expanding dome
-// (0.24→0.79·scale radius over 0.95 s) is what read as the cloud bank.
-// GPU-animated geometry (see shaders/pool/splash_*.glsl) — the CPU only
-// streams radius/height/spike params. One per pot.
 struct CrownSplash {
   bool active = false;
   Vec3 center{0.0f, 0.0f, 0.0f};
   float age = 0.0f;
   float radius = 0.0f;
   float height = 0.0f;
-  float height0 = 0.0f; // the height the rim RALLIES to (set at spawn)
-  float spike = 0.0f;   // spike amplitude 0..1
-  float spike0 = 0.0f;  // peak tearing amplitude (set at spawn)
-  float life = 1.0f;    // fades the sheet out
-  float scale = 1.0f;   // pot scale — radius growth must stay pot-proportional
+  float height0 = 0.0f; 
+  float spike = 0.0f;   
+  float spike0 = 0.0f; 
+  float life = 1.0f;   
+  float scale = 1.0f;  
 };
 static CrownSplash gCrowns[kFleetCount];
 
-// The central jet: the column of water that shoots up after the crown
-// collapses (the Rayleigh jet). Rendered as a stretched droplet-style quad;
-// the CPU simulates its rise + fall ballistic arc. One per pot.
 struct JetColumn {
   bool active = false;
   Vec3 center{0.0f, 0.0f, 0.0f};
@@ -736,44 +635,32 @@ struct JetColumn {
 };
 static JetColumn gJets[kFleetCount];
 
-// per-pot jet punch 0..1: how violently the Rayleigh jet fires on cavity
-// collapse (bigger pots hitting harder punch taller, thicker columns)
 static float gJetPunch[kFleetCount];
 
 struct Droplet {
   Vec3 pos;
   Vec3 vel;
   float radius;
-  float life;     // seconds remaining
+  float life;    
   float maxLife;
-  float delay;    // BUILD-P15: seconds before this strand is released. A real
-                  // crown does not eject all its water at once — it tears
-                  // progressively as the lip pinches, so the spray builds
-                  // from the first finger to the last over ~0.3 s.
-  int owner;      // fleet pot that spawned it (owns the micro-ring window)
+  float delay;   
+  int owner;      
 };
 static std::vector<Droplet> gDroplets;
 
 static TeapotPhysics gPots[kFleetCount];
 
-static const float kGravity = -13.6f;   // slightly heavier than Earth for drama
+static const float kGravity = -13.6f;   // slightly heavier than Earth
 static const float kWaterLevel = 0.0f;
-static const float kBounce = 0.0f;      // no rebound: the cavity tears the
-                                        // plunge away on entry
-static const float kDragWater = 2.6f;   // /s velocity damping in water
-// BUILD-D5 PARK-AT-IMPACT: the user's actual ask — "pots shouldn't recover
-// from the fall, they stay in the same position when they fell". A pot that
-// lands stops dead a little way below its entry point (restY below) and is
-// parked there FOREVER: no buoyancy spring, no bobbing, no righting. The
-// hull stays visible above the waterline (the D4 sink-to-floor version
-// vanished under the opaque water and left the pool looking empty).
+static const float kBounce = 0.0f;     
+static const float kDragWater = 2.6f;  
+
 
 static void SpawnRing(int pot, float x, float z, float strength) {
   Ring *win = RingWindow(pot);
   if (gRingUsed[pot] < kRingsPerPot) {
     win[gRingUsed[pot]++] = {x, z, 0.15f, strength};
   } else {
-    // reuse the weakest ring in this pot's private window
     int weakest = 0;
     for (int i = 1; i < kRingsPerPot; i++)
       if (win[i].strength < win[weakest].strength) weakest = i;
@@ -781,134 +668,54 @@ static void SpawnRing(int pot, float x, float z, float strength) {
   }
 }
 
-// BUILD-P2 BIGGER CROWNS: the user asked for larger, more real splashes.
-//  * the crown is a nearly-VERTICAL sheet that RISES: radius ≈ 1.3x the pot
-//    footprint (never a wide dome), height ramps to ~2.5x pot radius (cap
-//    raised 2.8 -> 3.6 m) so the sheet towers over the pot
-//  * the lip FLARES outward at the top (real Worthington profile: cavity
-//    necks in, lip unfurls) — see splash_vert.glsl
-//  * the film tears LATE (tear weights shifted to the last third of life)
-//  * ejecta goes UP, not out: lateral velocity stays bounded and air drag
-//    bleeds it back near the rim — no spray halo across the pool
-//  * the Rayleigh jet stays a slender vertical column near the impact axis
 static void SpawnSplash(int pot, float x, float z, float impactSpeed, float scale) {
   const bool waveTwo = pot >= 9;
   const float s = std::fmin(impactSpeed / 10.0f, 1.6f);
   SpawnRing(pot, x, z, std::fmin(1.0f, 0.55f + 0.45f * s));
-
-  // ---- the crown: tight radius, tall lip. Height scales with the drop
-  // energy but stays bounded; radius grows only slightly from the pot rim.
   CrownSplash &crown = gCrowns[pot];
   crown.active = true;
   crown.center = {x, kWaterLevel, z};
   crown.age = 0.0f;
   crown.scale = scale;
-  crown.radius = 0.68f * scale;   // ≈ 1.3x the pot's footprint: the sheet
-                                  // hugs the cavity rim and RISES from there
-  // BUILD-P15: THE CROWN NOW *BUILDS* INSTEAD OF APPEARING.
-  //
-  // This is the single largest realism defect left in the scene and it is a
-  // TIMING bug, not a shape bug. `height` was written once at spawn and
-  // `spike` at full amplitude, so the very first frame a splash existed it
-  // was already a fully-formed, fully-torn star at full height.
-  //
-  // High-speed footage of a real Worthington crown says otherwise. The rim
-  // at t=0 is a SMOOTH, almost perfectly circular collar of water thrown
-  // radially outward by the displaced volume. It rises as a clean cylinder
-  // for the first 60-100 ms. The spikes do not exist yet: they appear only
-  // when the cavity underneath pinches off and the collapsing sheet loses its
-  // support, roughly 150-250 ms in, and they grow over the next 100 ms. Then
-  // the fingers thin, bead, and fly apart.
-  //
-  // So the crown now runs a four-stage timeline driven from `age`:
-  //   0 .. 0.09 s   smooth collar rises to full height, no tearing
-  //   0.09 .. 0.30 s pinch-off: spikes ramp in, lip flares
-  //   0.30 .. life   fingers decay and the sheet thins to nothing
-  // The vertex shader gets `age` as a uniform and does the shaping, so the
-  // per-frame CPU cost is the same four multiplies it already had.
+  crown.radius = 0.68f * scale;  
   crown.height0 = std::fmin((0.85f + 1.20f * s) * scale * (waveTwo ? 1.10f : 1.0f),
-                            3.6f); // steep cap: height ≈ 2.5x the radius — the
-                                   // water points UP and TOWERS (reference
-                                   // crowns are tall narrow sheets, never wide
-                                   // domes)
+                            3.6f);
   crown.height = crown.height0;
   crown.spike0 = std::fmin(1.0f, 0.45f + 0.4f * s);
-  crown.spike = 0.0f;   // a smooth rim is all there is at t = 0
+  crown.spike = 0.0f;  
   crown.life = waveTwo ? 1.1f : 1.0f;
-
-  // ---- droplets: torn from the crown spikes, STEEP ballistic strands.
-  // Mostly vertical launch with a small inward-biased lateral bleed so the
-  // spray falls back near the crown instead of painting a halo across the
-  // pool (the literal source of the horizon bank on build D3).
-  //
-  // BUILD-P15 DROPLET SIZE. The old radii were 36-80 mm, i.e. 7-16 cm
-  // ACROSS. That is not spray, that is a hailstone: a 16 cm ball of water
-  // hanging over a 1 m crown reads as a balloon, and there were only 46-66 of
-  // them so the eye counted every one. Real Worthington ejecta is 4-25 mm
-  // across and there are HUNDREDS of it, distributed as a power law (many
-  // tiny, a few large) rather than uniformly. So: radius 5-26 mm, a power-
-  // law size draw, and roughly twice the count. The count is affordable
-  // because the strands are 2-5 px at pool scale once they are the right
-  // size — the old ones were large AND numerous, which is the worst of both.
   int n = (86 + (int)(46.0f * s)) * (waveTwo ? 2 : 1);
   for (int i = 0; i < n; i++) {
-    // fixed pseudo-random spread (deterministic across runs like the rest
-    // of the bench)
     float a = (float)((i * 137 + pot * 61) % 360) * 3.14159265f / 180.0f;
     float r01 = ((i * 89 + pot * 37) % 100) / 100.0f;
     float u01 = ((i * 53 + pot * 19) % 100) / 100.0f;
-    bool fragment = waveTwo && ((i * 31 + pot * 17) % 7) == 0; // torn sheet chunk
+    bool fragment = waveTwo && ((i * 31 + pot * 17) % 7) == 0; 
     Droplet d;
     d.owner = pot;
-    float rimR = crown.radius + 0.06f + 0.07f * r01;   // tight rim anchor
-    // BUILD-P15: ejecta leaves from the RISING SHEET, not from a fixed band.
-    // Position on the sheet tracks how far up the crown the strand tore off,
-    // so the crown visibly sheds as it climbs instead of erupting pre-formed.
+    float rimR = crown.radius + 0.06f + 0.07f * r01;   
     float onSheet = 0.18f + 0.78f * r01;
     d.pos = {x + std::cos(a) * rimR * (1.0f - 0.22f * onSheet),
              kWaterLevel + 0.10f + onSheet * crown.height0 * 0.92f,
              z + std::sin(a) * rimR * (1.0f - 0.22f * onSheet)};
-    // STEEP ejecta: strong vertical kick, small lateral component that air
-    // drag eats quickly (see the drag term in UpdatePhysics). The launch
-    // speed now RISES with height on the sheet (the fastest, biggest drops
-    // come off the lip), which is what gives a real crown its graded corona
-    // instead of a uniform shrapnel burst.
     float out = (0.45f + 0.80f * s * (0.30f + 0.70f * r01)) * scale;
     float up = (3.2f + 4.6f * s * (0.35f + 0.65f * onSheet));
     d.vel = {std::cos(a) * out, up, std::sin(a) * out};
-    // POWER-LAW SIZE. u^3 clusters the population toward the small end with
-    // a long thin tail of big drops, which is what a real splash curtain is:
-    // a haze of fine mist plus a handful of fat beads near the axis.
     float sz = 0.0050f + 0.0210f * (u01 * u01 * u01);
-    // the fattest drops are the ones torn from the highest, fastest part of
-    // the sheet, so size correlates with launch height
     sz *= 0.72f + 0.85f * onSheet;
     d.radius = sz * scale;
-    if (fragment) d.radius *= 1.6f; // torn sheet chunk, no cloud ballooning
+    if (fragment) d.radius *= 1.6f; 
     d.maxLife = d.life = (0.62f + 0.52f * ((i * 29) % 5) / 5.0f) *
                          (waveTwo ? 1.10f : 1.0f);
-    // BUILD-P15: staggered release. The lip thins and pinches FIRST, so the
-    // highest strands on the sheet leave first and the base tears last; the
-    // release time therefore tracks height on the sheet. Without this the
-    // whole corona appears in one frame at impact, which is the same
-    // "already finished" tell as the pre-formed crown.
     d.delay = 0.11f + 0.30f * onSheet + 0.05f * u01;
     gDroplets.push_back(d);
   }
-
-  // ---- the jet: delayed central column that erupts after the crown falls
-  // (a real tank splash: cavity collapses -> Rayleigh jet shoots up)
   JetColumn &jet = gJets[pot];
   jet.active = true;
   jet.center = {x, kWaterLevel, z};
-  jet.velY = 0.0f;      // delayed: starts moving when the crown collapses
+  jet.velY = 0.0f;    
   jet.height = 0.0f;
   jet.radius = (0.12f + 0.06f * s) * scale;
   jet.life = 0.0f;
-
-  // ---- BUILD-D8: the cavity entrains air — a bubble plume rises under
-  // the impact point. Bubbles start at staggered depths with different
-  // rise rates so the plume thins out naturally over ~2 s.
   int bn = 10 + (int)(6.0f * s);
   for (int i = 0; i < bn && (int)gBubbles.size() < MAX_BUBBLES; i++) {
     float ba = (float)((i * 149 + pot * 73) % 360) * 0.0174532925f;
@@ -924,10 +731,6 @@ static void SpawnSplash(int pot, float x, float z, float impactSpeed, float scal
     gBubbles.push_back(b);
   }
 }
-
-// t0 = sim time the act begins. Every pot's spawn gate is offset by it, so
-// a re-drop staggers over the SAME window relative to *now* instead of firing
-// the whole fleet in one frame (which is what a bare ResetFleet at t>0 did).
 static void ResetFleet(double t0 = 0.0) {
   for (int i = 0; i < kFleetCount; i++) {
     gPots[i] = TeapotPhysics{};
@@ -944,53 +747,19 @@ static void ResetFleet(double t0 = 0.0) {
   gBubbles.clear();
 }
 
-static double gStartTime = 0.0;  // set in RunPoolScene; UpdatePhysics reads it.
-
-// BUILD-D4 fixed-timestep driver: the VM renders at 9-14 FPS, so advancing
-// the whole sim by one ~0.1 s frame step made the integration mushy and let
-// fast droplets tunnel through the water plane between frames. The real
-// dynamics run in fixed 1/120 s substeps (identical trajectories at any
-// frame rate, deterministic screenshots); ring bookkeeping stays per-frame.
+static double gStartTime = 0.0;
 static const float kPhysicsStep = 1.0f / 120.0f;
 static double gPhysicsAccum = 0.0;
-// BUILD-D8 harness fix: screenshot gates and the bench window used to run on
-// the raw wall clock while the SIM advances by the CLAMPED frame dt — on a
-// 1 FPS software renderer sim time crawls ~10x slower than wall time, so
-// "--shot-times 15" captured a pool that had only simulated ~1.5 s (the
-// D4/D5-era "fewer than 36 frames / empty-looking late frames" mystery).
-// gSimTime tracks the physics timebase; --shot-times now mean SIM seconds
-// (identical to wall seconds at 60 FPS, deterministic at any frame rate).
 static double gSimTime = 0.0;
+static const float kPullbackPerPot = 0.55f;  
+static const float kPullbackMax = 9.5f;    
+static const double kReturnSeconds = 3.0;  
+static const double kResplashHold = 3.2;   
+static const float kResplashSpeed = 8.5f;    
 
-// ---------------------------------------------------------------------
-// BUILD-P30: THE FLYOVER NOW REACTS TO THE FLEET.
-//
-// The orbit used to be a fixed slow circle that ignored the drops entirely.
-// The requested act is three beats driven off the teapots themselves:
-//   1. FALL      every teapot that starts its drop pushes the orbit back one
-//                more step, so the camera widens as the rain widens and the
-//                whole falling fleet stays in shot.
-//   2. RETURN    once every pot has landed and parked, the orbit eases all the
-//                way back to its base radius.
-//   3. RESPLASH  with the camera home, every pot erupts in the SAME frame: one
-//                synchronized crown/jet/ring burst across the whole pool.
-//                The fleet then re-drops and the act repeats.
-//
-// Everything keys off gSimTime, so the choreography is identical at any frame
-// rate — the same rule the rest of the scene has followed since BUILD-P20.
-// ---------------------------------------------------------------------
-static const float kPullbackPerPot = 0.55f;  // orbit metres added per drop
-static const float kPullbackMax = 9.5f;      // widest the flyover ever gets
-static const double kReturnSeconds = 3.0;    // orbit travel back home
-static const double kResplashHold = 3.2;     // let the synchronized burst play
-static const float kResplashSpeed = 8.5f;    // identical impact energy for
-                                             // every pot -> identical crowns
-
-static float gCamPullback = 0.0f; // eased orbit offset, metres
-static int gPhase = 0;            // 0 = falling, 1 = returning, 2 = resplashed
-static double gPhaseT = 0.0;      // sim time the current phase began
-
-// how many pots of the current act have started their drop
+static float gCamPullback = 0.0f; 
+static int gPhase = 0;           
+static double gPhaseT = 0.0;      
 static int FleetSpawned() {
   int n = 0;
   for (int i = 0; i < kFleetCount; i++)
@@ -998,23 +767,19 @@ static int FleetSpawned() {
   return n;
 }
 
-// true once every pot has dropped AND parked on the basin floor
 static bool FleetAllDown() {
   for (int i = 0; i < kFleetCount; i++)
     if (!gPots[i].active || !gPots[i].settled) return false;
   return true;
 }
 
-// One synchronized burst: the SAME impact speed at every parked hull, so all
-// eighteen crowns rise together to the same height on the same frame. It runs
-// at the pot's current x/z, so each crown erupts around its own hull.
 static void ResplashAll() {
   for (int i = 0; i < kFleetCount; i++) {
     TeapotPhysics &p = gPots[i];
     if (!p.active) continue;
     SpawnSplash(i, p.pos.x, p.pos.z, kResplashSpeed, kFleetScale[i]);
     SpawnRing(i, p.pos.x, p.pos.z, 0.55f);
-    p.splashTime = gSimTime;   // restart the post-impact hull churn + boil
+    p.splashTime = gSimTime;  
     p.nextBoil = gSimTime + 0.25;
   }
 }
@@ -1023,14 +788,12 @@ static void UpdateChoreography(double simNow, double dt) {
   float target = 0.0f;
 
   if (gPhase == 0) {
-    // beat 1 — one extra step of pull-back per pot that has begun falling
     target = std::fmin((float)FleetSpawned() * kPullbackPerPot, kPullbackMax);
     if (FleetAllDown()) {
       gPhase = 1;
       gPhaseT = simNow;
     }
   } else if (gPhase == 1) {
-    // beat 2 — bring the flyover back home, then erupt the whole fleet at once
     target = 0.0f;
     if (simNow - gPhaseT >= kReturnSeconds && gCamPullback <= 0.30f) {
       ResplashAll();
@@ -1038,26 +801,21 @@ static void UpdateChoreography(double simNow, double dt) {
       gPhaseT = simNow;
     }
   } else {
-    // beat 3 — hold while the synchronized crowns play, then start the act over
     target = 0.0f;
     if (simNow - gPhaseT >= kResplashHold) {
-      ResetFleet(simNow); // pots stagger again from *now*, not from t=0
+      ResetFleet(simNow);
       gCamPullback = 0.0f;
       gPhase = 0;
       gPhaseT = simNow;
     }
   }
 
-  // ease the orbit offset toward this beat's target — frame-rate independent,
-  // so the camera glides rather than stepping when a pot spawns
   float k = 1.0f - std::exp(-1.6f * (float)dt);
   gCamPullback += (target - gCamPullback) * k;
 }
 
 static void UpdatePhysicsStep(double now, float dt) {
   (void)now;
-
-  // --- rings expand and fade (per-pot windows) ---
   for (int i = 0; i < kFleetCount; i++) {
     Ring *win = RingWindow(i);
     for (int j = 0; j < gRingUsed[i]; j++) {
@@ -1069,40 +827,23 @@ static void UpdatePhysicsStep(double now, float dt) {
       if (win[j].strength > 0.02f) win[w++] = win[j];
     gRingUsed[i] = w;
   }
-
-  // --- droplets: STEEP ballistic strands with air drag (BUILD-D4) ---
-  // drag bleeds the small lateral component fast (the spray falls back
-  // around the crown instead of painting a wide halo across the pool)
-  // while the vertical arc stays clean.
-  std::vector<Droplet> pending;   // BUILD-D7 secondary ejecta staging
+  std::vector<Droplet> pending;   
   for (Droplet &d : gDroplets) {
-    if (d.delay > 0.0f) { d.delay -= dt; continue; }   // BUILD-P15: staged
-                                                            // ejection
+    if (d.delay > 0.0f) { d.delay -= dt; continue; }   
+                                                            
     float sp = std::sqrt(d.vel.x * d.vel.x + d.vel.y * d.vel.y + d.vel.z * d.vel.z);
-    float cd = std::fmin(0.55f * sp * dt, 0.9f);   // quadratic-ish air drag
+    float cd = std::fmin(0.55f * sp * dt, 0.9f);   
     d.vel.x -= d.vel.x * cd;
     d.vel.z -= d.vel.z * cd;
-    d.vel.y -= d.vel.y * cd * 0.35f;               // vertical keeps speed
+    d.vel.y -= d.vel.y * cd * 0.35f;             
     d.vel.y += kGravity * dt;
     d.pos = Vec3Add(d.pos, Vec3Scale(d.vel, dt));
     d.life -= dt;
     if (d.pos.y < kWaterLevel && d.vel.y < 0.0f) {
-      // BUILD-P15: the landing gates used to be `radius > 0.03f`, which was
-      // sized to the old 36-80 mm drops. With realistic 5-26 mm ejecta that
-      // test can NEVER pass, so every micro-ring AND every secondary droplet
-      // this scene is famous for would have silently switched off. The
-      // threshold is now 0.009 m — the size at which one drop actually
-      // punches a visible ring — and it is stated against the new size
-      // distribution rather than inherited from it.
       const float kRingDrop = 0.0090f;
-      // landing droplet raises a micro-ring in its owner's window
       if (d.radius > kRingDrop)
         SpawnRing(d.owner, d.pos.x, d.pos.z,
                   0.14f + 0.3f * std::fmin(-d.vel.y / 6.0f, 1.0f));
-      // BUILD-D7 SECONDARY EJECTA: a fast droplet throws a couple of tiny
-      // kids back up (real rain-on-water behaviour). Collected out-of-loop
-      // (no push_back during iteration) and hard-capped so a droplet storm
-      // can never avalanche.
       if (d.radius > kRingDrop && gDroplets.size() + pending.size() < 4200 &&
           ((d.owner * 7 + (int)(d.pos.x * 13.0f)) % 2) == 0) {
         for (int k = 0; k < 2; k++) {
@@ -1116,8 +857,6 @@ static void UpdatePhysicsStep(double now, float dt) {
                    1.4f + 0.9f * (float)((k * 53) % 5) / 5.0f +
                        0.15f * std::fmin(-d.vel.y, 6.0f),
                    std::sin(aa) * sp2};
-          // children are much finer than their parent — a splash-back crown
-          // is mist, not a shrunken copy of the drop that made it
           s.radius = d.radius * 0.45f;
           s.maxLife = s.life = 0.42f;
           s.delay = 0.0f;
@@ -1132,15 +871,11 @@ static void UpdatePhysicsStep(double now, float dt) {
                                  [](const Droplet &d) { return d.life <= 0.0f; }),
                   gDroplets.end());
 
-  // --- BUILD-D8: subsurface bubbles rise, wobble, pop into micro-rings ---
-  // Wobble phase rides gSimTime (SIM seconds): identical plume shape at any
-  // frame rate, and no float-precision loss from the huge uptime clock.
   for (Bubble &b : gBubbles) {
     b.depth -= b.rise * dt;
     b.x += std::sin(b.phase + (float)gSimTime * 2.6f) * 0.06f * dt;
     b.z += std::cos(b.phase * 1.3f + (float)gSimTime * 3.1f) * 0.06f * dt;
     if (b.depth <= 0.035f) {
-      // the bubble breaks the surface: a tiny residual ripple
       SpawnRing(b.owner, b.x, b.z, 0.10f);
       b.depth = -1.0f;   // dead
     }
@@ -1152,52 +887,26 @@ static void UpdatePhysicsStep(double now, float dt) {
   for (int i = 0; i < kFleetCount; i++) {
     CrownSplash &crown = gCrowns[i];
     JetColumn &jet = gJets[i];
-
-    // --- crown: STEEP sheet, near-zero radial growth, late collapse ---
     if (crown.active) {
       crown.age += dt;
-      // BUILD-P2: the sheet hugs the pot's footprint but breathes outward
-      // a little further as the lip unfurls (0.68 -> 0.82 of scale)
       float t = crown.age;
-      // BUILD-P15: THE WORTHINGTON TIMELINE. The rim RALLIES over the first
-      // 90 ms (smooth, untilted), tears over the next 210 ms as the cavity
-      // pinches off, and only then starts falling. `height0`/`spike0` are the
-      // peaks; these two shapes are the whole animation.
       float rise = std::fmin(t / 0.09f, 1.0f);
-      rise = rise * rise * (3.0f - 2.0f * rise);        // smoothstep
+      rise = rise * rise * (3.0f - 2.0f * rise);       
       float pinch = std::fmin(t / 0.30f, 1.0f);
       pinch = pinch * pinch * (3.0f - 2.0f * pinch);
       crown.height = crown.height0 * rise *
                      (1.0f - std::fmin(0.55f * std::fmax(0.0f, t - 0.30f), 0.85f));
       crown.spike = crown.spike0 * pinch;
-      // the lip unfurls outward late, which is when the sheet is fastest and
-      // most aerated — not linearly from the first frame as it used to
       crown.radius = (0.68f + 0.20f * std::fmin(t, 0.42f)) * crown.scale;
-      crown.life = 1.0f - t / 1.18f;      // bigger crowns linger a beat longer
-      // BUILD-P15: the collapse test must NOT run during the rise. The sheet
-      // is deliberately near-zero height for its first 90 ms (it is a collar
-      // of water leaving the surface, not yet a crown), so testing
-      // `height < 0.04` unconditionally retires every crown on its FIRST
-      // 1/120 s physics step — the rise ramp and the collapse test were
-      // fighting each other. The sheet may only be declared collapsed once it
-      // has actually had a chance to rise.
+      crown.life = 1.0f - t / 1.18f;   
       if (crown.life <= 0.0f || (t > 0.10f && crown.height < 0.04f)) {
         crown.active = false;
-        // jet launches as the crown collapses — a real Rayleigh jet fires on
-        // the cavity's inertial collapse; bigger pots cavitate deeper and
-        // punch a taller column.
         float s = gJetPunch[i];
-        jet.velY = 5.6f + 2.4f * s;   // taller crowns cavitate deeper: a
-                                      // stronger Rayleigh punch
-        // slender Rayleigh column HUGGING the impact axis (BUILD-D4: the old
-        // +0.9/+0.4 lateral offset threw every jet away from its pot,
-        // widening the far-field cloud)
+        jet.velY = 5.6f + 2.4f * s;   
         jet.radius = std::fmin(jet.radius * (0.85f + 0.5f * s),
                                0.075f * crown.scale + 0.020f);
       }
     }
-
-    // --- jet: ballistic rise + fall, thins as it climbs ---
     if (jet.active && jet.velY != 0.0f) {
       jet.velY += kGravity * dt;
       jet.height += jet.velY * dt;
@@ -1206,27 +915,16 @@ static void UpdatePhysicsStep(double now, float dt) {
         jet.height = 0.0f;
         jet.velY = 0.0f;
         jet.life = 0.0f;
-        // jet impact: a modest final ring
         SpawnRing(i, jet.center.x, jet.center.z, 0.45f);
       }
     }
 
-    // --- pot ---
     TeapotPhysics &p = gPots[i];
     if (!p.active) {
-      // BUILD-D8 harness fix: the spawn gate used the WALL clock while the
-      // sim advances by clamped frame dt — on a slow renderer the fleet's
-      // two waves fell behind the sim-timebase (screenshot gate, bubble
-      // plumes and physics all run on gSimTime). Pots now spawn on the
-      // same SIM schedule as everything else: --shot-times and the wave
-      // choreography stay in lockstep at any frame rate.
       if (gSimTime >= p.spawnAt) {
         p.active = true;
         float sc = kFleetScale[i];
         p.pos = {kFleetPos[i][0], kFleetDrop[i], kFleetPos[i][1]};
-        // HYPER-REAL drop: a small horizontal drift (no pot falls perfectly
-        // straight), a tumble about BOTH axes, and per-pot phases so the
-        // fleet doesn't fall in lockstep
         float ph = (float)((i * 37) % 11) / 11.0f;
         p.vel = {(ph - 0.5f) * 0.9f, -1.2f, ((i * 53) % 7 - 3.0f) / 7.0f * 0.9f};
         p.yawVel = 1.1f * (0.6f + 0.8f * ((i * 7) % 5) / 5.0f);
@@ -1236,13 +934,7 @@ static void UpdatePhysicsStep(double now, float dt) {
       }
       continue;
     }
-
-    // entry plane: the pot registers a splash once its centre passes a
-    // shallow depth scaled to its size
     bool water = p.pos.y < kWaterLevel - 0.12f * p.radius;
-
-    // gravity always; AIR DRAG while falling (a real pot has drag — the
-    // old vacuum fall reached unrealistic speeds on the 15 m drops)
     p.vel.y += kGravity * dt;
     if (!water) {
       float ad = 1.0f - std::fmin(0.16f * dt, 0.2f);
@@ -1251,39 +943,22 @@ static void UpdatePhysicsStep(double now, float dt) {
 
     if (water) {
       if (!p.inWater) {
-        // ---- impact ----
         float speed = -p.vel.y;
         p.inWater = true;
         p.splashed = true;
         p.splashTime = now;
-        // Wave-two pots plunge in from much higher drops and hit harder:
-        // their crowns are taller and their ejecta carries more energy.
         SpawnSplash(i, p.pos.x, p.pos.z, speed * (i >= 9 ? 1.15f : 1.0f),
                     kFleetScale[i]);
-        // a real impact throws a second, broader ring a beat behind the first
         SpawnRing(i, p.pos.x, p.pos.z, 0.40f + 0.3f * std::fmin(speed / 9.0f, 1.0f));
-        // no rebound — the water absorbs the plunge. The horizontal drift
-        // dies on entry (the cavity grabs the pot) and the tumble mostly
-        // ends there (BUILD-D4: pots keep a LAST-LANDED orientation: they
-        // are only weakly righted, and they sink).
         p.vel.y = speed * kBounce;
         p.vel.x *= 0.4f; p.vel.z *= 0.4f;
         p.yawVel *= 0.25f;
         p.pitchVel *= 0.25f;
       }
-      // BUILD-D5 — PARK, DON'T RECOVER: the plunge dies on entry (kBounce
-      // = 0 above), then heavy water drag lets the pot glide the last few
-      // centimetres down to its rest line and STOP. No buoyancy, no bob, no
-      // righting: it keeps the orientation it landed in and never moves
-      // again. The hull stays visibly parked at the fall position.
-      // heavy water drag kills the plunge over a few cm of depth
       p.vel.y += -0.55f * std::fabs(p.vel.y) * p.vel.y * dt;
       p.vel.y *= 1.0f - std::fmin(4.5f * dt, 0.9f);
-      // lateral drag: the cavity grabs the pot
       p.vel.x *= 1.0f - std::fmin(kDragWater * dt, 0.9f);
       p.vel.z *= 1.0f - std::fmin(kDragWater * dt, 0.9f);
-      // slow residual yaw/pitch drift while settling, then rest (no spring:
-      // no righting torque — the pot KEEPS its landed orientation)
       p.yawVel *= 1.0f - std::fmin(1.6f * dt, 0.9f);
       p.yaw += p.yawVel * dt;
       p.pitchVel *= 1.0f - std::fmin(1.6f * dt, 0.9f);
@@ -1295,13 +970,8 @@ static void UpdatePhysicsStep(double now, float dt) {
     }
 
     p.pos = Vec3Add(p.pos, Vec3Scale(p.vel, dt));
-    // rest line: a little deeper than the entry plane, so the pot visibly
-    // settles INTO the water but keeps most of its hull above the surface
-    // (mesh is base-normalized: its lowest vertex sits at pos.y, hull top
-    // reaches ~+0.6x its scale above the waterline when parked)
     float restY = kWaterLevel - 0.45f * p.radius;
     if (p.pos.y < restY) {
-      // parked: freeze at the fall position forever (BUILD-D5)
       p.pos.y = restY;
       if (p.vel.y < 0.0f) p.vel.y = 0.0f;
       p.vel.x = 0.0f;
@@ -1310,9 +980,6 @@ static void UpdatePhysicsStep(double now, float dt) {
       p.pitchVel = 0.0f;
       p.settled = true;
     }
-    // BUILD-D7 POST-IMPACT BOIL: for ~2.5 s after the splash the collapsed
-    // cavity keeps outgassing — small weak rings pop across the impact area
-    // like the surface is boiling, then the pool goes glassy again.
     if (p.settled && now - p.splashTime < 2.5 && now >= p.nextBoil) {
       p.nextBoil = now + 0.22;
       float ba = (float)((int)(now * 137.0) % 360) * 0.0174532925f;
@@ -1322,13 +989,6 @@ static void UpdatePhysicsStep(double now, float dt) {
     }
   }
 }
-
-// per-frame entry: accumulate real time, advance fixed substeps.
-// BUILD-D6 FIX: the substeps must carry REAL absolute timestamps — the pot
-// spawn check (now - gStartTime >= spawnAt) compares against the scene
-// clock, and feeding the steps a hardcoded 0.0 meant no teapot EVER spawned
-// (empty pool, no splashes, no rings — the D4/D5 screenshots in a nutshell).
-// Each substep now gets a monotonic timestamp ending exactly at `now`.
 static void UpdatePhysics(double now, double frameDt) {
   if (frameDt > 0.1) frameDt = 0.1;
   gSimTime += frameDt;
@@ -1339,7 +999,6 @@ static void UpdatePhysics(double now, double frameDt) {
   }
 }
 
-// ------------------------------------------------------------------- scene gl
 static SDL_Window *gWindow = nullptr;
 static SDL_GLContext gContext = nullptr;
 static int gWindowWidth = WIDTH, gWindowHeight = HEIGHT;
@@ -1352,22 +1011,18 @@ static Vec3 gCamPos{0.0f, 2.6f, 7.2f};
 static float gCamYaw = 0.0f, gCamPitch = -0.28f;
 static bool gAutoCam = true;
 static float gCamDist = 7.2f;
-
-// results screen + fused-run plumbing (same pattern as scene2.cxx)
 static bool gResultsShown = false;
 static double gResultsElapsed = 0.0, gResultsFps = 0.0, gResultsScore = 0.0;
 static double gResultsShownAt = 0.0;
 static const double kResultsScreenSeconds = 4.0;
 static const char *gSceneName = "Scene 3";
-double gFusedPoolScore = 0.0;   // read by main.cxx for the combined screen
+double gFusedPoolScore = 0.0; 
 static bool gFusedDone = false;
 static bool gStandaloneScene = false;
 static int gFrame = 0, gFps = 0, gFrameAccum = 0;
 static double gFpsTimer = 0.0;
 static double gSmoothFps = 0.0;
 static bool gQuit = false;
-
-// headless visual-test state
 static const char *gScreenshotPath = nullptr;
 static std::vector<float> gShotTimes;
 static size_t gNextShot = 0;
@@ -1378,20 +1033,14 @@ static int gHudVertexFloats = 0;
 
 // ------------------------------------------------------------- camera path
 static void UpdateAutoCamera(float t) {
-  // Slow orbit focused on the splash field. The camera NEVER chases the
-  // falling fleet: when wave two opens up on the outer ring (~11s) it drifts
-  // gently back along a smooth ramp, but stays at plane level — the drops
-  // fall INTO frame, the camera does not rise or pitch up after them.
   float a = 0.32f + t * 0.055f;
   float spread = t > 11.0f ? std::fmin((t - 11.0f) * 0.35f, 1.6f) : 0.0f;
-  // BUILD-P30: gCamPullback is the fleet-driven beat — it widens the orbit by
-  // one step per falling pot and returns to 0 for the synchronized resplash.
   float radius = 7.6f + std::sin(t * 0.07f) * 1.1f + spread + gCamPullback;
   gCamPos.x = std::cos(a) * radius;
   gCamPos.z = std::sin(a) * radius;
   gCamPos.y = 2.9f + std::sin(t * 0.045f) * 0.7f + spread * 0.10f +
               gCamPullback * 0.12f;
-  gCamYaw = std::atan2(-gCamPos.x, -gCamPos.z); // look at the centre
+  gCamYaw = std::atan2(-gCamPos.x, -gCamPos.z);
   gCamPitch = -0.30f + 0.06f * std::sin(t * 0.03f);
 }
 
@@ -1401,11 +1050,10 @@ static Vec3 OrbitCamPos() {
   pos.x = gCamPos.x + std::sin(gCamYaw) * cp * gCamDist;
   pos.y = gCamPos.y + sp * gCamDist;
   pos.z = gCamPos.z + std::cos(gCamYaw) * cp * gCamDist;
-  if (pos.y < 0.35f) pos.y = 0.35f; // never dive under the water
+  if (pos.y < 0.35f) pos.y = 0.35f;
   return pos;
 }
 
-// ------------------------------------------------------------------- HUD
 static void BuildFontAtlas() {
   std::vector<unsigned char> px((size_t)kFontAtlasW * kFontAtlasH * 4);
   FontAtlasFillRGBA(px.data(), px.size());
@@ -1463,9 +1111,6 @@ static void RenderText(float x, float y, const char *text, float scale = 2.0f) {
 }
 
 static void RenderHUD() {
-  // build tag: on-screen proof of which splash code the exe runs (the splash
-  // look changed massively across commits — stale-build screenshots must be
-  // detectable at a glance)
   char line1[128];
   std::snprintf(line1, sizeof(line1), "FPS: %d   Scene 3   build D9", gFps);
   RenderText(16.0f, 16.0f, line1);
@@ -1489,7 +1134,6 @@ static void RenderResults() {
   RenderText(cx - (float)std::strlen(hint) * 8.0f, cy + 64.0f, hint);
 }
 
-// -------------------------------------------------------------- render passes
 static Mat4 gProj;
 
 static void DrawSky(const Mat4 &view, const Vec3 &eye, double timeSec) {
@@ -1497,11 +1141,10 @@ static void DrawSky(const Mat4 &view, const Vec3 &eye, double timeSec) {
   Mat4Multiply(vp, gProj, view);
   glDisable(GL_DEPTH_TEST);
   glDepthMask(GL_FALSE);
-  glDisable(GL_CULL_FACE); // camera is inside the dome
+  glDisable(GL_CULL_FACE);
   glUseProgram(gSkyProg.handle);
   glBindVertexArray(gDomeMesh.vao);
   glUniformMatrix4fv(gSkyProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
-  // model = translate(eye) * scale(domeRadius)
   {
     Mat4 m;
     Mat4Identity(m);
@@ -1538,13 +1181,7 @@ static void DrawWater(const Mat4 &view, const Vec3 &eye, double timeSec) {
   glUniform3f(gWaterProg.loc("uTileA"), kTileA[0], kTileA[1], kTileA[2]);
   glUniform3f(gWaterProg.loc("uTileB"), kTileB[0], kTileB[1], kTileB[2]);
   glUniform1f(gWaterProg.loc("uTime"), (float)timeSec);
-  // gRings is exactly MAX_RINGS x (x, z, radius, strength) — upload it flat.
-  // Unused slots carry strength 0 and the shader skips them.
   glUniform4fv(gWaterProg.loc("uRings"), MAX_RINGS, &gRings[0].x);
-  // BUILD-D7: stream the ACTUAL hulls and live splashes so the water can
-  // paint real contact foam + anchored reflections (see water_frag.glsl).
-  // The old analytic ghost darkened grazing water without knowing where any
-  // pot was; these uniforms carry per-pot truth instead.
   static GLfloat hullData[kFleetCount * 4];
   static GLfloat splashData[kFleetCount * 4];
   for (int i = 0; i < kFleetCount; i++) {
@@ -1573,9 +1210,6 @@ static void DrawWater(const Mat4 &view, const Vec3 &eye, double timeSec) {
   }
   glUniform4fv(gWaterProg.loc("uHulls"), kFleetCount, hullData);
   glUniform4fv(gWaterProg.loc("uSplashes"), kFleetCount, splashData);
-  // BUILD-D8: subsurface bubble plumes — xy = bubble xz, z = depth below
-  // the surface (m), w = radius (m). Dead/empty slots carry depth 0 and
-  // the shader skips them.
   static GLfloat bubbleData[MAX_BUBBLES * 4];
   for (int i = 0; i < MAX_BUBBLES; i++) {
     if (i < (int)gBubbles.size()) {
@@ -1606,15 +1240,13 @@ static void DrawTeapot(const Mat4 &view, const Vec3 &eye, const TeapotPhysics &p
   Mat4Multiply(vp, gProj, view);
   Vec3 pos = pot.pos;
   if (reflectionPass) {
-    pos.y = 2.0f * kWaterLevel - pos.y; // mirror the anchor about the plane
-    pos.x += wobble[0];                 // ripple shear: the image wobbles as
-    pos.z += wobble[1];                 // the pot's own rings pass under it
+    pos.y = 2.0f * kWaterLevel - pos.y; 
+    pos.x += wobble[0];                
+    pos.z += wobble[1];                
   }
   Mat4 model;
   Mat4Model(model, pos, pot.yaw, scale, pot.pitch);
   if (reflectionPass) {
-    // Mirror the geometry itself: M' = M * diag(1,-1,1), i.e. negate the
-    // second column (column-major). This flips winding — culling stays off.
     model[4] = -model[4];
     model[5] = -model[5];
     model[6] = -model[6];
@@ -1624,9 +1256,6 @@ static void DrawTeapot(const Mat4 &view, const Vec3 &eye, const TeapotPhysics &p
 
   glUseProgram(gTeapotProg.handle);
   glBindVertexArray(gTeapotMesh.vao);
-  // Culling disabled for the teapot: user-supplied OBJs often mix winding
-  // orders, and a single flipped face punches a visible hole in the model.
-  // The reflection pass needs this too (mirroring flips winding).
   glDisable(GL_CULL_FACE);
   glUniformMatrix4fv(gTeapotProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
   glUniformMatrix4fv(gTeapotProg.loc("uModel"), 1, GL_FALSE, model.data());
@@ -1642,7 +1271,7 @@ static void DrawTeapot(const Mat4 &view, const Vec3 &eye, const TeapotPhysics &p
   glUniform1i(gTeapotProg.loc("uBaseColor"), 0);
   glDrawElements(GL_TRIANGLES, gTeapotMesh.indexCount, GL_UNSIGNED_INT, nullptr);
   glBindVertexArray(0);
-  if (!reflectionPass) glEnable(GL_CULL_FACE); // the reflection caller restores
+  if (!reflectionPass) glEnable(GL_CULL_FACE);
 }
 
 static void DrawFleet(const Mat4 &view, const Vec3 &eye, bool reflectionPass,
@@ -1652,14 +1281,6 @@ static void DrawFleet(const Mat4 &view, const Vec3 &eye, bool reflectionPass,
     DrawTeapot(view, eye, gPots[i], kFleetScale[i], reflectionPass,
                reflectionPass ? nullptr : zero, (float)now);
 }
-
-// ---- reflected teapots: 2D black ghosts ----------------------------------
-// The old pass re-rendered the fleet mirrored about the water plane and
-// alpha-blended it — a 3D ceramic pot swimming underwater, which is NOT what
-// a real reflection looks like. The water shader now paints each pot as a
-// 2D black silhouette: a smeared upright ghost anchored at the pot's base,
-// drowned by the water body and broken apart by the ripple field.
-
 static void DrawCrowns(const Mat4 &view, double now) {
   bool any = false;
   for (int i = 0; i < kFleetCount; i++) any = any || gCrowns[i].active || gJets[i].active;
@@ -1673,20 +1294,15 @@ static void DrawCrowns(const Mat4 &view, double now) {
   glUniform3f(gSplashProg.loc("uEyePos"), gCamPos.x, gCamPos.y, gCamPos.z);
   glUniform3f(gSplashProg.loc("uLightDir"), kLightDir[0], kLightDir[1], kLightDir[2]);
   glUniform3f(gSplashProg.loc("uLightTint"), kLightTint[0], kLightTint[1], kLightTint[2]);
-  // splash films are POOL WATER now: bright surface blue / deep body blue
   glUniform3f(gSplashProg.loc("uWaterA"), 0.30f, 0.62f, 0.86f);
   glUniform3f(gSplashProg.loc("uWaterB"), 0.030f, 0.180f, 0.320f);
   glUniform3f(gSplashProg.loc("uTileA"), kTileA[0], kTileA[1], kTileA[2]);
   glUniform3f(gSplashProg.loc("uTileB"), kTileB[0], kTileB[1], kTileB[2]);
   glUniform1f(gSplashProg.loc("uTime"), (float)now);
   glDepthMask(GL_FALSE);
-  glDisable(GL_CULL_FACE); // the sheet is seen from both sides
+  glDisable(GL_CULL_FACE);
   glEnable(GL_BLEND);
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-  // BUILD-D4: draw the translucent sheets BACK-TO-FRONT (18 unsorted
-  // alpha sheets composite differently depending on draw order — the
-  // old arbitrary order occasionally stacked near sheets over far ones
-  // and thickened the far-field wash).
   int order[kFleetCount];
   float dist[kFleetCount];
   int n = 0;
@@ -1697,7 +1313,7 @@ static void DrawCrowns(const Mat4 &view, double now) {
     dist[n] = dx * dx + dz * dz;
     order[n++] = i;
   }
-  for (int a = 1; a < n; a++) {                 // insertion sort: n<=18
+  for (int a = 1; a < n; a++) {                 
     int v = order[a];
     float dv = dist[a];
     int b = a - 1;
@@ -1715,24 +1331,15 @@ static void DrawCrowns(const Mat4 &view, double now) {
     glUniform1f(gSplashProg.loc("uRadius"), c.radius);
     glUniform1f(gSplashProg.loc("uHeight"), c.height);
     glUniform1f(gSplashProg.loc("uSpike"), c.spike);
-    // Per-pot spike animation phase so nine crowns don't pulse in lockstep.
     glUniform1f(gSplashProg.loc("uPhase"), (float)i * 1.7f);
     glUniform1f(gSplashProg.loc("uJet"), 0.0f);
     glDrawElements(GL_TRIANGLES, gCrownVertexCount, GL_UNSIGNED_INT, nullptr);
   }
-  // WORTHINGTON JET CONES: the central column erupting through each crown's
-  // middle — the element every real splash has that a lone ring lacks
-  // (high-speed footage: crown first, then the Rayleigh jet spikes up
-  // through it, shedding droplets). The crown mesh doubles as the jet cone
-  // via uJet=1 in the fragment shader; the sprite jets below add the
-  // droplet texture around it.
   for (int k = 0; k < n; k++) {
     const int i = order[k];
     const JetColumn &jet = gJets[i];
     if (!jet.active || jet.height <= 0.02f) continue;
     glUniform3f(gSplashProg.loc("uCenter"), jet.center.x, jet.center.y, jet.center.z);
-    // DE-CLOUD: slim translucent column — the old +0.10/×1.15/spike-0.9
-    // cone rendered as a fat envelope wider than the pot itself
     glUniform1f(gSplashProg.loc("uRadius"), jet.radius + 0.02f);
     glUniform1f(gSplashProg.loc("uHeight"), jet.height * 1.02f);
     glUniform1f(gSplashProg.loc("uSpike"), 0.55f);
@@ -1753,10 +1360,6 @@ static void DrawJets(const Mat4 &view, const Vec3 &eye) {
   for (int i = 0; i < kFleetCount; i++)
     if (gJets[i].active && gJets[i].height > 0.01f) any = true;
   if (!any) return;
-  // The Rayleigh jet: a thin vertical column rising from the collapse point.
-  // Drawn as two crossed columns of overlapping droplet billboards, which
-  // visually merge into a 3D column from every angle. Zero stretch (velocity
-  // 0) so the sprite shader just stamps round water blobs.
   static std::vector<float> jbuf;
   jbuf.clear();
   for (int p = 0; p < kFleetCount; p++) {
@@ -1764,19 +1367,15 @@ static void DrawJets(const Mat4 &view, const Vec3 &eye) {
     if (!jet.active || jet.height <= 0.01f) continue;
     Vec3 toCam = Vec3Normalize(Vec3Sub(eye, jet.center));
     float a = std::atan2(toCam.x, toCam.z);
-    // BUILD-D4: dimmer sprite jet — the shader cone (DrawCrowns) carries the
-    // column now; the billboards only add droplet texture at the base
     const float fade = std::fmin(1.0f, 1.3f - jet.life * 0.3f) * 0.50f;
     const float halfW = jet.radius;
     for (int pass = 0; pass < 2; pass++) {
       float aa = a + pass * 1.5707963f;
       (void)aa;
-      // stack overlapping billboards up the column so the sprites merge into
-      // a solid water column (2 crossed layers, anchors each = 96 tris)
       const int kSteps = 6;
       for (int i = 0; i <= kSteps; i++) {
         float sy = (float)i / kSteps;
-        float taper = 1.0f - 0.35f * sy; // column thins as it rises
+        float taper = 1.0f - 0.35f * sy;
         float px = jet.center.x;
         float py = jet.center.y + sy * jet.height;
         float pz = jet.center.z;
@@ -1785,7 +1384,7 @@ static void DrawJets(const Mat4 &view, const Vec3 &eye) {
         for (int ci = 0; ci < 6; ci++) {
           const float *c = corners[quadIdx[ci]];
           jbuf.push_back(px); jbuf.push_back(py); jbuf.push_back(pz);
-          jbuf.push_back(0.0f); jbuf.push_back(0.0f); jbuf.push_back(0.0f); // no stretch
+          jbuf.push_back(0.0f); jbuf.push_back(0.0f); jbuf.push_back(0.0f);
           jbuf.push_back(c[0]); jbuf.push_back(c[1]);
           jbuf.push_back(halfW * taper);
           jbuf.push_back(fade);
@@ -1819,15 +1418,9 @@ static void DrawJets(const Mat4 &view, const Vec3 &eye) {
 static void DrawDroplets(const Mat4 &view, const Vec3 &eye) {
   (void)eye;
   if (gDroplets.empty()) return;
-
-  // stream per-droplet 10 floats: pos3, vel3, corner uv2, radius+bright2
   static std::vector<float> buf;
   buf.clear();
   for (const Droplet &d : gDroplets) {
-    // BUILD-P15: a strand still in its staging delay has NOT been torn off
-    // the sheet yet. Drawing it would stamp a frozen blob at the release
-    // point — i.e. exactly the "cylinders hanging in the air" class of bug,
-    // in a different uniform. Staged strands are simply not submitted.
     if (d.delay > 0.0f) continue;
     float bright = std::fmin(1.0f, d.life / d.maxLife * 1.4f);
     const float corners[4][2] = {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}};
@@ -1884,32 +1477,16 @@ static void RenderScene() {
   if (lastFrame < 0.0) lastFrame = now;
   double dt = now - lastFrame;
   lastFrame = now;
-  if (dt > 0.1) dt = 0.1; // clamp hitches so physics never tunnels
-
-  // BUILD-P20: SCENE 3 IS NOW REPRODUCIBLE. BUILD-D8 moved the screenshot
-  // gate onto the simulation clock but left every DRAW reading the wall
-  // clock, so uTime — and therefore the dome's checker drift, its caustics,
-  // the water's ripple phases and the hull-foam ramp — was a function of how
-  // fast the machine happened to be. Two runs of the identical binary at the
-  // identical flag came out differing on 96% of pixels, max channel
-  // difference 248 (see REFERENCES.md BUILD-P19). That is not merely
-  // untidy: it makes the scene impossible to A/B, so every realism change
-  // here would have been unfalsifiable. Everything below the physics driver
-  // now runs on the simulation clock; `now` stays only where real elapsed
-  // time is genuinely wanted (frame dt, the results screen).
+  if (dt > 0.1) dt = 0.1;
   const double simNow = gSimTime;
   UpdatePhysics(simNow, dt);
-  UpdateChoreography(simNow, dt); // BUILD-P30: fall -> return -> resplash
+  UpdateChoreography(simNow, dt); 
 
-  if (gAutoCam) UpdateAutoCamera((float)gSimTime);  // SIM time: framing stays
-                                                    // deterministic at any FPS
+  if (gAutoCam) UpdateAutoCamera((float)gSimTime);  
   Vec3 eye = gAutoCam ? gCamPos : OrbitCamPos();
 
   Mat4 view;
   {
-    // Gaze: level with the splash field. Pot positions are counted in PLAN
-    // VIEW ONLY (x/z, height flattened) — otherwise airborne pots drag the
-    // whole view up to follow the drop and the surface falls out of frame.
     Vec3 acc{0.0f, 0.0f, 0.0f};
     int n = 0;
     for (int i = 0; i < kFleetCount; i++) {
@@ -1931,18 +1508,16 @@ static void RenderScene() {
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 
   DrawSky(view, eye, simNow);
-  DrawFleet(view, eye, false, simNow);  // pots above the surface
-  DrawWater(view, eye, simNow);   // opaque water covers the submerged parts;
-                                    // its shader now paints the reflected pots
-                                    // as 2D black ghost silhouettes
+  DrawFleet(view, eye, false, simNow);  
+  DrawWater(view, eye, simNow);  
   DrawCrowns(view, simNow);
   DrawJets(view, eye);
   DrawDroplets(view, eye);
   RenderHUD();
 
   if (gScreenshotPath && gNextShot < gShotTimes.size() &&
-      gSimTime >= (double)gShotTimes[gNextShot]) {   // SIM seconds (D8 harness fix)
-    WriteScreenshotPPM(gScreenshotPath);   // %d targets advance per shot
+      gSimTime >= (double)gShotTimes[gNextShot]) {   
+    WriteScreenshotPPM(gScreenshotPath);   
     gNextShot++;
     if (gNextShot >= gShotTimes.size()) {
       SDL_Quit();
@@ -1964,9 +1539,6 @@ static void RenderScene() {
     std::snprintf(title, sizeof(title), "%s - FPS : %d", NAME, gFps);
     SDL_SetWindowTitle(gWindow, title);
   }
-  // BUILD-D8 harness fix: in screenshot mode the shot list IS the run length —
-  // never cut the window at 45 wall-seconds while the sim is still crawling
-  // (llvmpipe used to strand the last shots; the user's real GPU is unaffected).
   if (gShotTimes.empty() &&
       (now - gStartTime) * 1000.0 >= (double)BENCH_MILLISECONDS) {
     double elapsed = now - gStartTime;
@@ -2030,9 +1602,6 @@ int PoolSceneParseArgs(int argc, char **argv) {
 }
 
 void PoolSceneSetScreenshot(const char *path) { gScreenshotPath = path; }
-// BUILD-P21: --shot-time S (singular) is main.cxx's documented one-frame flag
-// but only --shot-times ever reached this scene, so the singular form set the
-// path with an EMPTY list and was silently ignored. See scene2.cxx.
 void PoolSceneSetShotTime(float t) {
   if (gShotTimes.empty()) gShotTimes.push_back(t);
 }
@@ -2045,9 +1614,6 @@ static void WriteScreenshotPPM(const char *path) {
   glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, rgb.data());
   char resolved[1024];
   if (std::strchr(path, '%')) {
-    // printf-style frame-sequence target (e.g. frames/frame-%03d.ppm) so the
-    // headless flags can also capture ANIMATED sequences: each call writes
-    // frame 000, 001, 002... which assemble into GIF/MP4 showcase clips.
     std::snprintf(resolved, sizeof(resolved), path, gNextShot);
     path = resolved;
   }
@@ -2097,7 +1663,6 @@ static void Setup() {
   glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void *)(8 * sizeof(float)));
   glBindVertexArray(0);
 
-  // ---- crown splash mesh: a unit ring sheet (angle x height-param grid) ----
   {
     const int kSeg = 96, kRows = 5;
     std::vector<float> ring;
@@ -2105,9 +1670,9 @@ static void Setup() {
     for (int r = 0; r <= kRows; r++) {
       float hp = (float)r / kRows;
       for (int s = 0; s <= kSeg; s++) {
-        ring.push_back((float)s / kSeg); // angle 0..1
-        ring.push_back(hp);              // height param
-        ring.push_back(1.0f);            // radius scale (unused slot)
+        ring.push_back((float)s / kSeg); 
+        ring.push_back(hp);              
+        ring.push_back(1.0f);            
         ring.push_back(0.0f);
       }
     }
@@ -2135,8 +1700,6 @@ static void Setup() {
     glBindVertexArray(0);
     (void)cebo;
   }
-
-  // ---- jet VAO (streamed, same 10-float layout as the droplets) ----
   glGenVertexArrays(1, &gJetVao);
   glGenBuffers(1, &gJetVbo);
   glBindVertexArray(gJetVao);
@@ -2194,11 +1757,6 @@ int RunPoolScene(bool *gaveUpOut) {
   gWindowWidth = winW;
   gWindowHeight = winH;
 
-  // BUILD-P10: 4x MSAA. The room is full of thin geometry (crown walls, jets,
-  // droplets, the teapot silhouette against a hard red/white tile edge) and
-  // every one of those edges is a stair-step without coverage antialiasing.
-  // A driver that refuses the request is retried without it rather than
-  // dropping the scene.
   bool msaa = true;
   for (int attempt = 0; attempt < 2; attempt++) {
     SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, msaa ? 1 : 0);
@@ -2223,15 +1781,6 @@ int RunPoolScene(bool *gaveUpOut) {
     if (gaveUpOut) *gaveUpOut = true;
     return 1;
   }
-  // BUILD-P24: FULLSCREEN_DESKTOP, not FULLSCREEN. Exclusive fullscreen hands the
-  // display to the OpenGL driver and the window stops being an ordinary top-level
-  // window, so the desktop compositor has nothing to composite -- and Win+PrtScr
-  // captures the composited desktop, which came out black. Borderless
-  // fullscreen still fills the screen but stays a normal window, so the capture
-  // path works. It also sizes the window to the desktop rather than to the
-  // requested 1280x720, so the drawing size has to be read back: the HUD and
-  // the projection both use gWindowWidth/gWindowHeight, and left at 720p on a
-  // 1080p desktop the scene would be drawn into one corner.
   if (!gWindowedMode) {
     int dw = gWindowWidth, dh = gWindowHeight;
     SDL_GetWindowSize(gWindow, &dw, &dh);
@@ -2244,9 +1793,6 @@ int RunPoolScene(bool *gaveUpOut) {
   int samples = 0;
   SDL_GL_GetAttribute(SDL_GL_SAMPLES, &samples);
   std::printf("Antialiasing: %dx MSAA%s\n", samples, samples > 1 ? "" : " (unavailable)");
-  // BUILD-P25: report the real presentation mode, so "the screenshot is black"
-  // can be told apart into a stale build vs a capture tool that cannot grab the
-  // compositor.
   std::printf("Display: %s %dx%d | capture with Win+PrtScr, or --screenshot FILE\n",
               gWindowedMode ? "windowed" : "borderless fullscreen",
               gWindowWidth, gWindowHeight);
@@ -2265,10 +1811,8 @@ int RunPoolScene(bool *gaveUpOut) {
 
   gStartTime = NowSeconds();
   gFpsTimer = gStartTime;
-  gSimTime = 0.0;      // D8 harness fix: screenshot times are SIM seconds
+  gSimTime = 0.0;      
   gPhysicsAccum = 0.0;
-  // P30: start the flyover act from its base orbit, phase 0, so a re-entry
-  // never inherits a half-finished fall/return/resplash cycle.
   gCamPullback = 0.0f;
   gPhase = 0;
   gPhaseT = 0.0;
