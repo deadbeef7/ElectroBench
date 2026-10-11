@@ -18,8 +18,12 @@
 // ===========================================================================
 #include <vitasdk.h>
 
+#include <psp2/io/fcntl.h>
+#include <psp2/kernel/sysmem.h>
+
 #include <cstdarg>
 #include <cstdio>
+#include <cstring>
 
 // --------------------------------------------------------------- scene entries
 // Same signatures main.cxx declares for the desktop build.
@@ -36,7 +40,38 @@ bool gWindowedMode = false;
 // (START) rather than just the end of the current scene (SELECT).
 extern "C" int VitaPortQuitRequested(void);
 
+// Persistent crash log: the VitaShell console cannot be read after the process
+// dies, so VitaLog also appends to ux0:/data/ELEB00002/spinlog.txt. Homebrew can
+// write ux0:/data without extra permissions, and the file survives a crash —
+// pull it out of VitaShell after the run and the last logged line says how far
+// the port got.
 namespace {
+
+int gLogFile = -1;
+
+void LogOpenLocked(void) {
+  if (gLogFile >= 0) return;
+  sceIoMkdir("ux0:/data/ELEB00002", 0777);
+  gLogFile = sceIoOpen("ux0:/data/ELEB00002/spinlog.txt",
+                       SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0777);
+}
+
+void LogLine(const char *line) {
+  sceClibPrintf("%s\n", line);
+  if (gLogFile >= 0) {
+    sceIoWrite(gLogFile, line, std::strlen(line));
+    sceIoWrite(gLogFile, "\n", 1);
+  }
+}
+
+void LogClose(void) {
+  if (gLogFile >= 0) {
+    sceIoClose(gLogFile);
+    gLogFile = -1;
+  }
+}
+
+}  // namespace
 
 void VitaLog(const char *fmt, ...) {
   char buf[512];
@@ -44,10 +79,17 @@ void VitaLog(const char *fmt, ...) {
   va_start(ap, fmt);
   vsnprintf(buf, sizeof(buf), fmt, ap);
   va_end(ap);
-  // Visible through the VitaShell / Vita3K debug console; the scenes' own
-  // printf output goes to the same place.
-  sceClibPrintf("%s", buf);
+  LogOpenLocked();
+  LogLine(buf);
+  // Flush to disk immediately: the process may die right after this line, and
+  // the file is the only trace that survives.
+  if (gLogFile >= 0) {
+    sceIoClose(gLogFile);
+    gLogFile = -1;
+  }
 }
+
+namespace {
 
 bool LTriggerHeld(void) {
   SceCtrlData pad;
@@ -63,19 +105,21 @@ int main(int argc, char **argv) {
   (void)argv;
 
   const bool startWithPoles = LTriggerHeld();
-  VitaLog("ElectroBench (Vita port): scenes 2 and 4, starting with scene %d\n",
+  VitaLog("ElectroBench (Vita port): scenes 2 and 4, starting with scene %d",
           startWithPoles ? 4 : 2);
 
   const int order[2] = {startWithPoles ? 4 : 2, startWithPoles ? 2 : 4};
   for (int i = 0; i < 2; i++) {
     bool gaveUp = false;
     const int scene = order[i];
-    VitaLog("--- scene %d ---\n", scene);
+    VitaLog("--- scene %d ---", scene);
     const int rc = (scene == 2) ? RunOceanScene(&gaveUp) : RunPoleScene(&gaveUp);
-    VitaLog("scene %d returned %d%s\n", scene, rc, gaveUp ? " (gave up)" : "");
+    VitaLog("scene %d returned %d%s", scene, rc, gaveUp ? " (gave up)" : "");
     if (VitaPortQuitRequested()) break;
   }
 
+  VitaLog("process exit (all scenes done or quit requested)");
+  LogClose();
   sceKernelExitProcess(0);
   return 0;
 }

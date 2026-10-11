@@ -16,6 +16,7 @@
 #include <vitaGL.h>
 
 #include <psp2/ctrl.h>
+#include <psp2/io/fcntl.h>
 #include <psp2/kernel/processmgr.h>
 #include <psp2/kernel/threadmgr.h>
 #include <psp2/power.h>
@@ -45,6 +46,26 @@ int gSwapInterval = 0;
 bool gInitialised = false;
 bool gGlReady = false;
 char gError[256] = {0};
+
+// Frame logging: every 30 swaps one line lands in the persistent ux0:/data log
+// (file opened on demand here, mirroring vita_main.cxx), so after a hard exit
+// the on-device log says the exact frame count the loop reached.
+int gFramesSinceLog = 0;
+unsigned long gFrameTotal = 0;
+
+void PortLogFrame(void) {
+  gFramesSinceLog++;
+  gFrameTotal++;
+  if (gFramesSinceLog < 30) return;
+  gFramesSinceLog = 0;
+  SceUID f = sceIoOpen("ux0:/data/ELEB00002/frames.txt",
+                       SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0777);
+  if (f < 0) return;  // log dir may not exist yet; scene log lines create it
+  char line[64];
+  std::snprintf(line, sizeof(line), "swapped %lu frames\n", gFrameTotal);
+  sceIoWrite(f, line, std::strlen(line));
+  sceIoClose(f);
+}
 
 // Pad state for edge detection. gPrevValid stays false until the first poll so
 // that a button held from launch (e.g. L, which picks the starting scene) is not
@@ -158,6 +179,7 @@ void SDL_GL_DeleteContext(SDL_GLContext context) { (void)context; }
 void SDL_GL_SwapWindow(SDL_Window *window) {
   (void)window;
   vglSwapBuffers(GL_FALSE);
+  PortLogFrame();
 }
 
 int SDL_GL_SetSwapInterval(int interval) {
