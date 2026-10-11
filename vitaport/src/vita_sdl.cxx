@@ -20,10 +20,25 @@
 #include <psp2/kernel/processmgr.h>
 #include <psp2/kernel/threadmgr.h>
 #include <psp2/power.h>
+#include <psp2/kernel/sysmem.h>
 
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+
+// Trace hook mirroring vita_main.cxx's vitaFAT-flushed log: the shim's init
+// diagnostics must also survive a hard exit, so they land in the same
+// ux0:/data/ELEB00002/spinlog.txt (first user appends every later line).
+void VitaLog(const char *fmt, ...);
+static void PortTrace(const char *fmt, ...) {
+  char buf[384];
+  va_list ap;
+  va_start(ap, fmt);
+  std::vsnprintf(buf, sizeof(buf), fmt, ap);
+  va_end(ap);
+  VitaLog("%s", buf);
+}
 
 // SDL.h only forward declares this; the one window lives here.
 struct SDL_Window {
@@ -165,10 +180,56 @@ SDL_GLContext SDL_GL_CreateContext(SDL_Window *window) {
     else if (gMsaaRequest >= 2)
       msaa = SCE_GXM_MULTISAMPLE_2X;
 
-    if (!vglInitExtended(0, kScreenW, kScreenH, 4 * 1024 * 1024, msaa)) {
+    // The one attempt that matters: vglInit* returns exactly
+    //   "already inited"  -> FALSE (never happens for us: guarded by gGlReady)
+    //   "downscaled res"  -> res_fallback, FALSE when >panel  (we are 960x544)
+    // so a FALSE here means the on-device work inside init fell apart. Trace
+    // the whole ladder + the free-memory numbers into the persistent log so a
+    // single run identifies the failing piece without a reboot dance.
+    SceKernelFreeMemorySizeInfo mem;
+    mem.size = sizeof(mem);
+    sceKernelGetFreeMemorySize(&mem);
+    PortTrace("vgl init attempt: msaa=%d free user=%u cdram=%u phycont=%u",
+              (int)msaa, mem.size_user, mem.size_cdram, mem.size_phycont);
+
+    // Cached-memory profile first: vglUseCachedMem before init is the config
+    // the vitaGL samples/game ports are actually shipped with. Its value only
+    // matters at vgl_mem_init time (inside the first vglInit*) so setting it
+    // here, just before, is the only correct place.
+    vglUseCachedMem(GL_TRUE);
+
+    // Ladder of init calls, most complete first. Each entry names itself in
+    // the log, so whichever one flips us to success is on record and the port
+    // can ship just that one and stop burning time on init side-effects.
+    struct InitStep {
+      const char *name;
+      SceGxmMultisampleMode msaa;
+      int ram_threshold;
+    };
+    const InitStep ladder[] = {
+        {"vglInitExtended(4MB,cached)", msaa, 4 * 1024 * 1024},
+        {"vglInitExtended(cached,no-msaa)", SCE_GXM_MULTISAMPLE_NONE,
+         4 * 1024 * 1024},
+        {"vglInitExtended(cached,16MB-no-msaa)", SCE_GXM_MULTISAMPLE_NONE,
+         16 * 1024 * 1024},
+    };
+    GLboolean ok = GL_FALSE;
+    const char *used = nullptr;
+    for (const InitStep &step : ladder) {
+      if (vglInitExtended(0, kScreenW, kScreenH, step.ram_threshold, step.msaa)) {
+        ok = GL_TRUE;
+        used = step.name;
+        break;
+      }
+      PortTrace("vgl init failed at %s", step.name);
+      used = step.name;
+    }
+    if (!ok) {
       SetError("vglInitExtended failed");
+      PortTrace("vgl init gave up (all ladder entries failed)");
       return nullptr;
     }
+    PortTrace("vgl init ok via %s", used);
     gGlReady = true;
   }
   return (SDL_GLContext)(void *)&gWindow;
