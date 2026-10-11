@@ -40,6 +40,19 @@ static void PortTrace(const char *fmt, ...) {
   VitaLog("%s", buf);
 }
 
+// vitaGL bridge (see vitaport/tools/build_deps.sh): our libvitaGL is built with
+// LOG_ERRORS=1 but with vgl_log redirected to this symbol, so every internal
+// diagnostic (GXM/sceGxmVsh init, shader patcher, per-pool allocs) lands in the
+// same persistent spinlog instead of the volatile VitaShell console.
+extern "C" void PRX_PRINTF_PROXY(const char *fmt, ...) {
+  char buf[384];
+  va_list ap;
+  va_start(ap, fmt);
+  std::vsnprintf(buf, sizeof(buf), fmt, ap);
+  va_end(ap);
+  VitaLog("%s", buf);
+}
+
 // SDL.h only forward declares this; the one window lives here.
 struct SDL_Window {
   int width = 0;
