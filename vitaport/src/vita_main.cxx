@@ -48,12 +48,20 @@ extern "C" int VitaPortQuitRequested(void);
 namespace {
 
 int gLogFile = -1;
+bool gLogTruncateNext = true;
 
 void LogOpenLocked(void) {
   if (gLogFile >= 0) return;
   sceIoMkdir("ux0:/data/ELEB00002", 0777);
-  gLogFile = sceIoOpen("ux0:/data/ELEB00002/spinlog.txt",
-                       SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0777);
+  // First line of a run starts the file fresh; every later VitaLog reopens in
+  // append mode. Closing per line is the crash flush (vitaFAT lands the data
+  // when the handle goes away), and reopening with TRUNC here would wipe every
+  // line but the last one — the on-device log that showed up with a single
+  // "process exit" line was exactly that bug.
+  unsigned int flags = SCE_O_WRONLY | SCE_O_CREAT |
+                       (gLogTruncateNext ? SCE_O_TRUNC : SCE_O_APPEND);
+  gLogTruncateNext = false;
+  gLogFile = sceIoOpen("ux0:/data/ELEB00002/spinlog.txt", flags, 0777);
 }
 
 void LogLine(const char *line) {
