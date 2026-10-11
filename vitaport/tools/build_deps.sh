@@ -83,7 +83,10 @@ cd vitaGL
 # otherwise draws at vglInit() (source/vgl.c: invoke_splashscreen()). The app
 # runs bare on its own scene 2/scene 4 rendering instead of showing a spinning
 # DNA logo before frame one.
-make NO_SPLASHSCREEN=1 -j"$(nproc)" install
+# LOG_ERRORS=1 routes vitaGL's shader-compiler and GXM failure paths through
+# sceClibPrintf, so a scene that dies before its first frame (the stuck-splash
+# symptom) reports the failing shader instead of hanging silently.
+make NO_SPLASHSCREEN=1 LOG_ERRORS=1 -j"$(nproc)" install
 
 echo
 echo "vitaGL + vitaShaRK installed into $VITASDK"
