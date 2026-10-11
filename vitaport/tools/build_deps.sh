@@ -79,7 +79,11 @@ if [ ! -d vitaGL ]; then
   git clone --depth 1 https://github.com/Rinnegatamante/vitaGL.git
 fi
 cd vitaGL
-make -j"$(nproc)" install
+# NO_SPLASHSCREEN=1 compiles out the animated vitaGL splashscreen the library
+# otherwise draws at vglInit() (source/vgl.c: invoke_splashscreen()). The app
+# runs bare on its own scene 2/scene 4 rendering instead of showing a spinning
+# DNA logo before frame one.
+make NO_SPLASHSCREEN=1 -j"$(nproc)" install
 
 echo
 echo "vitaGL + vitaShaRK installed into $VITASDK"
