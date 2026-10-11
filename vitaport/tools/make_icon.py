@@ -4,6 +4,10 @@
 The icon is the two ported scenes in one frame: a dusk horizon (scene 2) with
 a power-line pole and its wire sag (scene 4). Written as a plain PNG with
 zlib-compressed rows because the toolchain image has no PIL/ImageMagick.
+
+Output is an 8-bit palettized PNG (color type 3, no alpha): the Vita package
+promoter rejects truecolor PNGs during VPK install with error 0x8010113D, so
+LiveArea images must be 256-color indexed.
 """
 import struct
 import sys
@@ -57,24 +61,52 @@ def pixel(x, y):
 
 def main():
     out = sys.argv[1] if len(sys.argv) > 1 else "icon0.png"
+
+    # Sample every pixel, keep a 5-6-5-style quantization so the palettized
+    # icon stays visually faithful to the gradient.
+    palette = {}
+    indices = bytearray()
+    for y in range(H):
+        for x in range(W):
+            r, g, b = pixel(x, y)
+            key = (r >> 3, g >> 3, b >> 2)
+            idx = palette.get(key)
+            if idx is None:
+                # Reserve entry 0 as transparent-equivalent black; palette index
+                # 0 must always exist in a palettized PNG.
+                idx = len(palette) + 1 if len(palette) < 255 else 0
+                palette[key] = idx
+            indices.append(idx)
+
+    # Build the actual PLTE list from the palette dict.
+    plte = bytearray(3 * 256)
+    for key, idx in palette.items():
+        r5, g5, b6 = key
+        plte[3 * idx + 0] = (r5 << 3) | (r5 >> 2)
+        plte[3 * idx + 1] = (g5 << 3) | (g5 >> 2)
+        plte[3 * idx + 2] = (b6 << 2) | (b6 >> 4)
+    plte[0:3] = b"\x00\x00\x00"
+
     raw = bytearray()
+    pos = 0
     for y in range(H):
         raw.append(0)  # PNG filter type 0 (None) for this scanline
-        for x in range(W):
-            raw.extend(pixel(x, y))
+        raw.extend(indices[pos:pos + W])
+        pos += W
 
     def chunk(tag, data):
         return (struct.pack(">I", len(data)) + tag + data +
                 struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF))
 
     png = (b"\x89PNG\r\n\x1a\n" +
-           chunk(b"IHDR", struct.pack(">IIBBBBB", W, H, 8, 2, 0, 0, 0)) +
+           chunk(b"IHDR", struct.pack(">IIBBBBB", W, H, 8, 3, 0, 0, 0)) +
+           chunk(b"PLTE", bytes(plte)) +
            chunk(b"IDAT", zlib.compress(bytes(raw), 9)) +
            chunk(b"IEND", b""))
 
     with open(out, "wb") as f:
         f.write(png)
-    print("wrote %s (%d bytes)" % (out, len(png)))
+    print("wrote %s (%d bytes, bitdepth=8 colortype=3 palette=%d)" % (out, len(png), len(palette)))
 
 
 if __name__ == "__main__":

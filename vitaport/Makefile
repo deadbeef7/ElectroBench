@@ -85,7 +85,7 @@ $(VELF): $(ELF)
 # No -s (safe) eboot: the runtime shader compiler has to be able to load
 # libshacccg.suprx from ur0:/data, which a safe eboot cannot reach.
 $(EBOOT): $(VELF)
-	$(VITA_MAKE_FSELF) $< $@
+	$(VITA_MAKE_FSELF) -c -na $< $@
 
 $(SFO):
 	$(VITA_MKSFOEX) -s TITLE_ID=$(TITLE_ID) -d ATTRIBUTE2=12 "$(TITLE)" $@
