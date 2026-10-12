@@ -106,13 +106,25 @@ bool LTriggerHeld(void) {
   return (pad.buttons & (SCE_CTRL_LTRIGGER | SCE_CTRL_L2)) != 0;
 }
 
+// App-param override, useful in emulators and on-device launchers that cannot
+// hold a trigger at boot: Vita3K's `-Z 'start=4'` (or any param containing
+// "start=4") starts the run with scene 4.
+bool AppParamStartWithPoles(void) {
+  char param[1024] = {0};
+  if (sceAppMgrGetAppParam(param) < 0) return false;
+  // Trace non-empty params (the Vita3K --launch-uri scene picker is one) so a
+  // run log explains where the starting scene came from.
+  if (param[0]) VitaLog("app param: '%s'", param);
+  return std::strstr(param, "start=4") != nullptr;
+}
+
 }  // namespace
 
 int main(int argc, char **argv) {
   (void)argc;
   (void)argv;
 
-  const bool startWithPoles = LTriggerHeld();
+  const bool startWithPoles = LTriggerHeld() || AppParamStartWithPoles();
   VitaLog("ElectroBench (Vita port): scenes 2 and 4, starting with scene %d",
           startWithPoles ? 4 : 2);
 

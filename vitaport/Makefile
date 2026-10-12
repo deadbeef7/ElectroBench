@@ -44,11 +44,17 @@ LDFLAGS := -Wl,-q
 
 # vitaGL pulls in the rest (SceGxm, SceDisplay, the shader compiler, the
 # allocator and thread plumbing, taiHEN's kernel bridge for a couple of paths).
-LIBS := -lvitaGL -lvitashark -lmathneon \
+# SceShaccCgExt + taiHEN: the real extension library statically patches the
+# loaded SceShaccCg module to inject our intrinsic set (bit_cast and friends)
+# and re-enable extension pragmas, which the previous no-op stub destroyed —
+# that stub is why every runtime GLSL compile failed with
+# "unexpected undeclared identifier 'bit_cast'" on device and in Vita3K.
+LIBS := -lvitaGL -lvitashark -lSceShaccCgExt -lmathneon \
         -lSceGxm_stub -lSceDisplay_stub -lSceCtrl_stub -lSceSysmodule_stub \
         -lSceCommonDialog_stub -lSceAppUtil_stub -lSceAppMgr_stub \
         -lSceLibKernel_stub -lSceKernelDmacMgr_stub -lSceShaccCg_stub \
-        -lScePower_stub -lSceTouch_stub -lstdc++ -lm -lc
+        -lScePower_stub -lSceTouch_stub -lSceKernelModulemgr_stub -ltaihen \
+        -lstdc++ -lm -lc
 
 OBJS := $(BUILD)/vita_main.o $(BUILD)/vita_sdl.o $(BUILD)/scene2.o $(BUILD)/scene4.o
 
@@ -75,8 +81,11 @@ $(BUILD)/scene4.o: src/scene4.cxx
 	@mkdir -p $(BUILD)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-$(ELF): $(OBJS)
-	$(CXX) $(LDFLAGS) $^ $(LIBS) -o $@
+# libvitaGL.a is a prerequisite so a rebuilt/patched vitaGL (build_deps.sh or a
+# manual library fix) always relinks into the eboot — objects alone would leave
+# the VPK shipping a stale GL library.
+$(ELF): $(OBJS) $(VITASDK)/arm-vita-eabi/lib/libvitaGL.a
+	$(CXX) $(LDFLAGS) $(OBJS) $(LIBS) -o $@
 	$(TOOLPREFIX)size $@
 
 $(VELF): $(ELF)

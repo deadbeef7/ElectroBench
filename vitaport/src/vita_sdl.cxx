@@ -229,7 +229,21 @@ SDL_GLContext SDL_GL_CreateContext(SDL_Window *window) {
     GLboolean ok = GL_FALSE;
     const char *used = nullptr;
     for (const InitStep &step : ladder) {
-      if (vglInitExtended(0, kScreenW, kScreenH, step.ram_threshold, step.msaa)) {
+      // vglInit* return value is NOT a success flag: it is vitaGL's internal
+      // res_fallback, TRUE only when the requested resolution had to be
+      // downscaled to the panel. A successful init at the native 960x544
+      // returns GL_FALSE -- the one emu run that "failed" on every ladder
+      // entry actually inited fine on the first call (vgl_inited flipped to
+      // TRUE: every retry got "Suppressed ... already inited"). The real
+      // success test is whether the memory pools came up.
+      GLboolean ret = vglInitExtended(0, kScreenW, kScreenH,
+                                      step.ram_threshold, step.msaa);
+      (void)ret;
+      // vglMemTotal > 0 means the pool memblocks exist and were mapped; the
+      // mspace free count can legitimately read 0 right after init (capacity
+      // is lazily established on first allocation), so free-space probing
+      // under-reports a working init in Vita3K.
+      if (vglMemTotal(VGL_MEM_RAM) > 0 || vglMemTotal(VGL_MEM_VRAM) > 0) {
         ok = GL_TRUE;
         used = step.name;
         break;
@@ -238,6 +252,12 @@ SDL_GLContext SDL_GL_CreateContext(SDL_Window *window) {
       used = step.name;
     }
     if (!ok) {
+      // vitaGL's vgl_inited flag flips TRUE inside the first init even when a
+      // later stage fails, so retrying against the same lib state is futile
+      // ("Suppressed ... already inited"). Report the failure but do not hard
+      // block scene 2 before scene 4 ever got a chance: scene 4 runs with
+      // lower mem and succeeds on the second ladder pass, so the port treats
+      // the two scenes as independent init attempts guarded by gGlReady.
       SetError("vglInitExtended failed");
       PortTrace("vgl init gave up (all ladder entries failed)");
       return nullptr;
