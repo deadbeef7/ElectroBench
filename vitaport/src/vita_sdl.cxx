@@ -40,6 +40,18 @@ static void PortTrace(const char *fmt, ...) {
   VitaLog("%s", buf);
 }
 
+// Shot-trigger trace for the scenes (scene*.cxx calls this under
+// ELECTROBENCH_VITA); same persistent log, separate symbol so the desktop
+// build never sees it.
+void PortShotTrace(const char *fmt, ...) {
+  char buf[384];
+  va_list ap;
+  va_start(ap, fmt);
+  std::vsnprintf(buf, sizeof(buf), fmt, ap);
+  va_end(ap);
+  VitaLog("%s", buf);
+}
+
 // vitaGL bridge (see vitaport/tools/build_deps.sh): our libvitaGL is built with
 // LOG_ERRORS=1 but with vgl_log redirected to this symbol, so every internal
 // diagnostic (GXM/sceGxmVsh init, shader patcher, per-pool allocs) lands in the

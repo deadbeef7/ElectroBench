@@ -1546,6 +1546,14 @@ static void RenderScene() {
 
   if (gScreenshotPath && gNextShot < gShotTimes.size() &&
       gSimTime >= (double)gShotTimes[gNextShot]) {
+#ifdef ELECTROBENCH_VITA
+    {
+      void PortShotTrace(const char *fmt, ...);
+      PortShotTrace("shot trigger: sim=%.2f target=%.2f path=%s",
+                    gSimTime, (double)gShotTimes[gNextShot],
+                    gScreenshotPath ? gScreenshotPath : "(null)");
+    }
+#endif
     WriteScreenshotPPM(gScreenshotPath);
     gNextShot++;
     if (gNextShot >= gShotTimes.size()) {
@@ -1634,7 +1642,35 @@ static void WriteScreenshotPPM(const char *path) {
   const int w = gWindowWidth, h = gWindowHeight;
   std::vector<unsigned char> rgb((size_t)w * h * 3);
   glPixelStorei(GL_PACK_ALIGNMENT, 1);
-  glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, rgb.data());
+  // GL_RGBA/GL_UNSIGNED_BYTE hits vitaGL's fast_store memcpy path (GL_RGB goes
+  // through the GPU transfer variant, which stays black in Vita3K); the file
+  // write below drops the alpha byte again, so the PPM is identical on GL.
+#ifdef ELECTROBENCH_VITA
+#define VGL_SHOT_FORMAT GL_RGB
+#define VGL_SHOT_TYPE   GL_UNSIGNED_BYTE
+#else
+#define VGL_SHOT_FORMAT GL_RGBA
+#define VGL_SHOT_TYPE   GL_UNSIGNED_BYTE
+#endif
+  if (VGL_SHOT_FORMAT == GL_RGBA) {
+    glFinish();
+    std::vector<unsigned char> rgba((size_t)w * h * 4);
+    glReadPixels(0, 0, w, h, VGL_SHOT_FORMAT, VGL_SHOT_TYPE, rgba.data());
+    for (int i = 0; i < (int)((size_t)w * h); i++) {
+      rgb[i * 3 + 0] = rgba[i * 4 + 0];
+      rgb[i * 3 + 1] = rgba[i * 4 + 1];
+      rgb[i * 3 + 2] = rgba[i * 4 + 2];
+    }
+  } else {
+    // vitaGL: read the default FB straight through the GXM transfer path
+    // (GL_RGB/GL_UNSIGNED_BYTE); the RGBA fast_store memcpy has proven to
+    // read a stale/cleared surface in Vita3K. FRONT is the last fully
+    // presented frame — always drained, so it cannot race GXM draws.
+    glFinish();
+    glReadBuffer(GL_FRONT);
+    glReadPixels(0, 0, w, h, VGL_SHOT_FORMAT, VGL_SHOT_TYPE, rgb.data());
+    glReadBuffer(GL_BACK);
+  }
   FILE *f = std::fopen(path, "wb");
   if (!f) {
     std::fprintf(stderr, "Cannot write screenshot %s\n", path);

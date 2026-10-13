@@ -23,12 +23,21 @@
 
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 // --------------------------------------------------------------- scene entries
 // Same signatures main.cxx declares for the desktop build.
 int RunOceanScene(bool *gaveUpOut);  // scene 2 (GL 3.3 dusk ocean)
 int RunPoleScene(bool *gaveUpOut);   // scene 4 (GL 3.3 power lines)
+
+// Screenshot hooks (desktop main.cxx uses them for --shot-times driven captures).
+// On the Vita they let an emulator run dump the real framebuffer to ux0:/data
+// mid-scene without any GUI.
+void OceanSceneSetScreenshot(const char *path);
+void OceanSceneSetShotTime(float t);
+void PoleSceneSetScreenshot(const char *path);
+void PoleSceneSetShotTime(float t);
 
 // Defined by the desktop main.cxx, which is NOT part of the Vita build. The
 // scenes read it to decide whether to trust their own requested window size or
@@ -115,6 +124,23 @@ bool AppParamStartWithPoles(void) {
   // Trace non-empty params (the Vita3K --launch-uri scene picker is one) so a
   // run log explains where the starting scene came from.
   if (param[0]) VitaLog("app param: '%s'", param);
+
+  // Screenshot captures, e.g. Vita3K --launch-uri "psgm:...?shot2=12&shot4=15".
+  //"shot<N>=SECONDS" points scene N's one-shot capture at ux0:/data/ELEB00002
+  // and schedules it N virtual seconds into the scene. The scene writes the
+  // PPM itself (WriteScreenshotPPM, full 960x544 framebuffer).
+  const char *shot2 = std::strstr(param, "shot2=");
+  const char *shot4 = std::strstr(param, "shot4=");
+  if (shot2) {
+    OceanSceneSetScreenshot("ux0:/data/ELEB00002/vita_shot_scene2.ppm");
+    OceanSceneSetShotTime((float)std::atof(shot2 + 6));  // skip "shot2="
+    VitaLog("scene 2 screenshot scheduled at t=%.1f", std::atof(shot2 + 6));
+  }
+  if (shot4) {
+    PoleSceneSetScreenshot("ux0:/data/ELEB00002/vita_shot_scene4.ppm");
+    PoleSceneSetShotTime((float)std::atof(shot4 + 6));  // skip "shot4="
+    VitaLog("scene 4 screenshot scheduled at t=%.1f", std::atof(shot4 + 6));
+  }
   return std::strstr(param, "start=4") != nullptr;
 }
 
