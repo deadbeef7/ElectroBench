@@ -115,22 +115,19 @@ bool LTriggerHeld(void) {
   return (pad.buttons & (SCE_CTRL_LTRIGGER | SCE_CTRL_L2)) != 0;
 }
 
-// App-param override, useful in emulators and on-device launchers that cannot
-// hold a trigger at boot: Vita3K's `-Z 'start=4'` (or any param containing
-// "start=4") starts the run with scene 4.
-bool AppParamStartWithPoles(void) {
-  char param[1024] = {0};
-  if (sceAppMgrGetAppParam(param) < 0) return false;
-  // Trace non-empty params (the Vita3K --launch-uri scene picker is one) so a
-  // run log explains where the starting scene came from.
-  if (param[0]) VitaLog("app param: '%s'", param);
+// Launch spec, understood from the app param and from autoshot.txt below:
+//   start=4     start with scene 4 instead of scene 2
+//   shot2=<s>   capture scene 2's framebuffer s seconds in, then exit
+//   shot4=<s>   the same for scene 4 (needs start=4 to run first)
+// A shot points scene N's capture at ux0:/data/ELEB00002 and schedules it N
+// virtual seconds into the scene; the scene writes the PPM itself
+// (WriteScreenshotPPM, full 960x544 framebuffer).
+void ApplyLaunchSpec(const char *spec, bool *startWithPoles) {
+  if (!spec || !spec[0]) return;
+  if (std::strstr(spec, "start=4")) *startWithPoles = true;
 
-  // Screenshot captures, e.g. Vita3K --launch-uri "psgm:...?shot2=12&shot4=15".
-  //"shot<N>=SECONDS" points scene N's one-shot capture at ux0:/data/ELEB00002
-  // and schedules it N virtual seconds into the scene. The scene writes the
-  // PPM itself (WriteScreenshotPPM, full 960x544 framebuffer).
-  const char *shot2 = std::strstr(param, "shot2=");
-  const char *shot4 = std::strstr(param, "shot4=");
+  const char *shot2 = std::strstr(spec, "shot2=");
+  const char *shot4 = std::strstr(spec, "shot4=");
   if (shot2) {
     OceanSceneSetScreenshot("ux0:/data/ELEB00002/vita_shot_scene2.ppm");
     OceanSceneSetShotTime((float)std::atof(shot2 + 6));  // skip "shot2="
@@ -141,7 +138,39 @@ bool AppParamStartWithPoles(void) {
     PoleSceneSetShotTime((float)std::atof(shot4 + 6));  // skip "shot4="
     VitaLog("scene 4 screenshot scheduled at t=%.1f", std::atof(shot4 + 6));
   }
-  return std::strstr(param, "start=4") != nullptr;
+}
+
+// Both ways in, because the two launch paths are genuinely different: the app
+// param covers Vita3K's --launch-uri and an on-device launcher, while a plain
+// `Vita3K -r ELEB00002` (what an automated emulator run does) takes no app
+// params at all. So the run may instead drop its spec in
+// ux0:/data/ELEB00002/autoshot.txt, e.g. "start=4\nshot4=16\n", next to the
+// app's data before boot and the port picks it up from here.
+bool StartWithPolesFromLaunch(void) {
+  bool startWithPoles = false;
+
+  char param[1024] = {0};
+  if (sceAppMgrGetAppParam(param) >= 0 && param[0]) {
+    // Trace non-empty params (the Vita3K --launch-uri scene picker is one) so a
+    // run log explains where the starting scene came from.
+    VitaLog("app param: '%s'", param);
+    ApplyLaunchSpec(param, &startWithPoles);
+  }
+
+  const int fd = sceIoOpen("ux0:/data/ELEB00002/autoshot.txt", SCE_O_RDONLY, 0);
+  if (fd >= 0) {
+    char file[256] = {0};
+    const int n = sceIoRead(fd, file, sizeof(file) - 1);
+    sceIoClose(fd);
+    if (n > 0) {
+      file[n] = '\0';
+      for (int i = 0; i < n; i++)
+        if (file[i] == '\n' || file[i] == '\r') file[i] = ' ';
+      VitaLog("autoshot spec: '%s'", file);
+      ApplyLaunchSpec(file, &startWithPoles);
+    }
+  }
+  return startWithPoles;
 }
 
 }  // namespace
@@ -150,7 +179,7 @@ int main(int argc, char **argv) {
   (void)argc;
   (void)argv;
 
-  const bool startWithPoles = LTriggerHeld() || AppParamStartWithPoles();
+  const bool startWithPoles = LTriggerHeld() || StartWithPolesFromLaunch();
   VitaLog("ElectroBench (Vita port): scenes 2 and 4, starting with scene %d",
           startWithPoles ? 4 : 2);
 

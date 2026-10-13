@@ -100,17 +100,35 @@ visible in VitaShell's log or a debug console.
 
 ## Vita3K notes
 
-Verified under Vita3K (`tools/kaggle-vita3k.ipynb` workflow): both scenes run
-their full 45 s benchmark, the results screen shows, and the app exits cleanly
-(`scene 2 returned 0`, `scene 4 returned 0` in the app's persistent spinlog at
-`ux0:/data/ELEB00002/spinlog.txt`). Launch params understood by the port:
+A full run under Vita3K (`tools/kaggle-vita3k.ipynb` workflow, or
+`Vita3K --frontend sdl -B OpenGL -r ELEB00002`) takes roughly 2.5 minutes and
+ends with the app exiting cleanly: the spinlog at
+`ux0:/data/ELEB00002/spinlog.txt` shows `scene 2 returned 0` and
+`scene 4 returned 0`, `ux0:/data/ELEB00002/frames.txt` counts the presented
+frames (3330 on the last run), and each scene runs its full 45 s benchmark.
+Give the machine an idle CPU for it: the emulated shader compiler is the whole
+cost of a run (about 75 s for `sea_frag.glsl` alone), and a busy host turns
+that into minutes.
 
-* `start=4` — start with scene 4 (Vita3K: `-Z 'start=4'` or a launch URI with
-  `start=4`)
-* `shot2=<seconds>` / `shot4=<seconds>` — schedule an in-scene RGBA
-  `glReadPixels` dump to `ux0:/data/ELEB00002/vita_shot_scene{2,4}.ppm`
-  (diagnostics prove the trigger path fires; see below for why the pixel
-  export stays black under Vita3K)
+Launch specs the port understands, taken from the app param (Vita3K's
+`--launch-uri "psgm:play?titleid=ELEB00002&shot2=12"`) or, because a plain
+`-r ELEB00002` launch passes no params at all, from the file
+`ux0:/data/ELEB00002/autoshot.txt` (contents are parsed with the same tokens,
+so an automated run can drop `start=4\nshot4=16\n` next to the app data before
+booting it):
+
+* `start=4` — start with scene 4 instead of scene 2
+* `shot2=<seconds>` / `shot4=<seconds>` — schedule a one-shot RGBA
+  `glReadPixels` dump of the scene's framebuffer to
+  `ux0:/data/ELEB00002/vita_shot_scene{2,4}.ppm` and exit after writing it
+  (the emulator itself then traps on `SIGTRAP` as the app leaves the benchmark
+  early — the PPM is already on disk by then)
+
+The capture reads `GL_FRONT` (the last frame the display queue presented) with
+`GL_RGBA`/`GL_UNSIGNED_BYTE`, which is the one combination vitaGL answers with
+a plain CPU copy of the display surface; its `GL_RGB` path goes through
+`sceGxmTransferCopy`, which the emulator only stubs out and which would hand
+back an untouched buffer.
 
 ## What was verified, and what was not
 
@@ -123,18 +141,38 @@ Verified:
   `vita-elf-create`/`vita-make-fself`/`vita-pack-vpk` emit a module with
   `.sceModuleInfo.rodata`, `.sceLib.stubs`, `.sceImport.rodata` and a `SCE\0`
   SELF header.
-* End-to-end under Vita3K with the above VPK: full benchmark cycle, both
-  scenes return 0, results screen, clean exit.
-* At the time of the Vita3K runs: `ffmpeg` frame dumps plus
-  `Screenshot/PPM` results of the trigger path were **not** intested.
+* End-to-end under Vita3K with the above VPK: full benchmark cycle in both
+  scenes, 3330 frames presented, both scenes returning 0, and a clean exit.
+  Nothing in the port's own control flow (window/context, pad edge detection,
+  scene hand-over, timing, asset loading via `app0:/`) needed a workaround.
+* The `shot2=`/`shot4=` trigger path: the shot fires at its scheduled sim time
+  (`shot trigger: t=30.01 target=30.00` in the emulator log), writes a
+  `P6 960 544` PPM and exits as intended.
 
-**Not verified:** nothing was executed on a real PS Vita. In-emulator
-screenshots of the *scene pixels* remain unsolved: Vita3K's guest-side
-`glReadPixels` on the default framebuffer reads zeros (RGBA/GL_RGB/GL_FRONT
-tried; Vita3K owns the default framebuffer via `SceGxm` semantics and does not
-route it back), the `F10` host screenshot key is not wired in the SDL
-frontend, and X-window grabs of the Vita3K window return stale or blank
-content (page-flipped GL/Vulkan surface without a compositor). If a shader
-fails to compile on hardware, the app's own stderr text plus `printf`
-diagnostics come out through `sceClibPrintf`, and the first thing to try is
-`make check` after editing a shader in `shaders/`.
+**Not verified:** nothing was executed on a real PS Vita, and the scene
+*pixels* could not be captured in the emulator either. Two independent
+emulator-side limits, both measured on the current tree:
+
+* **Vita3K drops the port's draws.** The emulator re-compiles each GXP the
+  port produces at runtime (SceShaccCg -> GXP -> its own GLSL) and the
+  translation of one fragment program does not compile:
+  `0:2336(2): error: array index must be < 20`, followed by
+  `[draw]: Fail to get program!` (10437 times over one full-benchmark run,
+  4329 up to a `shot2=25` shot). Every draw that
+  uses that program is skipped, so the emulator window stays black. That is an
+  emulator-side failure on this GLSL, not the port misbehaving: the same
+  shader passes `make check`, and `docs/screenshots/scene2_ps14_t1.ppm` is a
+  desktop-GL render of exactly this scene tree.
+* **The emulator never writes the display surface back to guest memory.** The
+  guest-side readback of that surface returns exactly the zeros vitaGL writes
+  into it at init, even after a `glClear` to a known colour immediately before
+  the read, and whichever of `GL_FRONT`/`GL_BACK` is read. Vita3K keeps the
+  surface (and its cached segments) inside its renderer and only hands it to
+  the host display; `glReadPixels` from the guest cannot see it. So the
+  `vita_shot_*.ppm` dump is a hardware-only check: expect it to be black under
+  Vita3K, and to work on a console. The same emulator cache is why X-window
+  and `ffmpeg` grabs of the Vita3K window show nothing useful.
+
+If a shader fails to compile on hardware, the app's own stderr text plus
+`printf` diagnostics come out through `sceClibPrintf`, and the first thing to
+try is `make check` after editing a shader in `shaders/`.

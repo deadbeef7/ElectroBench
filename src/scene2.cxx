@@ -927,36 +927,27 @@ void OceanSceneSetStandalone(bool standalone) { gStandaloneScene = standalone; }
 
 static void WriteScreenshotPPM(const char *path) {
   const int w = gWindowWidth, h = gWindowHeight;
+  std::vector<unsigned char> rgba((size_t)w * h * 4);
   std::vector<unsigned char> rgb((size_t)w * h * 3);
+  glFinish();
   glPixelStorei(GL_PACK_ALIGNMENT, 1);
-  // GL_RGBA/GL_UNSIGNED_BYTE hits vitaGL's fast_store memcpy path (GL_RGB goes
-  // through the GPU transfer variant, which stays black in Vita3K); the file
-  // write below drops the alpha byte again, so the PPM is identical on GL.
-#ifdef ELECTROBENCH_VITA
-#define VGL_SHOT_FORMAT GL_RGB
-#define VGL_SHOT_TYPE   GL_UNSIGNED_BYTE
-#else
-#define VGL_SHOT_FORMAT GL_RGBA
-#define VGL_SHOT_TYPE   GL_UNSIGNED_BYTE
-#endif
-  if (VGL_SHOT_FORMAT == GL_RGBA) {
-    glFinish();
-    std::vector<unsigned char> rgba((size_t)w * h * 4);
-    glReadPixels(0, 0, w, h, VGL_SHOT_FORMAT, VGL_SHOT_TYPE, rgba.data());
-    for (int i = 0; i < (int)((size_t)w * h); i++) {
-      rgb[i * 3 + 0] = rgba[i * 4 + 0];
-      rgb[i * 3 + 1] = rgba[i * 4 + 1];
-      rgb[i * 3 + 2] = rgba[i * 4 + 2];
-    }
-  } else {
-    // vitaGL: read the default FB straight through the GXM transfer path
-    // (GL_RGB/GL_UNSIGNED_BYTE); the RGBA fast_store memcpy has proven to
-    // read a stale/cleared surface in Vita3K. FRONT is the last fully
-    // presented frame — always drained, so it cannot race GXM draws.
-    glFinish();
-    glReadBuffer(GL_FRONT);
-    glReadPixels(0, 0, w, h, VGL_SHOT_FORMAT, VGL_SHOT_TYPE, rgb.data());
-    glReadBuffer(GL_BACK);
+  // GL_RGBA/GL_UNSIGNED_BYTE is the one readback vitaGL answers with a plain
+  // CPU copy of the display surface (its fast_store path). GL_RGB is routed
+  // through sceGxmTransferCopy instead, which Vita3K only stubs out: that
+  // variant hands back an untouched (black) destination buffer. The alpha byte
+  // is dropped below, so the PPM matches the GL_RGB form byte for byte.
+  //
+  // FRONT is the last frame the display queue already presented, so the copy
+  // cannot race GXM draws still in flight for the current back buffer.
+  glReadBuffer(GL_FRONT);
+  glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+  glReadBuffer(GL_BACK);
+  size_t lit = 0;
+  for (size_t i = 0; i < (size_t)w * h; i++) {
+    rgb[i * 3 + 0] = rgba[i * 4 + 0];
+    rgb[i * 3 + 1] = rgba[i * 4 + 1];
+    rgb[i * 3 + 2] = rgba[i * 4 + 2];
+    if (rgba[i * 4 + 0] + rgba[i * 4 + 1] + rgba[i * 4 + 2] > 24) lit++;
   }
   FILE *f = std::fopen(path, "wb");
   if (!f) {
@@ -967,8 +958,9 @@ static void WriteScreenshotPPM(const char *path) {
   for (int y = h - 1; y >= 0; y--) 
     std::fwrite(&rgb[(size_t)y * w * 3], 1, (size_t)w * 3, f);
   std::fclose(f);
-  std::printf("Screenshot written: %s  sample0=%d sample_mid=%d sample_last=%d\n", path,
-             (int)rgb[0], (int)rgb[((size_t)w * h / 2) * 3], (int)rgb[((size_t)w * h - 1) * 3]);
+  std::printf("Screenshot written: %s  lit=%zu/%d sample0=%d sample_mid=%d sample_last=%d\n",
+             path, lit, w * h, (int)rgb[0], (int)rgb[((size_t)w * h / 2) * 3],
+             (int)rgb[((size_t)w * h - 1) * 3]);
   std::fflush(stdout);
 }
 int RunOceanScene(bool *gaveUpOut) {
