@@ -155,14 +155,22 @@ emulator-side limits, both measured on the current tree:
 
 * **Vita3K drops the port's draws.** The emulator re-compiles each GXP the
   port produces at runtime (SceShaccCg -> GXP -> its own GLSL) and the
-  translation of one fragment program does not compile:
+  translation of the port's programs does not compile:
   `0:2336(2): error: array index must be < 20`, followed by
-  `[draw]: Fail to get program!` (10437 times over one full-benchmark run,
-  4329 up to a `shot2=25` shot). Every draw that
-  uses that program is skipped, so the emulator window stays black. That is an
-  emulator-side failure on this GLSL, not the port misbehaving: the same
-  shader passes `make check`, and `docs/screenshots/scene2_ps14_t1.ppm` is a
-  desktop-GL render of exactly this scene tree.
+  `[draw]: Fail to get program!` (7944-10437 times over a full-benchmark run,
+  4329 up to a `shot2=25` shot, two distinct shader hashes named across the
+  run). Every draw that uses them is skipped, and the frame left behind is
+  *empty*, not just hard to grab: an `LD_PRELOAD` interceptor on
+  `glXSwapBuffers` (`tools/glshot.c`, auto-capture every 2 s) reading the
+  emulator's own back buffer for 960x544 gets, for the whole of scene 2's
+  45 s benchmark, frames with **not one non-black pixel** — while the 49
+  frames it captures while the guest compiles shaders are byte-identical to
+  each other (mean 2.13) because they show Vita3K's own overlay. The capture
+  path therefore does see whatever the emulator draws, and what it draws of
+  this app is nothing. That is an emulator-side failure on this GLSL, not the
+  port misbehaving: the same shaders pass `make check`, and
+  `docs/screenshots/scene2_ps14_t1.ppm` is a desktop-GL render of exactly this
+  scene tree.
 * **The emulator never writes the display surface back to guest memory.** The
   guest-side readback of that surface returns exactly the zeros vitaGL writes
   into it at init, even after a `glClear` to a known colour immediately before
@@ -171,7 +179,10 @@ emulator-side limits, both measured on the current tree:
   the host display; `glReadPixels` from the guest cannot see it. So the
   `vita_shot_*.ppm` dump is a hardware-only check: expect it to be black under
   Vita3K, and to work on a console. The same emulator cache is why X-window
-  and `ffmpeg` grabs of the Vita3K window show nothing useful.
+  and `ffmpeg` grabs of the Vita3K window show nothing useful, and why
+  `--color-surface-debug` writes no PNG either. A scene pixel from the
+  emulator therefore needs the draw-drop above fixed first — with the port's
+  own shader source the only lever on it — or a real console.
 
 If a shader fails to compile on hardware, the app's own stderr text plus
 `printf` diagnostics come out through `sceClibPrintf`, and the first thing to
