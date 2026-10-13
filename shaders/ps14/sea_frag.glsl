@@ -1,8 +1,12 @@
-#version 330 core
+// GENERATED from shaders/ps14/sea_frag.glsl by vitaport/tools/make_vita_shaders.py -- do not edit.
+// GLSL 1.00-style rewrite for vitaGL/SceShaccCg (see that script's RULES); the
+// math is identical to the desktop shader except for the documented rewrites.
+#version 100
+precision mediump float;
 
 
-in vec3 vWorld;
-in vec2 vUV;
+varying vec3 vWorld;
+varying vec2 vUV;
 
 uniform sampler2D uRippleTex;
 uniform samplerCube uSkyEnvTex;
@@ -20,7 +24,7 @@ uniform float uCloudElev[MAX_CLOUDS];
 uniform float uCloudRadius[MAX_CLOUDS];
 uniform float uCloudStretch[MAX_CLOUDS];
 
-out vec4 fragColor;
+
 
 const float PI = 3.14159265359;
 
@@ -120,8 +124,8 @@ float projectedCloudDensity(vec3 dir) {
         float envelopeRadius = length(envelopeP)
             * (1.0 + 0.055 * sin(ang * 4.0 + uCloudAzim[i] * 13.0));
         float envelope = 1.0 - smoothstep(0.96, 1.56, envelopeRadius);
-        float n = cloudErosion(envelopeP * 3.2 + vec2(uCloudAzim[i] * 5.1, i * 7.3));
-        float fine = cloudErosion(envelopeP * 7.8 + vec2(uCloudAzim[i] * 11.0, i * 13.0));
+        float n = cloudErosion(envelopeP * 3.2 + vec2(uCloudAzim[i] * 5.1, float(i) * 7.3));
+        float fine = cloudErosion(envelopeP * 7.8 + vec2(uCloudAzim[i] * 11.0, float(i) * 13.0));
         float shoulder = 1.0 - smoothstep(0.10, 0.82, local);
         local = smoothstep(0.035, 0.78,
                local * (0.70 + 0.30 * n + 0.12 * fine - 0.20 * shoulder))
@@ -170,8 +174,8 @@ void main() {
     float rippleFade = exp(-dist * 0.0018);
     vec2 uvA = vUV * 40.0 + vec2(uTime * 0.0040, uTime * 0.0031);
     vec2 uvB = vUV * 97.0 - vec2(uTime * 0.0026, uTime * 0.0042);
-    vec2 ripA = texture(uRippleTex, uvA).rg;
-    vec2 ripB = texture(uRippleTex, uvB).rg;
+    vec2 ripA = texture2D(uRippleTex, uvA).rg;
+    vec2 ripB = texture2D(uRippleTex, uvB).rg;
     vec2 pert = (ripA + ripB) * 0.5 * rippleFade;
 
 
@@ -193,7 +197,7 @@ void main() {
 
 
     float reflDist = dist;
-    vec3 reflColor = textureLod(uSkyEnvTex, R, clamp(1.5 + reflDist * 0.0012, 1.0, 5.0)).rgb;
+    vec3 reflColor = textureCube(uSkyEnvTex, R).rgb;
     float offSun = 1.0 - smoothstep(0.08, 0.45, sunAlign);
     reflColor *= mix(1.0, 0.46, offSun);
 
@@ -223,9 +227,9 @@ void main() {
 
     float crest = smoothstep(0.55, 1.25, hC) * mix(0.25, 1.0, shadow);
     float slopeFacing = max(dot(N, L), 0.0) * warmGate + 0.15;
-    float chaos = texture(uRippleTex, vUV * 190.0 + vec2(uTime * 0.011, -uTime * 0.007)).g;
-    float foam = texture(uFoamTex, vUV * 23.0 + vec2(uTime * 0.010, 0.0)).r;
-    foam *= texture(uFoamTex, vUV * 41.0 - vec2(0.0, uTime * 0.013)).g;
+    float chaos = texture2D(uRippleTex, vUV * 190.0 + vec2(uTime * 0.011, -uTime * 0.007)).g;
+    float foam = texture2D(uFoamTex, vUV * 23.0 + vec2(uTime * 0.010, 0.0)).r;
+    foam *= texture2D(uFoamTex, vUV * 41.0 - vec2(0.0, uTime * 0.013)).g;
     foam *= crest * slopeFacing * (0.35 + 0.65 * chaos);
     body += vec3(0.55, 0.48, 0.58) * foam * 0.55;
 
@@ -236,8 +240,7 @@ void main() {
 
 
     vec2 dxdz = vWorld.xz - uEyePos.xz;
-    vec3 skyAtHorizon = texture(uSkyEnvTex,
-        normalize(vec3(dxdz.x, 0.012, dxdz.y))).rgb;
+    vec3 skyAtHorizon = textureCube(uSkyEnvTex, normalize(vec3(dxdz.x, 0.012, dxdz.y))).rgb;
     float horizonMix = smoothstep(1500.0, 1900.0, dist);
     color = mix(color, skyAtHorizon, horizonMix * 0.85);
 
@@ -259,5 +262,5 @@ void main() {
 
     color = color / (color + vec3(1.0));
     color = pow(color, vec3(1.0 / 2.2));
-    fragColor = vec4(color, 1.0);
+    gl_FragColor = vec4(color, 1.0);
 }

@@ -1,266 +1,140 @@
-# ElectroBench
-ElectroBench is a 45+60+45+45 second long four-scene benchmark specifically designed to run on old and modern PCs.
-It uses OpenGL 2.1/3.3, and C++, and uses make for compilation. It is designed to be a replacement for glmark (even though it is great and I used it before).
+# ElectroBench on the PlayStation Vita (scenes 2 and 4)
 
-It ships **one** executable that contains **all four** scenes.
+A homebrew port of **scene 2 (dusk ocean)** and **scene 4 (power lines / "lain")**
+to the PS Vita, built as a single installable `ElectroBench-vita.vpk` that sits
+at the repo root next to the code. Scenes 1 and 3 are not part of this port.
 
-All four scenes present at **1280x720 fullscreen**. Pass `--windowed` to run in a window instead;
-fullscreen is suppressed automatically whenever `--screenshot` or `--width` is given.
+```
+include/GL/glew.h      GLEW stand-in  -> vitaGL exports the same gl* symbols
+include/SDL2/          SDL2 subset    (window, GL context, events, clock)
+lib/                   shared scene helpers (asset paths, textures, font)
+shaders/ps14, shaders/pole   GLSL 1.00 rewrites of the ported scenes' shaders
+src/scene2.cxx         desktop scene translation unit, compiled unchanged
+src/scene4.cxx
+src/font_atlas.hxx     shared HUD font data and atlas layout
+src/vita_main.cxx      entry point: runs scene 2 and scene 4 in one process
+src/vita_sdl.cxx       SDL subset implementation over vitaGL + SceCtrl
+tools/                 build helpers (kept on disk, untracked from git)
+ElectroBench-vita.vpk  the installable homebrew
+```
 
-| Scene | Renderer | Contents |
-|---|---|---|
-| **Scene 1** (the OG) | OpenGL 2.1 / GLSL 1.2, fixed-function pipeline | **110 UZIs** on a power-trowelled concrete floor under a generated dusk sky, lit by a warm sun, opened by a three-act **flyover camera** (approach, runway pass down the array, pull back) |
-| **Scene 2** | OpenGL 3.3 core, pixel-shader workloads | An ocean under volumetric clouds (3DMark2001 SE "Pixel Shader" benchmark recreation) |
-| **Scene 3** | OpenGL 3.3 core, analytic shaders | A white-and-red checkerboard-sky pool room lit by a visible luminous ceiling panel (with its own reflection lying down the water), grouted tiles, projected caustics and two waves of falling, splashing teapots (18 total) |
-| **Scene 4** | OpenGL 3.3 core, analytic shaders | A utility corridor at amber dusk under a **physically-based atmosphere** (Rayleigh + Mie, limb-darkened sun disc, wind-blown cumulus): weathered **concrete** pole shafts carrying the hardware the reference photograph shows — three tiers of pin insulators, transformer, cut-out fuses, step bolts, guy wires into buried anchors — wrapped in a **dense web of 16 thin slack telecom cables per bay** plus **hanging slack coils and service loops**, two lattice cell masts for scale, a **damp asphalt road with cast concrete kerbs that mirrors the sunset**, houses with lit windows. 4x MSAA |
+`lib/asset_path.hxx` gained one `#ifdef ELECTROBENCH_VITA` branch so the scenes
+read assets from `app0:/` (the packed VPK) instead of walking the CWD.
 
-# System requirements : 
+**`tools/` is untracked from git on purpose** — it is build tooling only. It is
+still used locally: `tools/build_deps.sh` (deps), `tools/make_icon.py` (the
+LiveArea icon), `tools/check_shaders.sh` (shader validation) and
+`tools/kaggle-vita3k.ipynb` (run the VPK under Vita3K on a GPU cloud box).
 
-CPU : Any single core CPU @ 500 MHz or more.
+## Requirements
 
-RAM : 128MB+
+* **vitaSDK** (autobuild, x86_64 Linux) at `$VITASDK` — for the toolchain, the
+  `vita-*` packaging tools and the Sce* import stubs. The 2026 autobuild
+  binaries need a host with **glibc >= 2.38**, i.e. Ubuntu 24.04 or newer.
+* **On the console:** `libshacccg.suprx` extracted to `ur0:/data/` — vitaGL
+  compiles the shaders at runtime through SceShaccCg, so a console without it
+  will fail to build a single shader. (Same prerequisite as any vitaGL
+  homebrew; see vitaGL's README for the extraction guide.)
+* `glslangValidator` on the host, only for `make check`.
 
-GPU : Technically any GPU that has OpenGL 2.1 support or more, but GPUs that OpenGL 2.1-only will only run scene 1 and the HUD may or may not be available, but any OpenGL 3.3 GPU (2010 GPU onwards) will run it.
+## Build
 
-OS : Any.
-
-
-# Screenshots
-
-![Original GL 2.1 benchmark: 110 UZIs on a shadow-mapped concrete floor](docs/screenshots/uzi_wide.png)
-
-![Close-up: UZIs with mags on the ground and per-gun shadows](docs/screenshots/uzi_close.png)
-
-![ElectroBench flyover camera: high reveal, low runway pass and pull back over the 110-gun array](docs/screenshots/uzi_flyover.gif)
-
-![ElectroBench scene 2: the dusk ocean under volumetric clouds](docs/screenshots/ps14_dusk_t36.png)
-
-![ElectroBench scene 3: the checkerboard pool room with the luminous ceiling panel mirrored on the water](docs/screenshots/pool_teapot.png)
-
-![ElectroBench scene 4: concrete and galvanised utility poles with a catenary cable web and open lattice transmission pylons against an orange dusk sky](docs/screenshots/lain_lines.png)
-
-**In motion - but very slow** — the auto-dolly walking the corridor (four positions down the run): the cable web sweeping overhead pole after pole, slack coils swinging past, guy wires pulling into their anchor blocks, and the telecom bundles peeling off toward the eaves:
-
-![Scene 4 in motion: concrete poles, guy wires and catenary spans over the dolly camera](docs/screenshots/lain_lines.gif)
-
-# How to build ?
-
-Dependencies : `make`, `g++`, SDL2, GLEW, GLU (+ dev headers). On Debian/Ubuntu that is
-`libsdl2-dev libglew-dev libglu1-mesa-dev`; on Windows use MSYS2 (`pacman -S mingw-w64-x86_64-{gcc,SDL2,glew} make`); on macOS `brew install sdl2 glew` (you may need `brew install make` for a GNU make).
+From the repo root:
 
 ```sh
-make            # builds the single ElectroBench binary (all four scenes linked in)
-make run        # builds it and runs it
+sh tools/build_deps.sh   # once: vitaGL + vitaShaRK + math-neon -> $VITASDK
+make                     # -> ./ElectroBench-vita.vpk
+make check               # shader validation only
 ```
 
-The one binary lands in `build/` :
+`build_deps.sh` clones `Rinnegatamante/vitaGL`, `Rinnegatamante/vitaShaRK` and
+`Rinnegatamante/math-neon` (none of them are packaged by `vdpm`: the public
+`[vita]` repository only carries glm/libftpvita/vitagprof) and installs them into
+`$VITASDK/arm-vita-eabi`. vitaShaRK needs one local shim: it includes
+`<shacccg_ext.h>` and calls `sceShaccCgExt{Enable,Disable}Extensions()`, which
+only exist in newer on-device `libshacccg.suprx` builds and are absent from
+vitaSDK's `libSceShaccCg_stub.a`. The script injects a header plus no-op
+definitions, which is the pre-extension code path older vitaGL releases used;
+`shark_compile_shader_extended()` still drives SceShaccCg.
 
-```sh
-./build/ElectroBench          # Linux / macOS
-./build/ElectroBench.exe      # Windows (MSYS2)
-```
+## Install and run
 
-## Static build
+Copy `ElectroBench-vita.vpk` to `ux0:/` and install it with VitaShell (or any
+VPK installer). **Hold L while launching to start with scene 4** instead of
+scene 2.
 
-Pass `STATIC=1` to link everything statically (`-static -static-libgcc -static-libstdc++` + static
-dependency archives) — handy for dropping a single exe on old machines:
+| Input | Effect |
+| --- | --- |
+| hold **L** at launch | start with scene 4, then scene 2 |
+| **SELECT** or **CIRCLE** | end the current scene, continue with the other one |
+| **START** | quit the app |
 
-```sh
-make STATIC=1            # -> build/ElectroBench-static(.exe)
-```
+The app exits after the second scene. `sceClibPrintf` output (which scene is
+running, shader/compile diagnostics relayed from the scenes' stdout/stderr) is
+visible in VitaShell's log or a debug console.
 
-This requires the **static archives** of every dependency (e.g. MSYS2's `mingw-w64-x86_64-SDL2` ships
-`libSDL2.a` already; on Linux you need the `.a` variants of SDL2/GLEW/GLU installed). On Windows the
-static build also defines `GLEW_STATIC` and uses the static GLEW archive, so its link line is
-`-static-libgcc -static-libstdc++ -lopengl32 -lglu32 -lSDL2main -lSDL2 -mwindows` (plus the
-`pkg-config --static` dependency flags) — no DLLs are needed next to the exe. The static build keeps
-its objects under `build/static/`, separate from the normal DLL-linked objects.
+## How the port is put together
 
-# The OG GL 2.1 benchmark (110 UZIs)
+* **Window/context.** The Vita has one 960x544 panel and no window manager, so
+  the SDL shim creates a single window at that size and `vglInitExtended()`
+  takes over. `gWindowedMode` is defined `false` in `vita_main.cxx`, which makes
+  both scenes adopt the reported size for their viewport, projection and HUD —
+  they render natively instead of 1280x720 into a scaled surface.
+* **Input.** The pad is edge-detected in `SDL_PollEvent()`; START becomes
+  `SDL_QUIT`, SELECT/CIRCLE become the `SDLK_ESCAPE` keydown the scenes already
+  treat as "leave this scene". So the scene loops run their real code paths.
+* **MSAA.** Scene 4 asks for 4x MSAA, scene 2 for none; the requested samples
+  select `SCE_GXM_MULTISAMPLE_4X` / `NONE` at `vglInitExtended()` time, and
+  `SDL_GL_GetAttribute` reports back what was granted. (SceGxm has no 8x.)
+* **Shaders.** `shaders/` holds GLSL 1.00 rewrites of the two ported scenes'
+  shaders, hand-maintained on this branch. vitaGL rewrites
+  `attribute`/`varying` into Cg for SceShaccCg and deletes `#version`,
+  `#extension` and `precision` directives, but it does **not** understand
+  `in`/`out`, `layout(location = N)`, `texture()`, `fwidth()` or `flat`; every
+  occurrence in this tree has been rewritten to what vitaGL's translator
+  accepts, and `make check` validates the result with `glslangValidator`.
+* **Scene switching.** The two scenes run back to back in one process and the
+  vitaGL device is *not* torn down between them (`SDL_Quit`/`SDL_GL_DeleteContext`
+  are no-ops for GXM): re-initialising GXM mid-run is the riskier path, at the
+  cost of scene 2's GL objects staying resident while scene 4 runs.
 
-Renders **110 UZIs** (10×11 grid) on a shadow-mapped concrete floor through the fixed-function
-pipeline, exactly like a 2001-era title: per-gun compact shadows anchored at each contact point,
-a warm directional sun, and a real-time **FPS + score HUD** drawn in a 5×7 bitmap font.
+## Vita3K notes
 
-Controls : the camera is a scripted flyover, automatic from launch; `ESC` quits. The FPS counter is a
-true frame-count average (SDL performance counter,
-every frame accounted) — the on-screen value is a smoothed window, the final score uses **all** frames
-of the run.
+Verified under Vita3K (`tools/kaggle-vita3k.ipynb` workflow): both scenes run
+their full 45 s benchmark, the results screen shows, and the app exits cleanly
+(`scene 2 returned 0`, `scene 4 returned 0` in the app's persistent spinlog at
+`ux0:/data/ELEB00002/spinlog.txt`). Launch params understood by the port:
 
-# Scene 2
+* `start=4` — start with scene 4 (Vita3K: `-Z 'start=4'` or a launch URI with
+  `start=4`)
+* `shot2=<seconds>` / `shot4=<seconds>` — schedule an in-scene RGBA
+  `glReadPixels` dump to `ux0:/data/ELEB00002/vita_shot_scene{2,4}.ppm`
+  (diagnostics prove the trigger path fires; see below for why the pixel
+  export stays black under Vita3K)
 
-**Scene 2** lives in the same ElectroBench binary and is written in **OpenGL 3.3 core**.
-It pushes a heavy, realistic ocean workload —
-high-resolution environment reflections, a dense displaced ocean mesh, and a real volumetric
-light-transport model for the clouds. It is heavy **on purpose**: the goal is to push old and new
-hardware, so low single-digit FPS on a low-end machine means the workload is doing its job.
+## What was verified, and what was not
 
-What it renders :
-- A procedural **sky dome** rendered **directly at full screen resolution** + wisps...
-- A **4 km ocean patch** on a dense GPU-displaced grid.
-- High-resolution **environment cubemap** reflections with roughness-matched LOD, frensel... 
+Verified:
 
-Run the ocean scene on its own with :
+* `make check` (`tools/check_shaders.sh`): every shader is valid **GLSL ES
+  1.00** per `glslangValidator`, and no `in`/`out`/`layout`/`texture()`/
+  `fwidth()`/`flat` declaration survives for vitaGL's translator.
+* Clean `make`: compiles, links against `libvitaGL.a`, and
+  `vita-elf-create`/`vita-make-fself`/`vita-pack-vpk` emit a module with
+  `.sceModuleInfo.rodata`, `.sceLib.stubs`, `.sceImport.rodata` and a `SCE\0`
+  SELF header.
+* End-to-end under Vita3K with the above VPK: full benchmark cycle, both
+  scenes return 0, results screen, clean exit.
+* At the time of the Vita3K runs: `ffmpeg` frame dumps plus
+  `Screenshot/PPM` results of the trigger path were **not** intested.
 
-```sh
-make
-./build/ElectroBench --scene-only          # Linux / macOS
-./build/ElectroBench.exe --scene-only      # Windows (MSYS2)
-```
-
-Controls : the fly-over camera is automatic from launch; `ESC` quits.
-
-# Scene 3
-
-**Scene 3** lives in the same ElectroBench binary and is also **OpenGL 3.3 core**. It is the
-pool-room illusion: an infinite checkerboard ceiling-sky mirrored perfectly on open water.
-
-What it renders :
-- A **checkerboard sky dome**.
-- **Open water** with reflections and GGX.
-- **Two waves of teapots**: 18 in total
-- **Splash FX** (Worthington crown...)
-
-Run the pool scene on its own with :
-
-```sh
-make
-./build/ElectroBench --pool-only          # Linux / macOS
-./build/ElectroBench.exe --pool-only      # Windows (MSYS2)
-```
-
-Controls : the fly-over camera is automatic from launch; `ESC` quits. The fleet's fall / return /
-resplash loop re-drops itself on its own, no key needed.
-
-# Scene 4:
-
-**Scene 4** lives in the same ElectroBench binary and is also **OpenGL 3.3 core**. The
-utility corridor: warm gravel under an amber dusk, two lines of steel poles marching to the
-horizon, and a wall of wires over your head.
-
-What it renders :
-- **Concrete utility poles-**  AAARGHHHHH this is way too much explaining for your tiny brains ANYWAY-
-
-Run the power-lines scene on its own with :
-
-```sh
-make
-./build/ElectroBench --pole-only          # Linux / macOS
-./build/ElectroBench.exe --pole-only      # Windows (MSYS2)
-```
-
-Controls : the dolly camera is automatic from launch; `ESC` quits.
-
-
-- `--screenshot FILE --shot-time S` writes a frame straight out of the
-  framebuffer, before the buffer swap. This is what the committed screenshots in
-  `docs/screenshots/` were made with, and it cannot come out black.
-- `--screenshot FILE --shot-times 6,20,38` writes several frames in one run.
-
-
-Headless visual-test flags (used to verify the render output in CI-like environments):
-
-```sh
-./build/ElectroBench --og-only   --screenshot /tmp/shot.ppm --shot-time 3
-./build/ElectroBench --scene-only --width 960 --screenshot /tmp/shot.ppm --shot-times 6,20,38
-./build/ElectroBench --pool-only  --width 960 --screenshot /tmp/shot.ppm --shot-times 2,3.2,5,12
-./build/ElectroBench --pole-only  --width 960 --screenshot /tmp/shot.ppm --shot-times 2,9
-```
-
-# How the score is calculated ?
-
-All scenes use the same formula, computed from the **average FPS over the whole run**:
-
-```
-score = fps² × 2
-```
-
-It is linear in nothing: twice the frames means twice the score, twice the load means a quarter of
-it — a fair curve from office PCs to gaming rigs. The binary prints
-`Time / Average FPS / Score` at the end, and the OG scene also shows live FPS + score in its HUD.
-
-# The results screen
-
-When a scene's 45/60 second run ends, **the benchmark clears the window and prints that scene's
-score on screen** and leaves it up for a few seconds (the final combined screen for about ten, or until you press `ESC`).
-The same line is also printed to stdout.
-
-```sh
-Benchmark Results - Time : 45.0s, Average FPS : 12.4, Score : 308
-```
-
-# One executable, four scenes
-
-`build/ElectroBench` is the **only** binary, and it contains all four scenes. It runs the OG 60-second gun scene
-first, then probes an OpenGL 3.3 core context:
-
-- **found** — the dusk ocean runs as scene 2, then the pool room as scene 3, then the power lines
-  as scene 4, on the same session, and the final results screen shows **per-scene scores and the
-  average of the scenes that ran**
-- **not found** (GL 2.1-only drivers, old iGPUs) — all three GL 3.3 scenes skip themselves cleanly
-  and the OG result stands, so the binary still runs on the ancient hardware it targets
-
-Scene selection flags: `--og-only` runs just the gun scene even on GL 3.3-capable devices,
-`--scene-only` runs just the ocean scene, `--pool-only` runs just the pool-room scene,
-`--pole-only` runs just the power-line scene.
-
-# PlayStation Vita port
-
-This branch also carries a port of **scene 2 and scene 4 only** to the PS Vita,
-built as a single installable `ElectroBench-vita.vpk` at the branch root:
-
-```sh
-sh vitaport/tools/build_deps.sh     # once: builds vitaGL + vitaShaRK into $VITASDK
-make vita                           # -> ./ElectroBench-vita.vpk
-```
-
-The scenes themselves are the desktop sources, compiled unchanged against the
-SDL2/GLEW stand-ins in `vitaport/include` and linked against vitaGL; only the
-shaders are rewritten (GLSL 1.00-style, generated and validated by
-`make -f vitaport/Makefile check`). It needs `libshacccg.suprx` on the console,
-like any vitaGL homebrew. Full details, controls, deliberate differences and the
-list of what has and has not been verified are in [`vitaport/README.md`](vitaport/README.md).
-
-The desktop build above is unaffected by any of this.
-
-# Windows (MSYS2)
-
-On Windows the easiest route is [MSYS2](https://www.msys2.org/), which provides gcc, cmake and prebuilt SDL2/GLEW/GLU packages. The single binary builds and runs unmodified.
-
-**1. Install MSYS2** from [msys2.org](https://www.msys2.org/) to the default `C:\msys64`.
-
-**2. Run:**
-
-```sh
-g++ -std=c++17 -O2\
-    src/main.cxx \
-    src/scene2.cxx \
-    src/scene3.cxx \
-    src/scene4.cxx \
-    -o build/ElectroBench.exe \
-    $(pkg-config --cflags --libs sdl2) \
-    -lglew32 \
-    -lglu32 \
-    -lopengl32
-```
-
-(or run `make -j$(nproc)`)
-
-All four scenes are linked into that one binary: `src/scene2.cxx`, `src/scene3.cxx` and
-`src/scene4.cxx` are scene modules (they have no `main()` of their own) that `src/main.cxx` hands the
-same SDL session to. For
-the static build, prefer
-`make STATIC=1`: it passes `-DGLEW_STATIC`, uses `pkg-config --static`, and keeps the static object
-files separate from the normal build. If invoking `g++` directly, use the same define and static
-GLEW archive consistently; do not compile with the DLL-import GLEW header and then link
-`libglew32.a`.
-
-- This was verified end-to-end on a Toshiba Satellite P200 and a HP ProBook 430 G6, every scene's shader programs compiled and linked on hardware.
-
-# Contributions
-
-Contributions are welcome, just post a PR / issue.
-
-# Donating
-
-Send me in my email or post an issue : ayoubprogramming96@outlook.com
+**Not verified:** nothing was executed on a real PS Vita. In-emulator
+screenshots of the *scene pixels* remain unsolved: Vita3K's guest-side
+`glReadPixels` on the default framebuffer reads zeros (RGBA/GL_RGB/GL_FRONT
+tried; Vita3K owns the default framebuffer via `SceGxm` semantics and does not
+route it back), the `F10` host screenshot key is not wired in the SDL
+frontend, and X-window grabs of the Vita3K window return stale or blank
+content (page-flipped GL/Vulkan surface without a compositor). If a shader
+fails to compile on hardware, the app's own stderr text plus `printf`
+diagnostics come out through `sceClibPrintf`, and the first thing to try is
+`make check` after editing a shader in `shaders/`.

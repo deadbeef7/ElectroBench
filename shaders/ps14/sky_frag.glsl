@@ -1,7 +1,11 @@
-#version 330 core
+// GENERATED from shaders/ps14/sky_frag.glsl by vitaport/tools/make_vita_shaders.py -- do not edit.
+// GLSL 1.00-style rewrite for vitaGL/SceShaccCg (see that script's RULES); the
+// math is identical to the desktop shader except for the documented rewrites.
+#version 100
+precision mediump float;
 
 
-in vec3 vDir;
+varying vec3 vDir;
 
 uniform float uTime;
 uniform float uTonemap;
@@ -21,7 +25,7 @@ uniform float uCloudElev[MAX_CLOUDS];
 uniform float uCloudRadius[MAX_CLOUDS];
 uniform float uCloudStretch[MAX_CLOUDS];
 
-out vec4 fragColor;
+
 
 const float PI = 3.14159265359;
 
@@ -162,8 +166,8 @@ vec4 cloudSample(vec3 dir) {
         float envelope = 1.0 - smoothstep(0.96, 1.56, envelopeRadius);
 
 
-        float n = erosionNoise(envelopeP * 3.2 + vec2(uCloudAzim[i] * 5.1, i * 7.3));
-        float fine = erosionNoise(envelopeP * 7.8 + vec2(uCloudAzim[i] * 11.0, i * 13.0));
+        float n = erosionNoise(envelopeP * 3.2 + vec2(uCloudAzim[i] * 5.1, float(i) * 7.3));
+        float fine = erosionNoise(envelopeP * 7.8 + vec2(uCloudAzim[i] * 11.0, float(i) * 13.0));
         float shoulder = 1.0 - smoothstep(0.10, 0.82, local);
         float breakup = 0.70 + 0.30 * n + 0.12 * fine - 0.20 * shoulder;
         local = smoothstep(0.06, 0.74, local * breakup) * envelope;
@@ -352,5 +356,5 @@ void main() {
                      + hash21(gl_FragCoord.xy * 1.7 + 41.0) - 1.0) * 0.5;
         outCol = encodeScene(sky, dith);
     }
-    fragColor = vec4(outCol, 1.0);
+    gl_FragColor = vec4(outCol, 1.0);
 }

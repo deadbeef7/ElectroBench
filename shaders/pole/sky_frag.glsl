@@ -1,9 +1,13 @@
-#version 330 core
+// GENERATED from shaders/pole/sky_frag.glsl by vitaport/tools/make_vita_shaders.py -- do not edit.
+// GLSL 1.00-style rewrite for vitaGL/SceShaccCg (see that script's RULES); the
+// math is identical to the desktop shader except for the documented rewrites.
+#version 100
+precision mediump float;
 
 
-in vec3 vDir;
+varying vec3 vDir;
 
-out vec4 fragColor;
+
 
 uniform vec3  uEyePos;
 uniform vec3  uSunDir;
@@ -184,5 +188,5 @@ void main() {
     float dith = vhash(dir.xy * 1913.7 + fract(uTime) * 17.0);
     sky += (dith - 0.5) * (1.5 / 255.0);
 
-    fragColor = vec4(encodeSky(sky), 1.0);
+    gl_FragColor = vec4(encodeSky(sky), 1.0);
 }

@@ -1,12 +1,15 @@
-#version 330 core
+// GENERATED from shaders/pole/sky_vert.glsl by vitaport/tools/make_vita_shaders.py -- do not edit.
+// GLSL 1.00-style rewrite for vitaGL/SceShaccCg (see that script's RULES); the
+// math is identical to the desktop shader except for the documented rewrites.
+#version 100
 
 
-layout(location = 0) in vec3 aPos;
+attribute vec3 aPos;
 
 uniform mat4 uViewProj;
 uniform mat4 uModel;
 
-out vec3 vDir;
+varying vec3 vDir;
 
 void main() {
 

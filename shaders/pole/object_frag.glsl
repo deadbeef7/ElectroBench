@@ -1,13 +1,18 @@
-#version 330 core
+// GENERATED from shaders/pole/object_frag.glsl by vitaport/tools/make_vita_shaders.py -- do not edit.
+// GLSL 1.00-style rewrite for vitaGL/SceShaccCg (see that script's RULES); the
+// math is identical to the desktop shader except for the documented rewrites.
+#version 100
+#extension GL_OES_standard_derivatives : enable
+precision mediump float;
 
 
-in vec3 vWorld;
-in vec3 vNormal;
-in vec3 vColor;
-flat in float vMat;
-in float vAlpha;
+varying vec3 vWorld;
+varying vec3 vNormal;
+varying vec3 vColor;
+varying float vMat;
+varying float vAlpha;
 
-out vec4 fragColor;
+
 
 uniform vec3  uEyePos;
 uniform vec3  uSunDir;
@@ -95,8 +100,8 @@ void main() {
     float m = vMat;
 
 
-    if (m == kMatShadow) {
-        fragColor = vec4(0.0, 0.0, 0.0, vAlpha);
+    if (abs(m - kMatShadow) < 0.5) {
+        gl_FragColor = vec4(0.0, 0.0, 0.0, vAlpha);
         return;
     }
 
@@ -112,14 +117,14 @@ void main() {
     float near = 1.0 - smoothstep(16.0, 64.0, dist);
 
 
-    float foot = fwidth(P.x) + fwidth(P.z) + 0.0015;
+    float foot = (abs(dFdx(P.x)) + abs(dFdy(P.x))) + (abs(dFdx(P.z)) + abs(dFdy(P.z))) + 0.0015;
 
     vec3 base = vColor;
     float rough = 0.85;
     float sheen = 0.0;
     float wet = 0.0;
 
-    if (m == kMatGround) {
+    if (abs(m - kMatGround) < 0.5) {
 
 
         float n1 = vnoise(P.xz * 0.42);
@@ -142,7 +147,7 @@ void main() {
         base = mix(base, base * 1.22 + vec3(0.020, 0.016, 0.010),
                    nearRoad * 0.55);
         rough = 1.0;
-    } else if (m == kMatRoad) {
+    } else if (abs(m - kMatRoad) < 0.5) {
         float rx = P.x - uRoadX;
         float n = vnoise(P.xz * 1.30);
 
@@ -184,13 +189,13 @@ void main() {
         base *= mix(1.0, 0.55, damp);
         rough = mix(rough, 0.20, damp);
         wet = damp;
-    } else if (m == kMatLine) {
+    } else if (abs(m - kMatLine) < 0.5) {
 
         float wear = octaveRes(foot, 6.0);
         float wearN = wear > 0.02 ? vnoise(P.xz * 6.0) : 0.5;
         base *= 0.78 + 0.34 * wearN * wear + 0.18 * (1.0 - near);
         rough = 0.85;
-    } else if (m == kMatWood) {
+    } else if (abs(m - kMatWood) < 0.5) {
 
         float along = P.y * 1.15 + (P.x + P.z) * 0.06;
         float g1 = vnoise(vec2((P.x + P.z) * 6.5, along));
@@ -201,7 +206,7 @@ void main() {
 
         base *= mix(0.70, 1.0, smoothstep(0.0, 1.20, P.y));
         rough = 0.95;
-    } else if (m == kMatWall) {
+    } else if (abs(m - kMatWall) < 0.5) {
 
         float seam = abs(fract(P.y * 1.25) - 0.5) * 2.0;
         base *= mix(0.70, 1.10, smoothstep(0.06, 0.34, seam));
@@ -209,18 +214,18 @@ void main() {
 
         base *= mix(0.55, 1.0, smoothstep(0.0, 0.55, P.y));
         rough = 0.9;
-    } else if (m == kMatRoof) {
+    } else if (abs(m - kMatRoof) < 0.5) {
 
         float course = abs(fract(P.z * 0.85 + P.x * 0.0) - 0.5) * 2.0;
         base *= mix(0.70, 1.12, smoothstep(0.12, 0.55, course));
         base *= 0.84 + 0.32 * vnoise(P.xz * 1.7);
         rough = 0.85;
-    } else if (m == kMatGlass) {
+    } else if (abs(m - kMatGlass) < 0.5) {
 
         base *= 0.42;
         rough = 0.06;
         sheen = 0.55;
-    } else if (m == kMatKerb) {
+    } else if (abs(m - kMatKerb) < 0.5) {
 
 
         float agg = vnoise(vec2(P.x * 41.0, P.z * 9.0));
@@ -241,23 +246,23 @@ void main() {
         base *= mix(1.0, 0.55, wet);
         rough = mix(0.88, 0.30, wet);
         sheen = 0.10;
-    } else if (m == kMatLeaf) {
+    } else if (abs(m - kMatLeaf) < 0.5) {
 
         float n = vnoise(P.xz * 0.85 + P.y * 0.35);
         base *= 0.72 + 0.46 * n;
         rough = 1.0;
-    } else if (m == kMatCable) {
+    } else if (abs(m - kMatCable) < 0.5) {
 
 
         rough = 0.33;
         sheen = 0.48;
-    } else if (m == kMatCeramic) {
+    } else if (abs(m - kMatCeramic) < 0.5) {
         rough = 0.22;
         sheen = 0.30;
-    } else if (m == kMatMetal) {
+    } else if (abs(m - kMatMetal) < 0.5) {
         rough = 0.38;
         sheen = 0.22;
-    } else if (m == kMatSteel) {
+    } else if (abs(m - kMatSteel) < 0.5) {
 
 
         float streak = vnoise(vec2((P.x + P.z * 0.35) * 1.60, P.y * 0.22));
@@ -277,7 +282,7 @@ void main() {
 
 
         sheen = 0.24;
-    } else if (m == kMatConcrete) {
+    } else if (abs(m - kMatConcrete) < 0.5) {
 
 
         float streak = vnoise(vec2((P.x + P.z * 0.45) * 2.10, P.y * 0.10));
@@ -310,14 +315,14 @@ void main() {
         base *= mix(0.95, 1.04, smoothstep(0.04, 0.26, board2));
         rough = 0.90 - 0.10 * streak;
         sheen = 0.06;
-    } else if (m == kMatGlow) {
+    } else if (abs(m - kMatGlow) < 0.5) {
 
 
         float distG = dist;
         float hz = 1.0 - exp(-distG * 0.0016);
         vec3 g = base * 1.05;
         g = mix(g, hazeColFor(g, L, V), clamp(hz, 0.0, 0.45));
-        fragColor = vec4(pow(max(g, vec3(0.0)), vec3(1.0 / 2.2)), 1.0);
+        gl_FragColor = vec4(pow(max(g, vec3(0.0)), vec3(1.0 / 2.2)), 1.0);
         return;
     }
 
@@ -328,10 +333,10 @@ void main() {
     vec3 amb = mix(ambGround, ambSky, up);
 
 
-    float wrap = (m == kMatCable) ? 0.35 : 0.0;
+    float wrap = (abs(m - kMatCable) < 0.5) ? 0.35 : 0.0;
 
 
-    if (m == kMatSteel) wrap = 0.13;
+    if (abs(m - kMatSteel) < 0.5) wrap = 0.13;
     float diff = clamp((dot(N, L) + wrap) / (1.0 + wrap), 0.0, 1.0);
     vec3 sunTint = vec3(1.00, 0.66, 0.34);
 
@@ -386,9 +391,9 @@ void main() {
              + skyRefl * wetF;
 
 
-    if (m == kMatKerb)
+    if (abs(m - kMatKerb) < 0.5)
         col *= mix(0.80, 1.0, smoothstep(0.0, 0.16, P.y));
-    else if (m != kMatGround && m != kMatRoad && m != kMatLine)
+    else if (abs(m - kMatGround) >= 0.5 && abs(m - kMatRoad) >= 0.5 && abs(m - kMatLine) >= 0.5)
         col *= mix(0.60, 1.0, smoothstep(0.0, 1.30, P.y));
 
 
@@ -419,5 +424,5 @@ void main() {
     col += (hash21(gl_FragCoord.xy + fract(uTime) * 13.0)
             + hash21(gl_FragCoord.xy * 1.7 + 41.0) - 1.0) * (1.5 / 255.0);
     col = pow(max(col, vec3(0.0)), vec3(1.0 / 2.2));
-    fragColor = vec4(col, 1.0);
+    gl_FragColor = vec4(col, 1.0);
 }

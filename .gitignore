@@ -15,3 +15,6 @@ __pycache__/
 
 # Audit/dev scripts (untracked per request)
 scripts/
+
+# Vita build tooling stays local-only on this branch
+tools/
