@@ -130,6 +130,25 @@ a plain CPU copy of the display surface; its `GL_RGB` path goes through
 `sceGxmTransferCopy`, which the emulator only stubs out and which would hand
 back an untouched buffer.
 
+### Reading Vita3K's shader translation
+
+When a shader misbehaves, Vita3K writes everything needed to identify it under
+`~/.cache/Vita3K/`:
+
+* `shaderlog/<TITLE_ID>/<self>/v13-<sha256>.gxp` — the GXP the guest produced,
+  with the uniform names still in it, so `strings` maps a hash to a port
+  shader (`uCloudAzim`/`uCloudElev`/`uSkyEnvTex` -> `shaders/ps14/sky_frag.glsl`,
+  and `uCloudPhase` -> `shaders/ps14/sea_frag.glsl`).
+* `shaderlog/<TITLE_ID>/<self>/v13-<sha256>.dsm` — its USSE disassembly, which
+  reports the registers each program really uses (`r20`-`r26` above).
+* `shaders/<TITLE_ID>/<self>/v13-<sha256>.{frag,vert}` — the GLSL Vita3K
+  generates for that program. It is **preloaded when present**, which is both
+  how to inspect the translation and how to test a fix for an emulator-side
+  limit without touching the port.
+
+The hash in a `[compile_shader]` or `Error in get/compile` log line is the same
+hash as those file names, which is what makes the mapping possible.
+
 ## What was verified, and what was not
 
 Verified:
@@ -153,24 +172,37 @@ Verified:
 *pixels* could not be captured in the emulator either. Two independent
 emulator-side limits, both measured on the current tree:
 
-* **Vita3K drops the port's draws.** The emulator re-compiles each GXP the
-  port produces at runtime (SceShaccCg -> GXP -> its own GLSL) and the
-  translation of the port's programs does not compile:
-  `0:2336(2): error: array index must be < 20`, followed by
-  `[draw]: Fail to get program!` (7944-10437 times over a full-benchmark run,
-  4329 up to a `shot2=25` shot, two distinct shader hashes named across the
-  run). Every draw that uses them is skipped, and the frame left behind is
-  *empty*, not just hard to grab: an `LD_PRELOAD` interceptor on
-  `glXSwapBuffers` (`tools/glshot.c`, auto-capture every 2 s) reading the
-  emulator's own back buffer for 960x544 gets, for the whole of scene 2's
-  45 s benchmark, frames with **not one non-black pixel** — while the 49
-  frames it captures while the guest compiles shaders are byte-identical to
-  each other (mean 2.13) because they show Vita3K's own overlay. The capture
-  path therefore does see whatever the emulator draws, and what it draws of
-  this app is nothing. That is an emulator-side failure on this GLSL, not the
-  port misbehaving: the same shaders pass `make check`, and
-  `docs/screenshots/scene2_ps14_t1.ppm` is a desktop-GL render of exactly this
-  scene tree.
+* **Vita3K cannot compile two of the port's programs, and drops their draws.**
+  Its shader recompiler models the USSE temporary register bank as
+  `vec4 r[20]` — `REG_TEMP_COUNT = 20 * 4` in
+  `vita3k/shader/src/spirv_recompiler.cpp` — while SceShaccCg (running inside
+  the emulator) compiles `shaders/ps14/sky_frag.glsl` and
+  `shaders/ps14/sea_frag.glsl` into GXP that uses temporaries up to `r26`.
+  Vita3K's own disassembly of those two GXPs shows it
+  (`VMOV r20.xy`, `VMAD r24.xy`, `VMUL r26.x`), and its generated GLSL
+  references `r[24]`/`r[25]` against the `r[20]` declaration, so the host
+  compiler rejects it (`0:2336(2): error: array index must be < 20`) and every
+  draw using those programs is skipped: `[draw]: Fail to get program!`
+  7944-10437 times per full run, which is exactly scene 2's sky and sea.
+  Scene 4's programs stay inside the bank and produce no dropped draws at all.
+  Widening those two cached GLSL files locally drops the count to 0, which
+  confirms the diagnosis; whether a real Vita accepts an `r20`-`r26`
+  allocation is not something the public SceGxm material documents, so treat
+  20 as Vita3K's own model rather than a hardware limit.
+* **The frame it leaves behind is empty, not just hard to grab.** An
+  `LD_PRELOAD` interceptor on `glXSwapBuffers`/`eglSwapBuffers`
+  (`tools/glshot.c`, auto-capture every 2 s) reads the emulator's own back
+  buffer *and* the front buffer after the swap for 960x544: for the whole of
+  scene 2's benchmark, and for scene 4's 420 presented frames, every frame has
+  **not one non-black pixel**, while the frames taken while the guest compiles
+  shaders are byte-identical to each other (mean 2.13) and show Vita3K's own
+  overlay. An X grab of the same window agrees, so the capture path does see
+  whatever the emulator draws; it just draws none of this app. That holds with
+  the drop count at 0 too, so it is not a second effect of the shader
+  failure — the emulator's guest-to-display path produces nothing for this
+  title in this environment. The port is not implicated: the same shaders pass
+  `make check`, and `docs/screenshots/scene2_ps14_t1.ppm` is a desktop-GL
+  render of exactly this scene tree.
 * **The emulator never writes the display surface back to guest memory.** The
   guest-side readback of that surface returns exactly the zeros vitaGL writes
   into it at init, even after a `glClear` to a known colour immediately before
