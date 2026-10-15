@@ -291,6 +291,210 @@ bool InitGL() {
   return true;
 }
 
+// ------------------------------------------------------- device diagnostics
+// The sea program is the one thing that has failed on a real device, and a
+// driver's "no" is invisible from the screen: the sea simply contributes no
+// pixels while the sky and the HUD keep working. So the port reports what the
+// device actually is and what it actually thinks of every shader, in its own
+// handwriting, instead of leaving that to the scenes' stdout:
+//
+//   * the ES version, renderer, the limits that decide whether these shaders can
+//     fit (uniform vectors, varyings, texture size) and the extensions that
+//     decide whether scene 2's RGBA16F environment cube is renderable at all;
+//   * every program the two scenes load, compiled and linked from the files the
+//     port just unpacked, with the driver's compile/link logs verbatim - which
+//     also proves the unpacked shader text is complete, since a truncated file
+//     fails here first;
+//   * the first GL errors raised while rendering, decoded, with frame numbers.
+
+bool gValidated = false;
+int gGlErrorsLogged = 0;
+
+// Driver compile/link logs are multi-line; one PortLog call per line is what
+// keeps each line inside the log buffer instead of truncating the message that
+// explains the failure. (PortLog itself lives with the other port hooks at the
+// bottom of this file and is declared in android_port.hxx.)
+void PortLogBlock(const char *tag, const char *text) {
+  const std::string block = text ? text : "";
+  size_t pos = 0;
+  for (;;) {
+    size_t eol = block.find('\n', pos);
+    if (eol == std::string::npos) eol = block.size();
+    if (eol > pos) PortLog("%s%s", tag, block.substr(pos, eol - pos).c_str());
+    if (eol >= block.size()) break;
+    pos = eol + 1;
+  }
+}
+
+const char *GlErrorName(GLenum err) {
+  switch (err) {
+    case GL_NO_ERROR: return "GL_NO_ERROR";
+    case GL_INVALID_ENUM: return "GL_INVALID_ENUM";
+    case GL_INVALID_VALUE: return "GL_INVALID_VALUE";
+    case GL_INVALID_OPERATION: return "GL_INVALID_OPERATION";
+    case GL_INVALID_FRAMEBUFFER_OPERATION: return "GL_INVALID_FRAMEBUFFER_OPERATION";
+    case GL_OUT_OF_MEMORY: return "GL_OUT_OF_MEMORY";
+    default: return "unknown GL error";
+  }
+}
+
+std::string ReadFromInternal(const char *relative) {
+  std::string text;
+  if (!gInternalDir[0]) return text;
+  char path[600];
+  std::snprintf(path, sizeof(path), "%s/%s", gInternalDir, relative);
+  FILE *f = std::fopen(path, "rb");
+  if (!f) return text;
+  char buf[4096];
+  size_t n = 0;
+  while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) text.append(buf, n);
+  std::fclose(f);
+  return text;
+}
+
+void LogGlCapabilities() {
+  PortLog("--- device GL capabilities");
+  PortLog("  vendor   : %s", (const char *)glGetString(GL_VENDOR));
+  PortLog("  renderer : %s", (const char *)glGetString(GL_RENDERER));
+  PortLog("  version  : %s", (const char *)glGetString(GL_VERSION));
+  PortLog("  glsl     : %s", (const char *)glGetString(GL_SHADING_LANGUAGE_VERSION));
+
+  const struct { GLenum pname; const char *name; } limits[] = {
+      {GL_MAX_FRAGMENT_UNIFORM_VECTORS, "GL_MAX_FRAGMENT_UNIFORM_VECTORS"},
+      {GL_MAX_VERTEX_UNIFORM_VECTORS, "GL_MAX_VERTEX_UNIFORM_VECTORS"},
+      {GL_MAX_VARYING_VECTORS, "GL_MAX_VARYING_VECTORS"},
+      {GL_MAX_VERTEX_ATTRIBS, "GL_MAX_VERTEX_ATTRIBS"},
+      {GL_MAX_TEXTURE_SIZE, "GL_MAX_TEXTURE_SIZE"},
+      {GL_MAX_RENDERBUFFER_SIZE, "GL_MAX_RENDERBUFFER_SIZE"},
+      {GL_MAX_TEXTURE_IMAGE_UNITS, "GL_MAX_TEXTURE_IMAGE_UNITS"},
+  };
+  for (const auto &limit : limits) {
+    GLint value = 0;
+    glGetIntegerv(limit.pname, &value);
+    PortLog("  %-34s %d", limit.name, (int)value);
+  }
+
+  // ES 3.0 splits the extension list: glGetString(GL_EXTENSIONS) only reports
+  // the pre-ES3 ones, so the complete list needs the indexed query. Both matter
+  // here: GL_EXT_color_buffer_float decides whether the RGBA16F environment cube
+  // the sea reflects is renderable, and scene 4's object shader enables
+  // GL_OES_standard_derivatives explicitly.
+  const struct { const char *name; const char *why; } wanted[] = {
+      {"GL_EXT_color_buffer_float", "scene 2's RGBA16F environment cube is renderable"},
+      {"GL_OES_texture_half_float_linear", "that cube is filterable"},
+      {"GL_EXT_color_buffer_half_float", "half-float render targets (older spelling)"},
+      {"GL_OES_standard_derivatives", "scene 4's object shader enables it"},
+      {"GL_OES_vertex_array_object", "VAOs (core in ES 3.0, often still listed)"},
+  };
+  GLint extensionCount = 0;
+  glGetIntegerv(GL_NUM_EXTENSIONS, &extensionCount);
+  PortLog("  extensions: %d reported", (int)extensionCount);
+  for (const auto &entry : wanted) {
+    bool present = false;
+    for (GLint i = 0; i < extensionCount && !present; i++) {
+      const char *name = (const char *)glGetStringi(GL_EXTENSIONS, (GLuint)i);
+      if (name && std::strcmp(name, entry.name) == 0) present = true;
+    }
+    // The ES2-era string is still worth checking for drivers that omit the
+    // indexed list.
+    const char *legacy = (const char *)glGetString(GL_EXTENSIONS);
+    if (!present && legacy && std::strstr(legacy, entry.name)) present = true;
+    PortLog("  %-34s %-3s (%s)", entry.name, present ? "yes" : "NO", entry.why);
+  }
+}
+
+GLuint CompileAndLog(GLenum type, const std::string &source, const char *file) {
+  const GLuint shader = glCreateShader(type);
+  const char *text = source.c_str();
+  glShaderSource(shader, 1, &text, nullptr);
+  glCompileShader(shader);
+  GLint ok = GL_FALSE;
+  glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
+  const char *stage = type == GL_VERTEX_SHADER ? "vertex" : "fragment";
+  if (ok) {
+    PortLog("    %s %s compiled (%zu bytes)", stage, file, source.size());
+  } else {
+    std::vector<char> log(4096, 0);
+    glGetShaderInfoLog(shader, (GLsizei)log.size() - 1, nullptr, log.data());
+    PortLog("    %s %s COMPILE FAILED", stage, file);
+    PortLogBlock("      driver: ", log.data());
+  }
+  return shader;
+}
+
+void LogProgramInterface(GLuint program) {
+  GLint count = 0;
+  glGetProgramiv(program, GL_ACTIVE_UNIFORMS, &count);
+  for (GLint i = 0; i < count && i < 40; i++) {
+    char name[128] = {0};
+    GLsizei length = 0;
+    GLint size = 0;
+    GLenum type = 0;
+    glGetActiveUniform(program, (GLuint)i, sizeof(name) - 1, &length, &size, &type, name);
+    // A -1 location is the interesting case: the driver dropped the uniform, so
+    // the scene's glUniform* call is a silent no-op and the draw uses defaults.
+    PortLog("    uniform %-28s loc=%-3d type=0x%04x size=%d", name,
+            (int)glGetUniformLocation(program, name), (unsigned)type, (int)size);
+  }
+  glGetProgramiv(program, GL_ACTIVE_ATTRIBUTES, &count);
+  for (GLint i = 0; i < count && i < 16; i++) {
+    char name[128] = {0};
+    GLsizei length = 0;
+    GLint size = 0;
+    GLenum type = 0;
+    glGetActiveAttrib(program, (GLuint)i, sizeof(name) - 1, &length, &size, &type, name);
+    PortLog("    attribute %-26s loc=%-3d type=0x%04x", name,
+            (int)glGetAttribLocation(program, name), (unsigned)type);
+  }
+}
+
+// Every shader the two scenes load, compiled and linked here first. This is the
+// answer to "the sea does not show up": if the driver refuses that program, its
+// own words are in the port's log rather than only in the scenes' stdout.
+void ValidateShaderPrograms() {
+  static const struct { const char *label; const char *vertex; const char *fragment; } programs[] = {
+      {"scene 2 sea", "shaders/ps14/sea_vert.glsl", "shaders/ps14/sea_frag.glsl"},
+      {"scene 2 sky", "shaders/ps14/sky_vert.glsl", "shaders/ps14/sky_frag.glsl"},
+      {"scene 2 hud", "shaders/ps14/hud_vert.glsl", "shaders/ps14/hud_frag.glsl"},
+      {"scene 4 sky", "shaders/pole/sky_vert.glsl", "shaders/pole/sky_frag.glsl"},
+      {"scene 4 object", "shaders/pole/object_vert.glsl", "shaders/pole/object_frag.glsl"},
+      {"scene 4 hud", "shaders/ps14/hud_vert.glsl", "shaders/pole/hud_frag.glsl"},
+  };
+  PortLog("--- shader validation (the port compiles all six programs itself)");
+  for (const auto &program : programs) {
+    const std::string vertexSource = ReadFromInternal(program.vertex);
+    const std::string fragmentSource = ReadFromInternal(program.fragment);
+    if (vertexSource.empty() || fragmentSource.empty()) {
+      PortLog("  %s: SOURCE MISSING (%s %zu bytes, %s %zu bytes)", program.label,
+              program.vertex, vertexSource.size(), program.fragment, fragmentSource.size());
+      continue;
+    }
+    const GLuint vertex = CompileAndLog(GL_VERTEX_SHADER, vertexSource, program.vertex);
+    const GLuint fragment = CompileAndLog(GL_FRAGMENT_SHADER, fragmentSource, program.fragment);
+    const GLuint handle = glCreateProgram();
+    glAttachShader(handle, vertex);
+    glAttachShader(handle, fragment);
+    glLinkProgram(handle);
+    GLint ok = GL_FALSE;
+    glGetProgramiv(handle, GL_LINK_STATUS, &ok);
+    if (ok) {
+      PortLog("  %s: linked", program.label);
+      LogProgramInterface(handle);
+    } else {
+      std::vector<char> log(4096, 0);
+      glGetProgramInfoLog(handle, (GLsizei)log.size() - 1, nullptr, log.data());
+      PortLog("  %s: LINK FAILED", program.label);
+      PortLogBlock("      driver: ", log.data());
+    }
+    glDeleteProgram(handle);
+    glDeleteShader(vertex);
+    glDeleteShader(fragment);
+  }
+  for (GLenum err = glGetError(); err != GL_NO_ERROR; err = glGetError()) {
+    PortLog("  GL error raised during validation: %s (0x%04x)", GlErrorName(err), (unsigned)err);
+  }
+}
+
 // ------------------------------------------------------------------ event pump
 // The glue's ALooper callbacks are the only way lifecycle and input reach us, so
 // every SDL_PollEvent (and every swap while the surface is gone) drives it.
@@ -491,7 +695,7 @@ void CheckWindowSize() {
 
 // ------------------------------------------------------------------ port hooks
 void PortLog(const char *fmt, ...) {
-  char buf[512];
+  char buf[1024];
   va_list ap;
   va_start(ap, fmt);
   std::vsnprintf(buf, sizeof(buf), fmt, ap);
@@ -627,6 +831,14 @@ SDL_GLContext SDL_GL_CreateContext(SDL_Window *window) {
   if (!EnsureSurface()) return nullptr;
   PortLog("GL ready: %s | %s", (const char *)glGetString(GL_VERSION),
           (const char *)glGetString(GL_RENDERER));
+  if (!gValidated) {
+    // Once per process, on the first context: the device report and the
+    // per-program verdict answer the same question every run asks ("which of
+    // these shaders does this GPU accept?" and "what is this GPU?").
+    gValidated = true;
+    LogGlCapabilities();
+    ValidateShaderPrograms();
+  }
   return (SDL_GLContext)(void *)&gWindow;
 }
 
@@ -653,6 +865,19 @@ void SDL_GL_SwapWindow(SDL_Window *window) {
   }
 
   CaptureDue();
+
+  // Drain whatever the frame raised. The decoded name matters: a draw the driver
+  // rejected is otherwise indistinguishable from a draw that produced nothing,
+  // which is exactly how scene 2's missing sea looked from the outside.
+  for (int i = 0; i < 4; i++) {
+    const GLenum err = glGetError();
+    if (err == GL_NO_ERROR) break;
+    if (gGlErrorsLogged < 8) {
+      gGlErrorsLogged++;
+      PortLog("GL error %s (0x%04x) around frame %lu", GlErrorName(err), (unsigned)err,
+              gFrameTotal + 1);
+    }
+  }
 
   if (eglSwapBuffers(gDisplay, gSurface) != EGL_TRUE) {
     // The surface is gone even though we thought it was current. Hand it back

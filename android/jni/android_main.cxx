@@ -181,7 +181,13 @@ int CopyAssetTree(AAssetManager *assets, const char *internalDir) {
         // Always rewritten rather than timestamp-compared: 12 files of GLSL are
         // cheaper to copy than the class of bug that a stale shader causes (see
         // the shader-cache note in the README).
-        if (std::fwrite(data, 1, (size_t)length, out) == (size_t)length) copied++;
+        if (std::fwrite(data, 1, (size_t)length, out) == (size_t)length) {
+          copied++;
+          // One line per file with its size. A shader that arrives truncated
+          // fails in the driver's compiler later and reads like a shader bug, so
+          // the sizes are recorded next to the compile verdicts they belong to.
+          PortLog("  unpacked %-34s %ld bytes", to.c_str(), (long)length);
+        }
       }
       if (out) std::fclose(out);
       AAsset_close(asset);

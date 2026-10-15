@@ -135,9 +135,15 @@ A phone has no console, so the run reports itself into the app's files directory
 storage, the app-private directory otherwise):
 
 * `stdout.txt` — the scenes' own output, including `Benchmark Results - Time :
-  45.0s, Average FPS : N, Score : N` for each scene.
-* `portlog.txt` — the port's trace: EGL/ES version and the sample count it really
-got, how many shader files were unpacked, and one line per capture.
+  45.0s, Average FPS : N, Score : N` for each scene.* `portlog.txt` — the port's trace: EGL/ES version and the sample count it really
+  got, how many shader files were unpacked (and each one's byte count), one line
+  per capture, and the device report the two scenes cannot make themselves: the
+  GPU vendor/renderer/GLSL version, the uniform/varying/texture limits, whether
+  the extensions scene 2's RGBA16F environment cube needs are present, a
+  compile-and-link verdict with the driver's own log for **all six** programs,
+  their active uniforms/attributes with locations, and the first GL errors
+  raised while rendering, decoded, with frame numbers. That is what turns "the
+  sea does not show up" from a screenshot into a line of text.
 * `shots/*.png` — captured by default at **t=45.1 s** (a clean frame from the end
   of the benchmark, after the score is computed), **t=47 s** and **t=48.5 s**
   (the results screen), the same three for scene 4. A capture happens inside
