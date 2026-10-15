@@ -24,6 +24,16 @@ ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
 
 NDK ?= $(ANDROID_NDK_HOME)
 SDK ?= $(ANDROID_SDK_ROOT)
+
+# Without these, make resolves $(GLUE) inside the NDK to '/sources/...' and stops
+# with "No rule to make target", which says nothing about the actual problem.
+# A warning (not an error) so that `make clean` and `make doctor` still work.
+ifeq ($(strip $(NDK)),)
+$(warning ANDROID_NDK_HOME is not set: run 'sh android/fetch_toolchain.sh', or pass NDK=/path/to/ndk)
+endif
+ifeq ($(strip $(SDK)),)
+$(warning ANDROID_SDK_ROOT is not set: run 'sh android/fetch_toolchain.sh', or pass SDK=/path/to/sdk)
+endif
 BUILD_TOOLS ?= $(SDK)/build-tools/34.0.0
 PLATFORM_JAR ?= $(SDK)/platforms/android-34/android.jar
 
