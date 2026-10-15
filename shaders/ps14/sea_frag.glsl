@@ -11,7 +11,14 @@ varying vec2 vUV;
 uniform sampler2D uRippleTex;
 uniform samplerCube uSkyEnvTex;
 uniform sampler2D uFoamTex;
-uniform float uTime;
+// highp, explicitly, because this is the one uniform the sea's two stages share:
+// sea_vert.glsl reads it for the wave displacement and this stage reads it for
+// the foam/ripple scroll. A vertex shader's float default is highp while this
+// stage's default is the mediump above, and an ES 3.0 linker rejects the pair for
+// exactly that (Mesa: "declarations for uniform `uTime` have mismatching
+// precision qualifiers") - which costs the whole sea program, silently, while the
+// sky and HUD programs link fine because no uniform of theirs is shared.
+uniform highp float uTime;
 uniform vec3  uEyePos;
 uniform vec3  uSunDir;
 uniform vec3  uHorizonColor;

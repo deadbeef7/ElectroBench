@@ -14,6 +14,7 @@
 #   make -f android/Makefile              # -> ./ElectroBench-android.apk
 #   make -f android/Makefile verify       # manifest, signature, ABIs, symbols
 #   make -f android/Makefile check        # shader validation (same as Vita)
+#   make -f android/Makefile host-shaders # ES 3 link check for all six programs
 #
 # There is no gradle step and no Java source anywhere: the APK contains no
 # classes.dex (android:hasCode="false" plus the framework's own NativeActivity),
@@ -118,7 +119,7 @@ SHADERS := $(wildcard $(ROOT)/shaders/*/*.glsl)
 RES := $(BUILD)/res/mipmap/ic_launcher.png
 SO_FILES := $(foreach abi,$(ABIS),$(BUILD)/$(abi)/libmain.so)
 
-.PHONY: all clean check verify doctor apk host-render host-png
+.PHONY: all clean check verify doctor apk host-render host-png host-shaders
 all: $(APK)
 
 # ------------------------------------------- host OpenGL ES 3 render check
@@ -151,6 +152,19 @@ host-render: $(HOST_BIN)
 	    fi; \
 	done
 	@ls -l $(BUILD)/host/*.ppm
+
+# host-shaders is deliberately separate from host-render: it needs a GL context
+# but no frames, so it runs in about a second and can gate every change to a
+# shader. It is the only check here that sees a program's two stages together -
+# the sea shipped dead once with each stage valid on its own and the pair
+# unlinkable (see android/host/host_main.cxx).
+host-shaders: $(HOST_BIN)
+	@if command -v xvfb-run >/dev/null 2>&1; then \
+	    LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s "-screen 0 640x480x24" \
+	        $(HOST_BIN) --check-shaders; \
+	else \
+	    LIBGL_ALWAYS_SOFTWARE=1 $(HOST_BIN) --check-shaders; \
+	fi
 
 host-png: host-render
 	@mkdir -p $(ROOT)/android/screenshots

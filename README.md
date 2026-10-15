@@ -112,10 +112,16 @@ make -f android/Makefile \
      ANDROID_SDK_ROOT=build-android/toolchain/sdk
 make -f android/Makefile verify ...   # manifest, signature, ABIs, entry point
 make -f android/Makefile check ...    # shader validation (same as the Vita port)
+make -f android/Makefile host-shaders # link all six programs through host ES 3
 ```
 
 The two environment variables are the ones `fetch_toolchain.sh` prints at the
 end. `make -f android/Makefile doctor` says which tool it resolved to what.
+
+`check` validates each shader on its own; `host-shaders` compiles and links every
+program the two scenes load, which is the only check that can see the two stages
+of one program disagree (see *What was verified, and what was not*). It needs no
+device and takes about a second.
 
 ### Install and run
 
@@ -356,19 +362,56 @@ Verified by rendering the port's own code under a real OpenGL ES 3 driver: the
 harness in `android/host/` (`make -f android/Makefile host-render`) runs the
 **same** scene translation units and the **same** `shaders/` tree through Mesa's
 llvmpipe on the host — ES 3.2, the API level the APK targets — and lets the
-scenes write their own frames out. Both scenes come up, all six programs compile
-with no errors, and both produce full frames: scene 2
-`lit=1049088/1049088` (not one black pixel) and scene 4 `lit=1048910/1049088` at
-1366x768. The images are committed as
-`android/screenshots/scene2_dusk_ocean.png` and
+scenes write their own frames out. Both scenes come up and both produce full
+frames: scene 2 `lit=1049088/1049088` and scene 4 `lit=1048910/1049088` at
+1366x768.
+
+**A `lit` count is exactly what hid the sea.** Scene 2's sea program did not link
+at all in every revision before this one, so the sea contributed no pixels while
+the sky dome filled the same rows and the frame still reported every pixel lit —
+an entirely plausible "dusk sky over dark water" frame with no water in it. The
+driver's reason, reproduced on the host:
+
+```
+Program shaders/ps14/sea_vert.glsl/shaders/ps14/sea_frag.glsl failed to link:
+error: declarations for uniform `uTime` have mismatching precision qualifiers
+```
+
+`uTime` is the one uniform the sea's two stages share (the vertex stage displaces
+the surface with it, the fragment stage scrolls foam and ripple with it). A vertex
+shader's `float` defaults to `highp`, and `shaders/ps14/sea_frag.glsl`'s
+`precision mediump float;` made its copy `mediump`, which an ES 3.0 linker must
+reject; the sea program was therefore never valid, while the sky and HUD programs
+linked fine because no uniform of theirs is shared. The fix is one explicit
+`highp` on that declaration in the fragment stage; the sea's ALU stays `mediump`.
+The Vita port packs this same `shaders/` tree (`-a shaders=shaders` in the root
+Makefile), so the fix reaches it too — whether SceShaccCg was linking the pair into
+a broken program or silently tolerating it is untested, since no Vita was
+available.
+
+`make -f android/Makefile host-shaders` closes the hole: it compiles and links all
+six programs through the host's ES 3 driver, prints each verdict with the driver's
+own log, and exits non-zero if any pair fails. Run against the revision that
+shipped the sea-less frame it reproduces the failure above; on the fixed tree it
+prints `SHADER_LINK_CHECK: 6 linked, 0 failure(s)`. Measured on the frame, the fix
+changes 482,007 pixels — 45.9% of the image, every row from the horizon down —
+while the sky above the horizon stays identical to within 0.1/255 on the mean. The
+images are committed as `android/screenshots/scene2_dusk_ocean.png` (which
+replaced a sea-less one, byte-identical to a fresh pre-fix render) and
 `android/screenshots/scene4_power_lines.png`.
 
-**Not verified:** nothing was run on a device or in an emulator. This container
-has no phone, no Android emulator and no KVM, so the Android-specific layer —
-activity lifecycle, `ANativeActivity`, `AInputQueue`, `eglCreateWindowSurface`
-on a real surface, the external-files path, and the capture blit on a real
-driver — is covered by compilation, link-time symbol and dependency checks, and
-the app's own logging, but not by execution. That is exactly why the host
-harness above is part of the repo: it is the closest thing to a pixel-level
-check available here, and it covers the scenes and the shaders rather than the
-glue around them.
+**Not verified:** the fixed APK has not been run anywhere. Nothing was executed
+on a device or in an emulator *from this container* — no phone, no Android
+emulator, no KVM — so the Android-specific layer — activity lifecycle,
+`ANativeActivity`, `AInputQueue`, `eglCreateWindowSurface` on a real surface, the
+external-files path, and the capture blit on a real driver — is covered by
+compilation, link-time symbol and dependency checks, and the app's own logging,
+but not by execution. That is exactly why the host harness above is part of the
+repo: it is the closest thing to a pixel-level check available here, and it covers
+the scenes and the shaders rather than the glue around them.
+
+What *was* seen on a device is the symptom that led here: scene 2 rendered its sky
+dome and its HUD, reported no error on screen, and showed no sea at all — no black
+rectangle, just sky continuing down. That is this link failure as a user sees it.
+The fix itself is host-verified (link check plus the 45.9% frame change above), so
+confirming it on that device is the remaining step.
