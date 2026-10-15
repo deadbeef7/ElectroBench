@@ -1,8 +1,9 @@
-# ElectroBench on the PlayStation Vita (scenes 2 and 4)
+# ElectroBench on the PlayStation Vita and Android (scenes 2 and 4)
 
-A homebrew port of **scene 2 (dusk ocean)** and **scene 4 (power lines / "lain")**
-to the PS Vita, built as a single installable `ElectroBench-vita.vpk` that sits
-at the repo root next to the code. Scenes 1 and 3 are not part of this port.
+Homebrew ports of **scene 2 (dusk ocean)** and **scene 4 (power lines /
+"lain")** to the PS Vita and to Android. Scenes 1 and 3 are not part of either
+port. Two installable artifacts sit at the repo root next to the code:
+`ElectroBench-vita.vpk` and the sideloadable `ElectroBench-android.apk`.
 
 ```
 include/GL/glew.h      GLEW stand-in  -> vitaGL exports the same gl* symbols
@@ -12,10 +13,12 @@ shaders/ps14, shaders/pole   GLSL 1.00 rewrites of the ported scenes' shaders
 src/scene2.cxx         desktop scene translation unit, compiled unchanged
 src/scene4.cxx
 src/font_atlas.hxx     shared HUD font data and atlas layout
-src/vita_main.cxx      entry point: runs scene 2 and scene 4 in one process
+src/vita_main.cxx      Vita entry point: runs scene 2 and scene 4 in one process
 src/vita_sdl.cxx       SDL subset implementation over vitaGL + SceCtrl
 tools/                 build helpers (kept on disk, untracked from git)
+android/               Android port: NativeActivity APK, GLES3 + EGL, harness
 ElectroBench-vita.vpk  the installable homebrew
+ElectroBench-android.apk  the installable APK (same two scenes)
 ```
 
 `lib/asset_path.hxx` gained one `#ifdef ELECTROBENCH_VITA` branch so the scenes
@@ -72,6 +75,109 @@ scene 2.
 The app exits after the second scene. `sceClibPrintf` output (which scene is
 running, shader/compile diagnostics relayed from the scenes' stdout/stderr) is
 visible in VitaShell's log or a debug console.
+
+## Android port (same two scenes)
+
+`ElectroBench-android.apk` is the same two scenes built for Android: a
+**NativeActivity** app whose `libmain.so` is `android/jni`'s entry point plus the
+two scene translation units from `src/`, compiled against the GLES3 and SDL2
+subsets in `android/include` and packed with the same `shaders/` tree.
+
+```
+android/AndroidManifest.xml   NativeActivity, landscape, android:hasCode="false"
+android/include/GL/glew.h     GLEW stand-in -> OpenGL ES 3.0 (not vitaGL)
+android/include/SDL2/         SDL_opengl.h stand-in -> GLES3
+android/jni/android_main.cxx  entry point: assets, paths, scene order, logs
+android/jni/android_sdl.cxx   SDL subset over EGL/GLES3 + input + PNG capture
+android/host/                 host OpenGL ES 3 render check (see below)
+android/Makefile              APK build (NDK clang + aapt2 + zipalign + apksigner)
+android/fetch_toolchain.sh    fetches the pinned NDK / build-tools / platform
+android/make_android_icon.py  launcher icon (pure Python, no image library)
+android/ppm_to_png.py         PPM -> PNG for the frames the checks produce
+android/screenshots/          frames rendered by the host OpenGL ES 3 check
+```
+
+There is **no Java source, no `classes.dex` and no gradle step**: the framework's
+own `android.app.NativeActivity` is the Java side, and it `dlopen`s `libmain.so`
+and calls `android_main()` in it. A JDK is needed only for `apksigner` and
+`keytool`. The APK is one ~3.4 MB file carrying `arm64-v8a`, `armeabi-v7a` and
+`x86_64` (the last one so it can also be tried in an emulator).
+
+### Build
+
+```sh
+sh android/fetch_toolchain.sh   # once: NDK r26d, build-tools 34.0.0, platform android-34
+make -f android/Makefile \
+     ANDROID_NDK_HOME=build-android/toolchain/ndk/android-ndk-r26d \
+     ANDROID_SDK_ROOT=build-android/toolchain/sdk
+make -f android/Makefile verify ...   # manifest, signature, ABIs, entry point
+make -f android/Makefile check ...    # shader validation (same as the Vita port)
+```
+
+The two environment variables are the ones `fetch_toolchain.sh` prints at the
+end. `make -f android/Makefile doctor` says which tool it resolved to what.
+
+### Install and run
+
+`adb install -r ElectroBench-android.apk`, or copy the APK to the device and tap
+it. It is signed with a throwaway debug key generated into `build-android/`:
+anything installed from it must be uninstalled before an APK signed with a
+different key can replace it. The app runs scene 2's full 45 s benchmark and its
+4 s results screen, then scene 4's, then closes itself.
+
+| Input | Effect |
+| --- | --- |
+| **BACK** | quit the app |
+| **tap**, **A**, **ENTER** or **SPACE** | end the current scene early (the desktop Esc key) |
+
+A phone has no console, so the run reports itself into the app's files directory
+(`/sdcard/Android/data/org.electrobench.android/files/` on a device with external
+storage, the app-private directory otherwise):
+
+* `stdout.txt` — the scenes' own output, including `Benchmark Results - Time :
+  45.0s, Average FPS : N, Score : N` for each scene.
+* `portlog.txt` — the port's trace: EGL/ES version and the sample count it really
+got, how many shader files were unpacked, and one line per capture.
+* `shots/*.png` — captured by default at **t=45.1 s** (a clean frame from the end
+  of the benchmark, after the score is computed), **t=47 s** and **t=48.5 s**
+  (the results screen), the same three for scene 4. A capture happens inside
+  `SDL_GL_SwapWindow`, before the frame is presented, and goes through a blit
+  into a single-sample FBO — the only way ES 3.0 can read the 4x-MSAA default
+  framebuffer scene 4 asks for. Every line logs `lit=<n>/<total>`, so "did
+  anything get drawn" is answerable from the log alone.
+
+Optional run spec at `<app files>/electrobench.txt`, one `key=value` per line:
+
+```
+start=4                # scene 4 first, then scene 2
+only=2                 # just scene 2
+shots=10,45.1,47       # capture at those seconds after the scene's first frame
+shots=off              # no captures
+```
+
+### How it differs from the Vita port
+
+* **GL level.** Android has no desktop GL 3.3, but it has OpenGL ES 3.0, which is
+  where VAOs, `glReadBuffer`, `glFramebufferTexture2D` and `glBlitFramebuffer`
+  come from — the whole surface the scenes actually use. The ES 3.0 context
+  compiles the same `#version 100` shaders the Vita port does.
+* **A context per scene.** `SDL_GL_DeleteContext` really tears the EGL device
+  down here, so scene 4's 4x-MSAA request is answered by its own config rather
+  than by scene 2's, and scene 2's GL objects do not stay resident into scene 4.
+* **Assets are unpacked, not mounted.** A VPK mounts as `app0:`; an APK does
+  not. The app copies `assets/shaders/**` into its files directory at startup and
+  `SDL_GetBasePath()` answers with that directory, which is the last variant
+  `resolveAssetPath()` already tries — `lib/asset_path.hxx` is untouched by this
+  port.
+* **The resolution is the device's.** `gWindowedMode` is false and
+  `SDL_GetWindowSize()` returns the real surface, so both scenes render at the
+  phone's native landscape resolution instead of the Vita's 960x544.
+* **The navigation bar is not hidden.** Immersive mode needs
+  `View.setSystemUiVisibility` on the UI thread, and with no dex there is no Java
+  side to post that from; the manifest's `Theme.NoTitleBar.Fullscreen` plus
+  `AWINDOW_FLAG_FULLSCREEN` hide the status bar only, so the scenes get a surface
+  inset by the navigation bar. `AWINDOW_FLAG_KEEP_SCREEN_ON` is set, because a
+  benchmark whose display dims halfway through is not a benchmark.
 
 ## How the port is put together
 
@@ -219,3 +325,44 @@ emulator-side limits, both measured on the current tree:
 If a shader fails to compile on hardware, the app's own stderr text plus
 `printf` diagnostics come out through `sceClibPrintf`, and the first thing to
 try is `make check` after editing a shader in `shaders/`.
+
+### What was verified for the Android port, and what was not
+
+Verified on the committed `ElectroBench-android.apk`, by
+`make -f android/Makefile verify`:
+
+* `aapt2 dump badging` reads the binary manifest back as package
+  `org.electrobench.android`, `sdkVersion:'24'`, `targetSdkVersion:'34'`,
+  `launchable-activity: android.app.NativeActivity`, and
+  `native-code: 'arm64-v8a' 'armeabi-v7a' 'x86_64'`.
+* `apksigner verify` verifies it with APK Signature Scheme v2 **and** v3 (v1 is
+  off by design at minSdk 24), one signer.
+* Every `libmain.so` is an ELF shared object of the right class and machine,
+  exports `ANativeActivity_onCreate` and `android_main`, and needs only
+  `libEGL.so`, `libGLESv3.so`, `liblog.so`, `libandroid.so`, `libm.so`,
+  `libdl.so`, `libc.so`. The C++ runtime is linked in
+  (`-static-libstdc++`), so nothing else has to be shipped inside the APK.
+* `make -f android/Makefile check`: every shader is valid GLSL ES 1.00, which is
+  also what the ES 3.0 context in the APK compiles them as (`#version 100` is
+  the default in an ES 3.0 context, and no `#version 300 es` rewrite is needed).
+
+Verified by rendering the port's own code under a real OpenGL ES 3 driver: the
+harness in `android/host/` (`make -f android/Makefile host-render`) runs the
+**same** scene translation units and the **same** `shaders/` tree through Mesa's
+llvmpipe on the host — ES 3.2, the API level the APK targets — and lets the
+scenes write their own frames out. Both scenes come up, all six programs compile
+with no errors, and both produce full frames: scene 2
+`lit=1049088/1049088` (not one black pixel) and scene 4 `lit=1048910/1049088` at
+1366x768. The images are committed as
+`android/screenshots/scene2_dusk_ocean.png` and
+`android/screenshots/scene4_power_lines.png`.
+
+**Not verified:** nothing was run on a device or in an emulator. This container
+has no phone, no Android emulator and no KVM, so the Android-specific layer —
+activity lifecycle, `ANativeActivity`, `AInputQueue`, `eglCreateWindowSurface`
+on a real surface, the external-files path, and the capture blit on a real
+driver — is covered by compilation, link-time symbol and dependency checks, and
+the app's own logging, but not by execution. That is exactly why the host
+harness above is part of the repo: it is the closest thing to a pixel-level
+check available here, and it covers the scenes and the shaders rather than the
+glue around them.

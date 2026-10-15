@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ElectroBench (Android port): scenes 2 and 4, nothing else.
+
+  This is a NativeActivity app with android:hasCode="false" and no classes.dex
+  at all: the framework's own android.app.NativeActivity is the Java side, and
+  it dlopens libmain.so and calls android_main() in it. That is why this port
+  needs no Java source, no dex and no gradle - and why "no code" is not a
+  mistake in this file.
+
+  Landscape is locked because both scenes are 16:9 and size their viewport from
+  the surface; the activity handles configuration changes itself so a rotation or
+  a window resize does not restart the 45 s benchmark. Theme.NoTitleBar.Fullscreen
+  plus the native AWINDOW_FLAG_FULLSCREEN/immersive flags (see
+  android/jni/android_main.cxx) give the scenes the whole screen.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="org.electrobench.android"
+    android:versionCode="1"
+    android:versionName="1.0">
+
+    <!-- ES 3.0 is required: the scenes use VAOs, glReadBuffer and
+         glBlitFramebuffer, none of which ES 2.0 has. -->
+    <uses-feature android:glEsVersion="0x00030000" android:required="true" />
+    <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34" />
+
+    <application
+        android:label="ElectroBench"
+        android:icon="@mipmap/ic_launcher"
+        android:hasCode="false"
+        android:allowBackup="false"
+        android:extractNativeLibs="true"
+        android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
+
+        <activity
+            android:name="android.app.NativeActivity"
+            android:label="ElectroBench"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:screenOrientation="landscape"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density">
+
+            <!-- The name of the shared object the framework loads and from which
+                 it calls android_main(); the file is lib/&lt;abi&gt;/libmain.so. -->
+            <meta-data android:name="android.app.lib_name" android:value="main" />
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
