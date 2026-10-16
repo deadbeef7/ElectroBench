@@ -494,36 +494,75 @@ shader already relied on it unguarded for the earlier `uTime` fix, and a device
 without it would reject the program rather than draw the band — the alternative is
 to stop shipping raw world coordinates to the fragment stage at all.
 
-### Cross-port scan: what matches, and what does not
+### Cross-port scan: what matches, and what the Vita cannot do
 
 The two ports share the shader tree (`shaders/`, packed into the APK's assets and
 the VPK's `app0:`) and the two scene translation units (`src/scene2.cxx`,
 `src/scene4.cxx`); only the platform layer differs (`android/jni` + ES 3.0 stand-ins
 against `src/vita_main.cxx`/`src/vita_sdl.cxx` + vitaGL). So every shader change and
 every scene change lands on both, and `tools/check_shaders.sh` is one script run by
-both `make check` and `make -f android/Makefile check`. What the scan turned up that
-is *not* fixed here:
+both `make check` and `make -f android/Makefile check`.
 
-* **Scene 2's environment cube map is a Vita-only gap.** `src/scene2.cxx` allocates
-  it with `glTexImage2D(..., GL_RGBA16F, ..., GL_RGBA, GL_FLOAT, nullptr)`, asks for
-  `GL_TEXTURE_WRAP_R` and calls `glGenerateMipmap(GL_TEXTURE_CUBE_MAP)`. All three
-  are core ES 3.0, and all three are refused by vitaGL: its cube path
-  (`source/textures.c`, `_glTexImage2D_CubeIMPL`) accepts only
-  `GL_UNSIGNED_BYTE`/`GL_UNSIGNED_SHORT_5_5_5_1`/`GL_UNSIGNED_SHORT_4_4_4_4` for
-  `format = GL_RGBA`, its `glTexParameteri` has no wrap-R case, and its
-  `glGenerateMipmap` rejects the cube target. The guest logged exactly those three
-  (`_glTexImage2D_CubeIMPL set GL_INVALID_ENUM (type: 0x1406)`,
-  `_glTexParameteri set GL_INVALID_ENUM (pname: 0x8072)`, `glGenerateMipmap set
-  GL_INVALID_ENUM (target: 0x8513)`) during the run, so the reflection probe the sea
-  samples is very likely unallocated on hardware. The scene never calls
-  `glCheckFramebufferStatus`, so nothing would report it, and scene 2's pixels
-  cannot be checked under Vita3K to see it — this one needs a console.
-* **`clip` shadows a Cg builtin** in `shaders/ps14/hud_vert.glsl`. SceShaccCg says
-  `'clip' shadows previous declaration` / `previous declaration was builtin` and
-  compiles the program anyway; it is informational, and renaming a variable in a
-  HUD shader is not worth a second round of both ports' checks.
-* **Android has no device-side run either**: the APK builds, packs the current
-  shader bytes, and passes `apksigner verify` for all three ABIs, and the scenes and
-  shaders are exercised through the host's ES 3 driver - but the activity/EGL glue
-  in `android/jni/` is only as good as the compiler and the emulator that does not
-  exist here.
+**Scene 2's environment cube map was the one thing vitaGL could not do.** The scene
+renders the sky dome into the six cube faces (`glFramebufferTexture2D(GL_FRAMEBUFFER,
+GL_COLOR_ATTACHMENT0, faces[i], gEnvCube, 0)`), allocates each face
+`GL_RGBA16F`/`GL_FLOAT`, sets `GL_TEXTURE_WRAP_R` and calls
+`glGenerateMipmap(GL_TEXTURE_CUBE_MAP)`. All four are core ES 3.0 and all four are
+refused by the vitaGL revision this port builds: `glFramebufferTexture2D` raises
+`GL_INVALID_ENUM` for any `textarget` other than `GL_TEXTURE_2D`
+(`source/framebuffers.c:485`); the cube path's table takes only `GL_UNSIGNED_BYTE`,
+`GL_UNSIGNED_SHORT_5_5_5_1` or `GL_UNSIGNED_SHORT_4_4_4_4` as the *type* for
+`format = GL_RGBA` (`_glTexImage2D_CubeIMPL`, `source/textures.c`); `glTexParameteri`
+has no wrap-R case; and `glGenerateMipmap` rejects the cube target, with cube mip
+levels still a `FIXME` in that file. Nothing reported any of it — the probe never
+called `glCheckFramebufferStatus`.
+
+The port now draws each face into a 2D colour target and moves it into the cube with
+`glCopyTexImage2D`, which vitaGL implements as `glReadPixels` + `glTexImage2D`, i.e.
+through the cube path whose data format it *does* accept. That copy goes through
+guest memory, so on the Vita the faces are 256 rather than 768 (six 768² faces would
+be ~28 MB per refresh) and the probe refreshes every 4th frame; the cube is
+allocated `GL_RGBA`/`GL_UNSIGNED_BYTE`, filtered `GL_LINEAR` because there is no mip
+chain to sample, wrap-R is not set, and `--dump-env` returns early — it needs
+per-face cube attachments and a writable `/tmp`, neither of which this port has
+(`WriteScreenshotPPM` is its capture path). All of it sits behind
+`#ifdef ELECTROBENCH_VITA` in `src/scene2.cxx`, alongside the two platform branches
+already there, so the desktop and Android builds keep the RGBA16F direct-to-face
+path — and render byte-identically, which is checked below.
+
+**`clip` no longer shadows a Cg builtin.** `shaders/ps14/hud_vert.glsl` gives its HUD
+vertex shader's NDC pair the name `ndc` instead of `clip`, so SceShaccCg's `'clip'
+shadows previous declaration` / `previous declaration was builtin` are gone. It
+compiled either way; the rename is in the shared tree, so both scenes' HUD programs
+on both ports use it.
+
+**Android still has no device-side run.** The APK builds, packs the current bytes and
+passes `apksigner verify` for all three ABIs, and the scenes and shaders are
+exercised through the host's ES 3 driver — but the activity/EGL glue in
+`android/jni/` is only as good as the compiler and the emulator that does not exist
+here.
+
+**Verified for this round.** On the Vita path in the emulator, before the change the
+guest logged `glFramebufferTexture2D set GL_INVALID_ENUM` **1,470** times (6 faces ×
+245 frames), `glGenerateMipmap ... (target: 0x8513)` **245** times, and
+`_glTexImage2D_CubeIMPL ... (type: 0x1406)` plus `_glTexParameteri ... (pname:
+0x8072)` once each at init; after it, **none of those appear and no new guest GL
+error does**, both scenes still put every program through SceShaccCg with no compile
+or link failure, and scene 2 still fires its shot (`t=6.01`). The desktop/Android path
+is checked by pixels rather than by argument: `host-render` scene 2 reproduces
+`android/screenshots/scene2_dusk_ocean.png` **byte for byte** (0 of 1,049,088 pixels
+differ), `make check`, `make -f android/Makefile check` and `make -f android/Makefile
+host-shaders` (6 linked, 0 failures) all pass, and both artifacts were repacked from
+these bytes. Scene 4's frame is not run-to-run reproducible (its camera drifts with
+wall-clock time: two renders of the identical binary differ by 807,704 px), so for it
+the check is the measurement, not the image — its over-195 pixel count comes out 962
+against 961 for the committed frame, and 12,106 before the burnout fix.
+
+**Two honest limits on the cube fix.** Nothing has run on a real console, so the
+reflection *pixels* stay unverified — and the emulator cannot settle it either,
+because Vita3K drops scene 2's draws for its own shader-bank reason, which leaves the
+faces the copy path fills empty there. And the Vita's reflection is a fidelity step
+down from the other ports by construction: 8-bit colour instead of `RGBA16F`, 256²
+faces instead of 768², no mip chain, and a one-in-four-frame refresh. All four follow
+from the copy going through guest memory and from vitaGL's cube format table;
+`kEnvMapSize` and `kEnvMapRefreshFrames` are the dials if a console says otherwise.

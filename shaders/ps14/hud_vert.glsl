@@ -12,8 +12,13 @@ uniform vec2 uResolution;
 varying vec2 vUV;
 
 void main() {
-    vec2 clip = vec2(aPos.x / uResolution.x * 2.0 - 1.0,
-                     1.0 - aPos.y / uResolution.y * 2.0);
-    gl_Position = vec4(clip, 0.0, 1.0);
+    // `ndc`, not `clip`: under SceShaccCg `clip` shadows the Cg builtin and the
+    // compiler says so ("'clip' shadows previous declaration" / "previous
+    // declaration was builtin"). It compiles either way, but a name that collides
+    // with a builtin in the language the shader is translated into is not worth
+    // keeping.
+    vec2 ndc = vec2(aPos.x / uResolution.x * 2.0 - 1.0,
+                    1.0 - aPos.y / uResolution.y * 2.0);
+    gl_Position = vec4(ndc, 0.0, 1.0);
     vUV = aUV;
 }
