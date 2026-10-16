@@ -448,7 +448,7 @@ static bool gResultsShown = false;
 static double gResultsElapsed = 0.0, gResultsFps = 0.0, gResultsScore = 0.0;
 static double gResultsShownAt = 0.0;
 
-static const double kResultsScreenSeconds = 4.0;
+static const double kResultsScreenSeconds = 12.0;
 static const char *gSceneName = "Scene 2";
 double gFusedTideScore = 0.0;
 static bool gFusedDone = false;
