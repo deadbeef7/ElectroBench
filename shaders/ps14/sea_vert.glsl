@@ -10,7 +10,10 @@ attribute vec2 aUV;
 uniform mat4 uViewProj;
 uniform float uTime;
 
-varying vec3 vWorld;
+// highp to match the fragment stage, which needs full precision to carry a world
+// position out to +/-2048 (see the note there). A vertex shader's float default
+// is already highp, so this only makes it explicit.
+varying highp vec3 vWorld;
 varying vec2 vUV;
 
 

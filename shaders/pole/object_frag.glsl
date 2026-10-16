@@ -1,6 +1,9 @@
 // GENERATED from shaders/pole/object_frag.glsl by vitaport/tools/make_vita_shaders.py -- do not edit.
 // GLSL 1.00-style rewrite for vitaGL/SceShaccCg (see that script's RULES); the
-// math is identical to the desktop shader except for the documented rewrites.
+// math is identical to the desktop shader except for the documented rewrites,
+// and one deliberate correction documented at the specular term below (the
+// desktop original divides the GGX specular by 4*NoV on top of a visibility
+// term that already carries it, which blows distant geometry out to white).
 #version 100
 #extension GL_OES_standard_derivatives : enable
 precision mediump float;
@@ -350,6 +353,16 @@ void main() {
     a2 = a2 * a2;
     float dd = NoH * NoH * (a2 - 1.0) + 1.0;
     float D = a2 / (3.14159265 * dd * dd);
+    // G is Schlick's Smith *visibility* term, V = 0.25 / ((NoL(1-k)+k)(NoV(1-k)+k)),
+    // which already carries the 1/(4*NoL*NoV) of the microfacet BRDF. The specular
+    // radiance is therefore f * NoL = D * V * F * NoL, and dividing by 4*NoV as well
+    // counted that factor twice. The duplicate was invisible at the near-normal
+    // angles of the foreground, but NoV is only clamped to 1e-3, so it made the
+    // highlight grow without bound as the surface turned edge-on: dist-treeline
+    // facets (rough 1.0, so D is a flat 0.318) reached sp > 4, and sunTint*sp alone
+    // is (4.0, 2.6, 1.4) - pure white after the tonemap. Everything sitting on the
+    // horizon is seen edge-on, which is why scene 4's background houses and the
+    // ridge behind them burned out to flat white.
     float kg = a2 * 0.5;
     float G = 0.25 / (max(NoV * (1.0 - kg) + kg, 1e-4)
                       * max(NoL * (1.0 - kg) + kg, 1e-4));
@@ -360,7 +373,7 @@ void main() {
     float Fs = 0.045 + 0.955 * (fu2 * fu2 * fu);
 
 
-    float spR = D * G * Fs / (4.0 * NoV) * NoL;
+    float spR = D * G * Fs * NoL;
     float sp = 1.35 * spR / (1.0 + spR * 0.2470);
 
 

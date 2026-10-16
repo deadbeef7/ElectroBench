@@ -5,7 +5,18 @@
 precision mediump float;
 
 
-varying vec3 vWorld;
+// highp, explicitly, because this varying carries a *world* position: the sea
+// patch is kSeaSize (4096) across, so these are coordinates of +/-2048 and the
+// stage's default mediump cannot hold them. Interpolated at mediump the far half
+// of the patch collapses - dist came back >= 16384 (mediump's own maximum) for
+// fragments whose vWorld was a perfectly ordinary (1847, 1044) - which drove
+// horizonMix and haze to 1.0 over a 24-row band straddling the horizon while
+// `body` stayed at its un-hazed value: the near-black band between the sea and
+// the sky. At highp the same probes agree with the geometry (row 416 returns
+// length(vWorld.xz) = 1606 and dist = 1574) and the haze ramps normally, so the
+// water reaches the horizon. The sea's ALU is still mediump; only the two
+// stages' shared view of the world position is not.
+varying highp vec3 vWorld;
 varying vec2 vUV;
 
 uniform sampler2D uRippleTex;

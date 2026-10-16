@@ -363,8 +363,11 @@ harness in `android/host/` (`make -f android/Makefile host-render`) runs the
 **same** scene translation units and the **same** `shaders/` tree through Mesa's
 llvmpipe on the host — ES 3.2, the API level the APK targets — and lets the
 scenes write their own frames out. Both scenes come up and both produce full
-frames: scene 2 `lit=1049088/1049088` and scene 4 `lit=1048910/1049088` at
-1366x768.
+frames: scene 2 `lit=1049088/1049088` and scene 4 `lit=1048911/1049088` at
+1366x768. Scene 4's exact numbers drift by a pixel or two between runs, because
+its camera advances on real elapsed time (`gSimTime`) rather than on the pinned
+shot time scene 2 uses, so the frame it captures is a few hundredths of a second
+apart each run; scene 2's frames are reproducible byte for byte.
 
 **A `lit` count is exactly what hid the sea.** Scene 2's sea program did not link
 at all in every revision before this one, so the sea contributed no pixels while
@@ -415,3 +418,112 @@ dome and its HUD, reported no error on screen, and showed no sea at all — no b
 rectangle, just sky continuing down. That is this link failure as a user sees it.
 The fix itself is host-verified (link check plus the 45.9% frame change above), so
 confirming it on that device is the remaining step.
+
+### Two more rendering bugs, in the shared shader tree
+
+Two further defects showed up in the committed frames. Both are in `shaders/`,
+which both ports pack, so both are fixed for both ports.
+
+**Scene 2: a near-black band between the sea and the sky.** `sea_frag.glsl`
+received the world position as a `mediump` varying, and the sea patch is
+`kSeaSize` (4096) across, so that varying carries coordinates of ±2048 — past what
+`mediump` holds. Interpolated at `mediump` the far half of the patch came apart:
+probe renders that print `dist = length(vWorld.xz - uEyePos.xz)` show the value
+pinned at ≥16384 (`mediump`'s own maximum) for fragments whose `vWorld` was an
+ordinary (1847, 1044), i.e. a real distance of 2081. That drove `horizonMix` and
+`haze` to 1.0 while the un-hazed `body` value was discarded with them, painting a
+24-row band of flat (17,20,32) across the full width, straddling the horizon: the
+"black gap where the sea should stretch". The fix is one word in each stage —
+`varying highp vec3 vWorld;` — and nothing else changes; the sea's ALU stays
+`mediump`. Declared on both sides the two stages agree explicitly, which is what
+`make -f android/Makefile host-shaders` checks. On the frame, 95,163 pixels change,
+all of them on or below the sea's top row (row 415 of 768); the sky above is
+untouched, and the band's own pixel at row 420 goes from (17,20,32) to
+(164,133,103).
+
+**Scene 4: background objects burning out to flat white.** `pole/object_frag.glsl`
+divided the GGX specular by `4 * NoV` on top of a `G` that is already Schlick's
+Smith *visibility* term, `V = 0.25 / ((NoL(1-k)+k)(NoV(1-k)+k))`, which already
+contains the microfacet BRDF's `1/(4·NoL·NoV)`. The duplicate factor was invisible
+near normal incidence but grew without bound as a surface turned edge-on, and
+`NoV` is only clamped to `1e-3`. Everything sitting on the horizon is seen
+edge-on, which is why the background houses and the ridge behind them burned out:
+a probe render that prints each pixel's material, `rough` and `sp` shows the
+blown-out facets at `rough = 1.0` — where `D` is a flat 0.318 and so does nothing
+to suppress the term — and `sp ≥ 4`, and `sunTint * sp` alone is (4.0, 2.6, 1.4),
+which is pure white once the scene's tonemap runs. Dropping the duplicate factor
+(`spR = D * G * Fs * NoL`) leaves the highlight otherwise intact and bounds it at
+grazing angles. Measured on the frame, pixels with every channel above 195 fall
+from 12,106 to 969, and counting 8-connected runs of at least 16 such pixels the
+count of blobs falls from 30 — the four largest covering 3126, 2323, 917 and 715
+px — to exactly one, which is the vending machine's lit front panel (0.88, 0.93,
+1.00 through the `kMatGlow` branch), a light source by design. The named object goes from (254,254,208) to (207,182,149)
+and the peak luminance of its region from 253 to 186, while the whole frame gets
+slightly *darker* (mean 127.9 → 123.8), so the correction removes brightness rather
+than adding it; 20.2% of the pixels change. Objects with a genuinely smooth
+material still glint — the same term, now scaled by the geometry instead of by
+`1/NoV`.
+
+Both artifacts are repacked from the fixed tree (`make -f android/Makefile` for the
+APK, `make` for the VPK) and the two committed screenshots regenerated, so the
+shipped APK, the VPK and the images all carry the fix.
+
+**Both fixes re-checked from the shipped bytes, on both ports.** Android side:
+`make -f android/Makefile host-shaders` links all six programs on the host's ES 3.2
+driver, and fresh `host-render` frames reproduce the numbers above — scene 2 has no
+row in 380-469 with a row mean below 35 (the pre-fix frame has 14, of which 24 rows
+carry the flat (17,20,32) value at the mid column), and scene 4's over-195 pixels
+are 969 with a single blob of at least 16 px. Vita side: the repacked VPK was booted
+under Vita3K, and *every* program of both scenes went through SceShaccCg and was
+accepted. All six files of scene 2's three programs (sea, sky, HUD) were loaded in one run and
+all six of scene 4's (sky, object, HUD) in another. The app reported no `failed to
+compile` and no `failed to link` in either; the only diagnostics were warnings, and
+two of them name identifiers that exist in exactly one file — `reflDist` (only in
+`shaders/ps14/sea_frag.glsl`, the edited stage) and `toSun` (only in
+`shaders/pole/object_frag.glsl`) — which is what ties a warning to the shader it
+came from. Both scenes then ran their benchmark and fired their scheduled shot
+(`shot trigger: t=6.01 target=6.00` in scene 2, `shot trigger: sim=6.06
+target=6.00` in scene 4).
+
+**What is still not verified for these two fixes:** nothing has run on a real
+console. Scene 2's *pixels* cannot be captured under Vita3K at all (the shader-bank
+limit above drops its draws), so the sea's `highp` varying is confirmed to be
+*accepted* by SceShaccCg, not confirmed to remove the band on hardware. `highp` in a
+fragment shader stays optional in ES 1.00 (`GL_FRAGMENT_PRECISION_HIGH`); this
+shader already relied on it unguarded for the earlier `uTime` fix, and a device
+without it would reject the program rather than draw the band — the alternative is
+to stop shipping raw world coordinates to the fragment stage at all.
+
+### Cross-port scan: what matches, and what does not
+
+The two ports share the shader tree (`shaders/`, packed into the APK's assets and
+the VPK's `app0:`) and the two scene translation units (`src/scene2.cxx`,
+`src/scene4.cxx`); only the platform layer differs (`android/jni` + ES 3.0 stand-ins
+against `src/vita_main.cxx`/`src/vita_sdl.cxx` + vitaGL). So every shader change and
+every scene change lands on both, and `tools/check_shaders.sh` is one script run by
+both `make check` and `make -f android/Makefile check`. What the scan turned up that
+is *not* fixed here:
+
+* **Scene 2's environment cube map is a Vita-only gap.** `src/scene2.cxx` allocates
+  it with `glTexImage2D(..., GL_RGBA16F, ..., GL_RGBA, GL_FLOAT, nullptr)`, asks for
+  `GL_TEXTURE_WRAP_R` and calls `glGenerateMipmap(GL_TEXTURE_CUBE_MAP)`. All three
+  are core ES 3.0, and all three are refused by vitaGL: its cube path
+  (`source/textures.c`, `_glTexImage2D_CubeIMPL`) accepts only
+  `GL_UNSIGNED_BYTE`/`GL_UNSIGNED_SHORT_5_5_5_1`/`GL_UNSIGNED_SHORT_4_4_4_4` for
+  `format = GL_RGBA`, its `glTexParameteri` has no wrap-R case, and its
+  `glGenerateMipmap` rejects the cube target. The guest logged exactly those three
+  (`_glTexImage2D_CubeIMPL set GL_INVALID_ENUM (type: 0x1406)`,
+  `_glTexParameteri set GL_INVALID_ENUM (pname: 0x8072)`, `glGenerateMipmap set
+  GL_INVALID_ENUM (target: 0x8513)`) during the run, so the reflection probe the sea
+  samples is very likely unallocated on hardware. The scene never calls
+  `glCheckFramebufferStatus`, so nothing would report it, and scene 2's pixels
+  cannot be checked under Vita3K to see it — this one needs a console.
+* **`clip` shadows a Cg builtin** in `shaders/ps14/hud_vert.glsl`. SceShaccCg says
+  `'clip' shadows previous declaration` / `previous declaration was builtin` and
+  compiles the program anyway; it is informational, and renaming a variable in a
+  HUD shader is not worth a second round of both ports' checks.
+* **Android has no device-side run either**: the APK builds, packs the current
+  shader bytes, and passes `apksigner verify` for all three ABIs, and the scenes and
+  shaders are exercised through the host's ES 3 driver - but the activity/EGL glue
+  in `android/jni/` is only as good as the compiler and the emulator that does not
+  exist here.
