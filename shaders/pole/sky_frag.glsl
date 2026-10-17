@@ -9,7 +9,11 @@ varying vec3 vDir;
 
 
 
-uniform vec3  uEyePos;
+// No uEyePos here: the fragment stage used to recover the view direction as
+// normalize(vDir - uEyePos) from a mediump world position, which overflowed
+// mediump inside normalize() and flattened the whole sky (see the note in
+// sky_vert.glsl). vDir is now the unit direction itself, as in the scene 2
+// sky, so the subtraction - and this uniform - are gone.
 uniform vec3  uSunDir;
 uniform float uTime;
 
@@ -88,7 +92,7 @@ vec3 encodeSky(vec3 hdr) {
 }
 
 void main() {
-    vec3 dir = normalize(vDir - uEyePos);
+    vec3 dir = normalize(vDir);
     float h = dir.y;
     vec3 sun = normalize(uSunDir);
     float mu = dot(dir, sun);
