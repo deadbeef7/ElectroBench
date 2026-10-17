@@ -26,7 +26,10 @@ uniform float uTime;
 // (mismatching precision on a shared varying/uniform fails the link). A
 // vertex float already defaults to highp; this only makes it explicit.
 varying highp vec3 vWorld;
-varying vec2 vUV;
+// highp on both sides: the fragment stage multiplies this by 190 for the
+// sparkle-chaos tile, and at mediump (fp16) the interpolation step alone is a
+// visible fraction of a texel.
+varying highp vec2 vUV;
 
 // NOTE: this is the DISPLACEMENT field. It is intentionally NOT identical to
 // the fragment shader's normal field (see sea_frag.glsl): crests here are

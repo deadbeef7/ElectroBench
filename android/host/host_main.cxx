@@ -65,6 +65,12 @@ const ShaderPair kPrograms[] = {
     {"scene 4 sky", "shaders/pole/sky_vert.glsl", "shaders/pole/sky_frag.glsl"},
     {"scene 4 object", "shaders/pole/object_vert.glsl", "shaders/pole/object_frag.glsl"},
     {"scene 4 hud", "shaders/ps14/hud_vert.glsl", "shaders/pole/hud_frag.glsl"},
+    // The Vita's last-resort pair (src/scene2.cxx swaps these in if the device
+    // compiler rejects the full program). They run on the same vertex stages,
+    // so a precision mismatch here would leave the Vita fallback just as dead
+    // as the shader it replaces - link them here too.
+    {"scene 2 sea fallback", "shaders/ps14/sea_vert.glsl", "shaders/ps14/fallback_sea_frag.glsl"},
+    {"scene 2 sky fallback", "shaders/ps14/sky_vert.glsl", "shaders/ps14/fallback_sky_frag.glsl"},
 };
 
 // One line per driver-log line: a 4 KB info log through a printf-style buffer is

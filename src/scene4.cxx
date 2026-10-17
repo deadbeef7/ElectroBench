@@ -1777,8 +1777,20 @@ int RunPoleScene(bool *gaveUpOut) {
   }
 
   std::printf("Renderer: %s | %s\n", glGetString(GL_RENDERER), glGetString(GL_VERSION));
+  std::fflush(stdout);
 
+  // The one stretch of scene 4 with no output of its own is between the
+  // context coming up and the first presented frame: geometry, font atlas and
+  // three program links all happen in there. "The app dies when scene 4 starts
+  // and nothing was output" cannot be told apart from a first-draw crash
+  // without a line on each side of it. These reach stdout.txt on Android and
+  // the console everywhere else, and fflush because a crash is exactly the case
+  // where buffered stdout would lose them.
+  std::printf("scene 4: setup start (geometry, font atlas, three programs)\n");
+  std::fflush(stdout);
   Setup();
+  std::printf("scene 4: setup done (%d scene indices)\n", gObjIndexCount);
+  std::fflush(stdout);
 
   gStartTime = NowSeconds();
   gFpsTimer = gStartTime;

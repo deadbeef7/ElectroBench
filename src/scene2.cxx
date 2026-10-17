@@ -152,6 +152,17 @@ static double NowSeconds() {
 }
 
 // ------------------------------------------------------------ shader plumbing
+// Shader failures on the Vita used to reach stderr only, which is the SceShell
+// console: invisible on a normal homebrew run. "Scene 2 runs but shows nothing"
+// then had no error attached to it. src/vita_main.cxx owns the persistent
+// ux0:/data/ELEB00002/spinlog.txt log, so route the same diagnostics there.
+#ifdef ELECTROBENCH_VITA
+void VitaLog(const char *fmt, ...);
+#define SCENE2_LOG(...) VitaLog(__VA_ARGS__)
+#else
+#define SCENE2_LOG(...) ((void)0)
+#endif
+
 struct Program {
   GLuint handle = 0;
   std::vector<std::pair<std::string, GLint>> uniforms;
@@ -176,8 +187,18 @@ static GLuint CompileShader(GLenum type, const char *src, const char *name) {
     glGetShaderInfoLog(sh, sizeof(log), nullptr, log);
     std::fprintf(stderr, "%s shader (%s) failed to compile:\n%s\n",
                  type == GL_VERTEX_SHADER ? "Vertex" : "Fragment", name, log);
+    SCENE2_LOG("scene2: %s shader %s failed to compile",
+               type == GL_VERTEX_SHADER ? "vertex" : "fragment", name);
+    SCENE2_LOG("scene2: %s", log);
   }
   return sh;
+}
+
+static bool ProgramIsLinked(const Program &p) {
+  if (!p.handle) return false;
+  GLint ok = GL_FALSE;
+  glGetProgramiv(p.handle, GL_LINK_STATUS, &ok);
+  return ok != GL_FALSE;
 }
 
 static Program LinkProgram(const char *vsPath, const char *fsPath) {
@@ -186,6 +207,7 @@ static Program LinkProgram(const char *vsPath, const char *fsPath) {
   char *fs = ReadTextFile(fsPath);
   if (!vs || !fs) {
     std::fprintf(stderr, "Cannot read shaders %s / %s (run from the repo root)\n", vsPath, fsPath);
+    SCENE2_LOG("scene2: cannot read shaders %s / %s", vsPath, fsPath);
     std::exit(EXIT_FAILURE);
   }
   GLuint v = CompileShader(GL_VERTEX_SHADER, vs, vsPath);
@@ -200,6 +222,10 @@ static Program LinkProgram(const char *vsPath, const char *fsPath) {
     char log[4096];
     glGetProgramInfoLog(p.handle, sizeof(log), nullptr, log);
     std::fprintf(stderr, "Program %s/%s failed to link:\n%s\n", vsPath, fsPath, log);
+    SCENE2_LOG("scene2: program %s + %s failed to link", vsPath, fsPath);
+    SCENE2_LOG("scene2: %s", log);
+  } else {
+    SCENE2_LOG("scene2: program %s + %s linked", vsPath, fsPath);
   }
   glDeleteShader(v);
   glDeleteShader(f);
@@ -766,6 +792,26 @@ static void Setup() {
   gSeaProg = LinkProgram(resolveAssetPath("shaders/ps14/sea_vert.glsl").c_str(), resolveAssetPath("shaders/ps14/sea_frag.glsl").c_str());
   gSkyProg = LinkProgram(resolveAssetPath("shaders/ps14/sky_vert.glsl").c_str(), resolveAssetPath("shaders/ps14/sky_frag.glsl").c_str());
   gHudProg = LinkProgram(resolveAssetPath("shaders/ps14/hud_vert.glsl").c_str(), resolveAssetPath("shaders/ps14/hud_frag.glsl").c_str());
+#ifdef ELECTROBENCH_VITA
+  // A rejected program must not cost the whole frame. The device compiler is
+  // the only one that matters here and it cannot be run from the build host,
+  // so if the full scene-2 shader is refused, swap in the minimal one: the
+  // scene still renders (and the log above names what failed).
+  if (!ProgramIsLinked(gSkyProg)) {
+    SCENE2_LOG("scene2: sky program rejected - using fallback");
+    gSkyProg = LinkProgram(resolveAssetPath("shaders/ps14/sky_vert.glsl").c_str(),
+                           resolveAssetPath("shaders/ps14/fallback_sky_frag.glsl").c_str());
+  }
+  if (!ProgramIsLinked(gSeaProg)) {
+    SCENE2_LOG("scene2: sea program rejected - using fallback");
+    gSeaProg = LinkProgram(resolveAssetPath("shaders/ps14/sea_vert.glsl").c_str(),
+                           resolveAssetPath("shaders/ps14/fallback_sea_frag.glsl").c_str());
+  }
+  SCENE2_LOG("scene2: setup %dx%d, gl error 0x%04x, sky=%d sea=%d hud=%d",
+             gWindowWidth, gWindowHeight, (unsigned)glGetError(),
+             (int)ProgramIsLinked(gSkyProg), (int)ProgramIsLinked(gSeaProg),
+             (int)ProgramIsLinked(gHudProg));
+#endif
 
   glEnable(GL_DEPTH_TEST);
   glDepthFunc(GL_LEQUAL);
@@ -936,6 +982,10 @@ static void RenderScene() {
   double dt = now - gFpsTimer;
   if (dt >= 1.0) {
     gFps = (int)std::lround(gFrameAccum / dt);
+    // One line per second in the port's log: on hardware this is the cheapest
+    // way to tell "drawing, but the panel is black" from "not drawing at all".
+    SCENE2_LOG("scene2: t=%.1f fps=%d frames=%lld",
+               now - gStartTime, gFps, (long long)gFrame);
     double inst = gFrameAccum / dt;
     gSmoothFps = gSmoothFps > 0.0 ? gSmoothFps * 0.8 + inst * 0.2 : inst;
     gFrameAccum = 0;

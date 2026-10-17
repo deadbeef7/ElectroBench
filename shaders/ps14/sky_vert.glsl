@@ -10,7 +10,10 @@ uniform mat4 uViewProj;
 uniform vec3 uCenter;
 uniform float uRadius;
 
-varying vec3 vDir;
+// highp on both sides: the fragment stage derives the sun's angular distance
+// from this direction, and at mediump the fp16 mantissa is coarser than the
+// sun's own halo (the concentric "ghost suns" around the disc).
+varying highp vec3 vDir;
 
 void main() {
     vDir = aPos;

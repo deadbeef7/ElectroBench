@@ -41,7 +41,7 @@ precision mediump float;
 // water reaches the horizon. The sea's ALU is still mediump; only the two
 // stages' shared view of the world position is not.
 varying highp vec3 vWorld;
-varying vec2 vUV;
+varying highp vec2 vUV;
 
 uniform sampler2D uRippleTex;    // two-channel ripple gradient (RG8)
 uniform samplerCube uSkyEnvTex;  // sky environment cubemap (RGBA16F)
@@ -91,34 +91,12 @@ float waveHeight(vec2 p, float t) {
 }
 
 // CLOUD SHADOWS: intersect each water fragment's sun ray with the same 620 m
-// cloud deck used by the sky. The eight 3D lobes, morph, and boundary erosion
-// below intentionally match sky_frag.glsl, so the moving shadow footprint
-// tracks the visible cloud instead of being a separate decorative mask.
-float cloudHash21(vec2 p) {
-    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return fract((p3.x + p3.y) * p3.z);
-}
-
-float cloudValueNoise(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    f = f * f * (3.0 - 2.0 * f);
-    float a = cloudHash21(i);
-    float b = cloudHash21(i + vec2(1.0, 0.0));
-    float c = cloudHash21(i + vec2(0.0, 1.0));
-    float d = cloudHash21(i + vec2(1.0, 1.0));
-    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
-}
-
-float cloudErosion(vec2 p) {
-    float n = 0.57 * cloudValueNoise(p);
-    p = mat2(0.80, -0.60, 0.60, 0.80) * p * 2.03 + 17.1;
-    n += 0.29 * cloudValueNoise(p);
-    p = mat2(0.80, -0.60, 0.60, 0.80) * p * 2.01 + 11.7;
-    return n + 0.14 * cloudValueNoise(p);
-}
-
+// cloud deck used by the sky. The shadow only needs the deck's COVERAGE, so
+// this uses the cloud's elliptical envelope: the eight-lobe erosion used for
+// the visible sky silhouette cost ~100 noise samples per fragment here (and
+// nine clouds of it per pixel), which is what pinned scene 2 to a few FPS on
+// a phone and kept it from coming up on the Vita at all. The shadow is soft
+// by nature, so the extra silhouette detail never read anyway.
 float cloudSmoothMax(float a, float b, float k) {
     float h = clamp(0.5 + 0.5 * (a - b) / k, 0.0, 1.0);
     return mix(b, a, h) + k * h * (1.0 - h);
@@ -135,57 +113,16 @@ float projectedCloudDensity(vec3 dir) {
         vec3 delta = dir - c;
         vec3 t1 = normalize(vec3(-sin(c.z), 0.0, cos(c.z)));
         vec3 t2 = normalize(cross(c, t1));
-        vec3 p = vec3(dot(delta, t1) / max(uCloudStretch[i], 1.0),
-                      dot(delta, t2), dot(delta, c));
-        float R = max(uCloudRadius[i], 0.001);
-        if (dot(p, p) > R * R * 3.1) continue;
-
-        const int PUFFS = 8;
-        vec3 offsets[PUFFS];
-        offsets[0] = vec3( 0.00,  0.00,  0.00);
-        offsets[1] = vec3( 0.68,  0.02,  0.03);
-        offsets[2] = vec3(-0.62,  0.10, -0.04);
-        offsets[3] = vec3( 0.25,  0.28,  0.06);
-        offsets[4] = vec3(-0.27,  0.35, -0.02);
-        offsets[5] = vec3( 0.05,  0.53,  0.08);
-        offsets[6] = vec3( 0.43, -0.12, -0.07);
-        offsets[7] = vec3(-0.40, -0.10,  0.05);
-        float radii[PUFFS];
-        radii[0] = 0.55; radii[1] = 0.39; radii[2] = 0.37; radii[3] = 0.34;
-        radii[4] = 0.31; radii[5] = 0.27; radii[6] = 0.30; radii[7] = 0.29;
-
-        float local = 0.0;
-        for (int j = 0; j < PUFFS; j++) {
-            vec3 q = p - offsets[j] * R;
-            float ang = atan(q.y, q.x);
-            float morph = 0.045 * sin(uTime * 0.10 + uCloudAzim[i] * 9.0 + float(j) * 1.7)
-                        + 0.035 * cos(uTime * 0.065 + uCloudAzim[i] * 5.0 + float(j) * 2.9);
-            float rj = R * radii[j] * (1.0
-                + 0.11 * sin(ang * 3.0 + uCloudAzim[i] * 7.0 + float(j) * 2.1)
-                + 0.065 * sin(ang * 5.0 - uCloudAzim[i] * 11.0 + float(j) * 4.7)
-                + morph);
-            float lobeNoise = cloudErosion(vec2(
-                cos(ang) * 1.8 + uCloudAzim[i] * 3.7,
-                sin(ang) * 1.8 + float(j) * 2.1 + uCloudElev[i] * 9.0));
-            rj *= 0.91 + 0.16 * lobeNoise;
-            vec3 metric = vec3(q.x / rj, q.y / (rj * 0.92), q.z / (rj * 1.18));
-            local = cloudSmoothMax(local, 1.0 - smoothstep(0.62, 1.12, length(metric)), 0.10);
-        }
-
-        vec2 envelopeP = p.xy / R;
-        float ang = atan(envelopeP.y, envelopeP.x);
-        float envelopeRadius = length(envelopeP)
-            * (1.0 + 0.055 * sin(ang * 4.0 + uCloudAzim[i] * 13.0));
-        float envelope = 1.0 - smoothstep(0.96, 1.56, envelopeRadius);
-        float n = cloudErosion(envelopeP * 3.2 + vec2(uCloudAzim[i] * 5.1, float(i) * 7.3));
-        float fine = cloudErosion(envelopeP * 7.8 + vec2(uCloudAzim[i] * 11.0, float(i) * 13.0));
-        float shoulder = 1.0 - smoothstep(0.10, 0.82, local);
-        local = smoothstep(0.035, 0.78,
-               local * (0.70 + 0.30 * n + 0.12 * fine - 0.20 * shoulder))
-               * envelope;
-        float baseCut = smoothstep(-0.78, -0.48, envelopeP.y + (n - 0.5) * 0.18);
-        local *= baseCut * (1.0 - 0.12 * smoothstep(0.48, 0.95, envelopeP.y));
-        density = cloudSmoothMax(density, clamp(local, 0.0, 1.0), 0.07);
+        vec2 q = vec2(dot(delta, t1) / max(uCloudStretch[i], 1.0),
+                      dot(delta, t2)) / max(uCloudRadius[i], 0.001);
+        float r2 = dot(q, q);
+        if (r2 > 3.1) continue;
+        // 0.55: the envelope represents the cloud's *average* optical depth over
+        // its footprint, where the visible sky can sit at 1.0 in the puffs. At
+        // full density the shadow floor (exp(-2.4) clamped to 0.12) painted
+        // whole bays near-black; half density keeps a readable shadow.
+        float local = 0.55 * (1.0 - smoothstep(0.35, 1.25, sqrt(r2)));
+        density = cloudSmoothMax(density, local, 0.07);
     }
     return clamp(density, 0.0, 1.0);
 }
@@ -331,19 +268,27 @@ void main() {
     color = mix(color, skyAtHorizon, haze * (0.30 + 0.70 * haze));
 
     // ---- phase 3: address + blend - sun glitter path ----
-    // tight sparkle core + broad soft sheen, gated to the sun's azimuth column
-    // so the glow stays a NARROW path down the middle with dark water either
-    // side. Killed entirely inside cloud shadows, tinted orange, and the
-    // sparkle variance rides the ripple chaos.
+    // A real microfacet lobe instead of the three hand-fitted pow(NdH, 520 /
+    // 90 / 14) terms this used to add. Those three summed to ~6.5 at NdH=1
+    // with the tightest exponent at 520: past the near field that lobe is
+    // narrower than one pixel, so per-pixel wave normals lit isolated white
+    // pixels, and the peak pushed the whole column past the tonemap's white
+    // point, where every lit pixel clipped to a flat square with no gradient
+    // - the pixelated white mess in the sun path. The tightest lobe is now 64
+    // (3% quantisation even in fp16, where 520 stepped by 40%) and the summed
+    // peak stays near 2.0, so the highlight keeps a gradient all the way up.
     vec3 H = normalize(L + V);
-    float NdH = max(dot(N, H), 0.0);
-    float pathGate = pow(sunAlign, 10.0) * 0.96 + 0.04;
-    float sparkleGate = (0.55 + 0.90 * chaos);
-    float glint = pow(NdH, 520.0) * 6.0;              // pinpoint sparkles
-    float glintMid = pow(NdH, 90.0) * 0.55;           // mid falloff keeps it grainy
-    float glintWide = pow(NdH, 14.0) * 0.22;          // soft sheen around the path
-    color += vec3(1.0, 0.56, 0.24) * (glint + glintMid + glintWide * pathGate)
-             * (0.25 + max(L.y, 0.0) * 1.2) * pathGate * shadow * sparkleGate;
+    float NdH = clamp(dot(N, H), 0.0, 1.0);
+    float pathGate = pow(sunAlign, 10.0) * 0.985 + 0.015;
+    // the grain swings the path by ~1.4x near the camera, but a 190x noise
+    // tile is sub-pixel at range and aliased noise on a tight lobe is exactly
+    // the pixelation, so it fades to a flat 1.0 with distance
+    float grain = mix(1.0, 0.80 + 0.40 * chaos, exp(-dist * 0.0025));
+    float glint = pow(NdH, 64.0) * 1.30;       // tight, but no longer sub-pixel
+    float glintMid = pow(NdH, 20.0) * 0.52;    // mid falloff keeps it grainy
+    float glintWide = pow(NdH, 6.0) * 0.24;    // broad, continuous sheen
+    color += vec3(1.0, 0.78, 0.55) * (glint + glintMid + glintWide) * grain
+             * (0.25 + max(L.y, 0.0) * 1.2) * pathGate * shadow;
 
     // HDR tone map + gamma
     color = color / (color + vec3(1.0));

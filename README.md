@@ -112,7 +112,7 @@ make -f android/Makefile \
      ANDROID_SDK_ROOT=build-android/toolchain/sdk
 make -f android/Makefile verify ...   # manifest, signature, ABIs, entry point
 make -f android/Makefile check ...    # shader validation (same as the Vita port)
-make -f android/Makefile host-shaders # link all six programs through host ES 3
+make -f android/Makefile host-shaders # link all eight programs through host ES 3
 ```
 
 The two environment variables are the ones `fetch_toolchain.sh` prints at the
@@ -148,8 +148,14 @@ storage, the app-private directory otherwise):
   the extensions scene 2's RGBA16F environment cube needs are present, a
   compile-and-link verdict with the driver's own log for **all six** programs,
   their active uniforms/attributes with locations, and the first GL errors
-  raised while rendering, decoded, with frame numbers. That is what turns "the
-  sea does not show up" from a screenshot into a line of text.
+  raised while rendering, decoded, with frame numbers. Since the scene 4
+  startup investigation it also records the EGL trail of every scene's context —
+  the display initialisation, each config attempt with the MSAA/depth it asked
+  for and what matched or did not, the native window's format whenever it has to
+  be re-asserted to the chosen config's visual, and the surface coming current —
+  plus one `first presented frame: <scene>` line per scene: the line whose
+  absence means the process died before that scene ever showed a frame. That is
+  what turns "the sea does not show up" from a screenshot into a line of text.
 * `shots/*.png` — captured by default at **t=45.1 s** (a clean frame from the end
   of the benchmark, after the score is computed), **t=47 s** and **t=48.5 s**
   (the results screen), the same three for scene 4. A capture happens inside
@@ -393,10 +399,10 @@ a broken program or silently tolerating it is untested, since no Vita was
 available.
 
 `make -f android/Makefile host-shaders` closes the hole: it compiles and links all
-six programs through the host's ES 3 driver, prints each verdict with the driver's
+eight programs through the host's ES 3 driver, prints each verdict with the driver's
 own log, and exits non-zero if any pair fails. Run against the revision that
 shipped the sea-less frame it reproduces the failure above; on the fixed tree it
-prints `SHADER_LINK_CHECK: 6 linked, 0 failure(s)`. Measured on the frame, the fix
+prints `SHADER_LINK_CHECK: 8 linked, 0 failure(s)`. Measured on the frame, the fix
 changes 482,007 pixels — 45.9% of the image, every row from the horizon down —
 while the sky above the horizon stays identical to within 0.1/255 on the mean. The
 images are committed as `android/screenshots/scene2_dusk_ocean.png` (which
@@ -418,6 +424,30 @@ dome and its HUD, reported no error on screen, and showed no sea at all — no b
 rectangle, just sky continuing down. That is this link failure as a user sees it.
 The fix itself is host-verified (link check plus the 45.9% frame change above), so
 confirming it on that device is the remaining step.
+
+**Open on the device: scene 4 dies when it starts.** Scene 2 runs its benchmark
+on the phone; scene 4, when its turn comes, takes the process down and writes
+none of its own output — `stdout.txt` stops before `Antialiasing:`, the first
+of the three lines scene 4 flushes the moment its GL context exists, so the
+death is at or before context creation (or the scene never reaches its first
+frame at all; the new `first presented frame:` line in `portlog.txt` separates
+the two). What has been ruled out here, by running the same scene translation
+units through the host's ES 3 driver: `Setup()` and the render loop are clean
+at 0 samples **and** at 4x MSAA (through a patched harness that honours the
+scenes' MSAA request, which `android/host/host_sdl.cxx` otherwise deliberately
+reports as unavailable because the scene screenshot path cannot read a
+multisampled buffer back), peak RSS is 146 MB against scene 2's 181 MB (not
+memory), all eight programs link (six scene programs plus the two Vita
+fallbacks), and there are no desktop-only GL enums or
+oversized stack frames in scene 4. What is left is by construction device-only:
+the EGL switch between scenes — now kept on a process-lifetime display, with
+the window's buffer format re-asserted to the new config's visual before the
+second surface, matching what SDL2 and the NDK's own GL helper do — and the
+driver's behaviour on scene 4's first frames at native resolution with 4x MSAA.
+Locating it needs one more device run: the `portlog.txt` line the trace now
+stops *at* says which of those it was, and
+`adb logcat -d | grep -E 'ElectroBench|FATAL|SIGSEGV'` (plus the tombstone when
+there is one) says whether the process died in the port or in the driver.
 
 ### Two more rendering bugs, in the shared shader tree
 
@@ -469,7 +499,7 @@ APK, `make` for the VPK) and the two committed screenshots regenerated, so the
 shipped APK, the VPK and the images all carry the fix.
 
 **Both fixes re-checked from the shipped bytes, on both ports.** Android side:
-`make -f android/Makefile host-shaders` links all six programs on the host's ES 3.2
+`make -f android/Makefile host-shaders` links all eight programs on the host's ES 3.2
 driver, and fresh `host-render` frames reproduce the numbers above — scene 2 has no
 row in 380-469 with a row mean below 35 (the pre-fix frame has 14, of which 24 rows
 carry the flat (17,20,32) value at the mid column), and scene 4's over-195 pixels
@@ -493,6 +523,66 @@ fragment shader stays optional in ES 1.00 (`GL_FRAGMENT_PRECISION_HIGH`); this
 shader already relied on it unguarded for the earlier `uTime` fix, and a device
 without it would reject the program rather than draw the band — the alternative is
 to stop shipping raw world coordinates to the fragment stage at all.
+
+### Scene 2, made affordable — and a halo the phone could not resolve
+
+Three changes went into the shared tree together, because they are the same
+complaint from two directions: scene 2 ran at a few FPS on a phone, and on the
+Vita it never produced a frame at all.
+
+**The cloud deck was the cost.** Every fragment walked nine clouds, every cloud
+ran eight puffs, and every puff carried `atan()` plus four sines plus its own
+three-octave erosion fetch — twelve hashes, ~100 noise samples per cloud per
+fragment, before the sun-transmission loop multiplied that by seven probes. The
+puffs are now fixed ellipsoids scaled by one time-varying cloud scale; the
+silhouette is still eroded by the envelope's three-octave noise plus one
+`valueNoise()` octave of fine breakup (instead of a second full erosion); and the
+transmission loop takes three probes instead of seven, scaled 7/3 so the optical
+depth it integrates stays the same. The gradient, the cloud layout uniforms and
+the HUD are untouched.
+
+**The sun's masks were `pow(dot, n)`, which the phone cannot resolve.**
+`sky_frag.glsl` measured the sun with `pow(sunAmount, 22/50/170/320/900)` on a
+`mediump` `vDir`. On mobile GPUs `mediump` is fp16, and the halo lives in the
+last ~0.7% of `dot(dir, sunDir)` — seven bits of a fp16 mantissa — so the smooth
+halo quantised into concentric discs: the ring of "ghost suns" around the disc.
+`vDir` and `uSunDir` are now `highp` on both stages, and the masks are
+`exp(-k·ang²)` on the ANGULAR distance `length(dir - sunDir)`, which stays
+well-conditioned however the dot rounds. `pow(dot, 22)` is `exp(-11·ang²)` for
+small angles, so these are the same curves, not new ones. `vUV` went `highp` in
+the sea pair for the same class of reason: the fragment stage tiles it ×190 for
+the sparkle chaos, where the interpolation error alone is a visible fraction of
+a texel.
+
+**Forward scattering was unbounded.** The Henyey-Greenstein lobe reaches ~40 at
+the sun's centre, so every puff within a few degrees of the disc landed 50-80×
+above the tonemap's clamp and painted as a flat white circle with a hard edge —
+an independent second source of the same ringed look. `phase` is now compressed
+by `phase / (1 + 0.22·phase)`: the peak stays hot (~4.5) with the puff's own
+shading gradient intact.
+
+On the port side, the same round adds the EGL trail and the `first presented
+frame: <scene>` line to `portlog.txt`, scene 4's setup breadcrumbs on stdout,
+scene 2's compile/link/fps lines in the Vita's `spinlog.txt`, and the two
+`fallback_*_frag.glsl` programs scene 2 swaps in when the device compiler rejects
+the full sky or sea pair. `host-shaders` links those too, so a fallback cannot
+ship as unlinkable as the program it replaces.
+
+**Verified here.** 13/13 shaders are valid GLSL ES 1.00 and free of 3.30 syntax;
+`host-shaders` links 8/8 programs; fresh `host-render` frames of both scenes
+complete; and scene 2's new frame reproduces byte for byte across runs (the
+committed `android/screenshots/scene2_dusk_ocean.png` was regenerated from it).
+The A/B is the same binary with only the shader tree swapped: 27.9% of pixels
+move by more than 8/255 (mean |Δ| 6.35), concentrated where the change is — 36-54%
+on and below the horizon (cloud shadows over the sea), 11-14% in the sky's cloud
+band, and 1% in the clear gradient between them.
+
+**Not verified, and why.** Every measurement above is host llvmpipe at fp32. The
+ghost-sun defect is an fp16 quantisation and does not reproduce there, so that
+fix rests on the precision qualifiers and the better-conditioned mask rather than
+on pixels; the FPS gain is likewise unmeasured, because the host has no frame
+counter for scene 2 and no phone was available. What the host does show is that
+the cheaper deck renders the same scene and that nothing regressed.
 
 ### Cross-port scan: what matches, and what the Vita cannot do
 
@@ -552,7 +642,7 @@ or link failure, and scene 2 still fires its shot (`t=6.01`). The desktop/Androi
 is checked by pixels rather than by argument: `host-render` scene 2 reproduces
 `android/screenshots/scene2_dusk_ocean.png` **byte for byte** (0 of 1,049,088 pixels
 differ), `make check`, `make -f android/Makefile check` and `make -f android/Makefile
-host-shaders` (6 linked, 0 failures) all pass, and both artifacts were repacked from
+host-shaders` (8 linked, 0 failures) all pass, and both artifacts were repacked from
 these bytes. Scene 4's frame is not run-to-run reproducible (its camera drifts with
 wall-clock time: two renders of the identical binary differ by 807,704 px), so for it
 the check is the measurement, not the image — its over-195 pixel count comes out 962

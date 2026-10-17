@@ -5,11 +5,16 @@
 precision mediump float;
 
 
-varying vec3 vDir;
+// highp, matching sky_vert.glsl. The sun's halo lives in the last ~0.7% of
+// dot(dir, sunDir); the fragment default (mediump) is fp16 on mobile GPUs and
+// cannot resolve it, so the smooth halo quantised into concentric discs — the
+// "ghost suns" ring around the disc. The masks below also measure the ANGLE to
+// the sun instead of pow(dot, n), which is well conditioned in any precision.
+varying highp vec3 vDir;
 
 uniform float uTime;
 uniform float uTonemap;
-uniform vec3  uSunDir;
+uniform highp vec3 uSunDir;
 uniform vec3  uZenithColor;
 uniform vec3  uMidColor;
 uniform vec3  uHorizonColor;
@@ -137,24 +142,22 @@ vec4 cloudSample(vec3 dir) {
         radii[4] = 0.31; radii[5] = 0.27; radii[6] = 0.30; radii[7] = 0.29;
 
         float local = 0.0;
+        // Lobes are fixed ellipsoids scaled by ONE time-varying cloud scale.
+        // The previous version wrapped every puff in atan() + sines and its own
+        // three-octave erosion fetch (12 hashes), i.e. ~100 noise samples per
+        // cloud per fragment before the sun-transmission loop multiplied that
+        // by seven. That cost is what held scene 2 at a few FPS on a phone and
+        // is the reason the whole program could not come up on the Vita; the
+        // silhouette is still eroded by the envelope noise below, so the puffs
+        // stay ragged rather than turning into clean circles.
+        float ph = uCloudPhase[i];
+        float morph = 1.0 + 0.050 * sin(ph) + 0.030 * cos(ph * 1.7);
+        float Rm = R * morph;
         for (int j = 0; j < PUFFS; j++) {
             vec3 q = p - offsets[j] * R;
-            float ang = atan(q.y, q.x);
-
-
-            float ph = uCloudPhase[i];
-            float morph = 0.045 * sin(ph + float(j) * 1.7)
-                        + 0.035 * cos(ph * 0.65 + float(j) * 2.9);
-            float wobble = 0.11 * sin(ang * 3.0 + uCloudAzim[i] * 7.0 + float(j) * 2.1)
-                         + 0.065 * sin(ang * 5.0 - uCloudAzim[i] * 11.0 + float(j) * 4.7)
-                         + morph;
-            float lobeNoise = erosionNoise(vec2(
-                cos(ang) * 1.8 + uCloudAzim[i] * 3.7,
-                sin(ang) * 1.8 + float(j) * 2.1 + uCloudElev[i] * 9.0));
-            float rj = R * radii[j] * (1.0 + wobble) * (0.91 + 0.16 * lobeNoise);
-
-
-            vec3 metric = vec3(q.x / rj, q.y / (rj * 0.92), q.z / (rj * 1.18)) * vec3(1.0, 1.0, wispSquash(i));
+            vec3 metric = vec3(q.x / (Rm * radii[j]),
+                               q.y / (Rm * radii[j] * 0.92),
+                               q.z / (Rm * radii[j] * 1.18)) * vec3(1.0, 1.0, wispSquash(i));
             float puff = 1.0 - smoothstep(0.62, 1.12, length(metric));
             local = smoothMax(local, puff, 0.10);
         }
@@ -167,7 +170,9 @@ vec4 cloudSample(vec3 dir) {
 
 
         float n = erosionNoise(envelopeP * 3.2 + vec2(uCloudAzim[i] * 5.1, float(i) * 7.3));
-        float fine = erosionNoise(envelopeP * 7.8 + vec2(uCloudAzim[i] * 11.0, float(i) * 13.0));
+        // one octave of fine breakup, not a second 3-octave erosion: the extra
+        // two octaves are below a pixel past the near field anyway.
+        float fine = valueNoise(envelopeP * 7.8 + vec2(uCloudAzim[i] * 11.0, float(i) * 13.0));
         float shoulder = 1.0 - smoothstep(0.10, 0.82, local);
         float breakup = 0.70 + 0.30 * n + 0.12 * fine - 0.20 * shoulder;
         local = smoothstep(0.06, 0.74, local * breakup) * envelope;
@@ -216,6 +221,10 @@ void main() {
     vec3 sky = skyGradient(dir, sd);
 
     float sunAmount = max(dot(dir, sd), 0.0);
+    // Angular distance to the sun, in radians. |dir - sd| is small near the
+    // sun, so it keeps full relative precision where dot() has already lost
+    // its bits (and acos() of a quantised dot would not help).
+    float sunAng = length(dir - sd);
 
 
     sky += vec3(0.16, 0.075, 0.055)
@@ -223,16 +232,19 @@ void main() {
          * (0.45 + 0.55 * pow(sunAmount, 2.0));
 
 
-    float glowMask = pow(sunAmount, 22.0) * 0.42 + pow(sunAmount, 50.0) * 0.62;
+    // pow(dot, 22) == exp(-11*ang^2) for small angles; the exp form is smooth
+    // in fp16/fp32 and costs less than two pow() calls.
+    float glowMask = exp(-11.0 * sunAng * sunAng) * 0.42
+                   + exp(-25.0 * sunAng * sunAng) * 0.62;
     glowMask *= 1.0 - smoothstep(0.05, 0.55, h) * 0.85;
     sky = mix(sky, vec3(1.55, 0.52, 0.18), clamp(glowMask, 0.0, 0.52));
 
 
-    float goldMask = pow(sunAmount, 170.0) * 0.62 * (1.0 - smoothstep(0.0, 0.70, h) * 0.6);
+    float goldMask = exp(-85.0 * sunAng * sunAng) * 0.62 * (1.0 - smoothstep(0.0, 0.70, h) * 0.6);
     sky = mix(sky, vec3(2.3, 1.05, 0.42), clamp(goldMask, 0.0, 0.62));
 
 
-    float coreMask = pow(sunAmount, 320.0) * 0.85;
+    float coreMask = exp(-160.0 * sunAng * sunAng) * 0.85;
     sky = mix(sky, vec3(5.2, 2.1, 0.72), clamp(coreMask, 0.0, 0.90));
 
 
@@ -275,13 +287,19 @@ void main() {
         float heightWeight = 0.0;
         if (stLen > 0.015) {
             sunTan /= stLen;
-            for (int s = 1; s <= 7; s++) {
-                float f = float(s) / 7.0;
-                float travel = 0.052 * pow(f, 0.78);
+            // Three probes instead of seven, scaled so the optical depth stays
+            // the same. Each probe is a full cloudSample(), so this loop was
+            // the most expensive thing in the scene; the phase function only
+            // needs the depth's smooth trend, which three points give.
+            for (int s = 1; s <= 3; s++) {
+                float f = float(s) / 3.0;
+                float travel = 0.052 * f;
                 vec4 probe = cloudSample(normalize(dir + sunTan * travel));
                 depth += probe.x;
                 heightWeight += probe.x * probe.y;
             }
+            depth *= 7.0 / 3.0;
+            heightWeight *= 7.0 / 3.0;
             heightWeight /= max(depth, 0.001);
         } else {
             depth = cl * 4.8;
@@ -302,6 +320,13 @@ void main() {
                   / (4.0 * PI * pow(max(1.0 + 0.45 * 0.45 - 2.0 * 0.45 * cosT, 1e-4), 1.5));
         float phase = hg1 * 4.0 * PI * 0.72 + hg2 * 4.0 * PI * 0.28
                     + 0.08 * (1.0 - cosT) * 0.5;
+        // Bounded forward scattering. The bare HG lobe reaches ~40 at the
+        // sun's centre, so every puff within a few degrees of the disc landed
+        // 50-80x above the tonemap's clamp: each lobe painted as a flat white
+        // circle with a hard edge, i.e. the ring of "fading suns" around the
+        // sun. The rational compression keeps the peak hot (max ~4.5) while
+        // leaving the puff's own shading gradient visible.
+        phase = phase / (1.0 + phase * 0.22);
         float direct = (0.10 + 1.55 * phase)
                      * (transmit0 + transmit1 + transmit2);
 
@@ -340,10 +365,13 @@ void main() {
 
 
     float cover = 1.0 - exp(-cl * 2.65);
-    float disc = smoothstep(0.9977, 0.9992, sunAmount) * (1.0 - 0.88 * clamp(cover, 0.0, 1.0));
+    // 0.9977..0.9992 in dot space is 0.068..0.040 rad in angle space: same
+    // disc, but now its edge is resolved instead of stepped by the dot's
+    // quantisation.
+    float disc = (1.0 - smoothstep(0.040, 0.068, sunAng)) * (1.0 - 0.88 * clamp(cover, 0.0, 1.0));
 
 
-    float halo = pow(sunAmount, 900.0) * 0.45 * (1.0 - 0.6 * clamp(cover, 0.0, 1.0));
+    float halo = exp(-450.0 * sunAng * sunAng) * 0.45 * (1.0 - 0.6 * clamp(cover, 0.0, 1.0));
 
 
     vec3 sunColHot = vec3(9.2, 5.1, 1.9);

@@ -23,7 +23,12 @@
 //     and falls back to none if the context fails, so the attribute snapshot
 //     taken in SDL_CreateWindow is what SDL_GL_CreateContext builds; tearing
 //     the context down in SDL_GL_DeleteContext is also what stops scene 2's GL
-//     objects from leaking into scene 4.
+//     objects from leaking into scene 4. The EGLDisplay connection itself is
+//     process-scoped: nothing here calls eglTerminate but process death. EGL
+//     legally allows a terminated display to be re-initialised, but the
+//     terminate-then-reinit round trip inside a scene switch is one more driver
+//     path than the switch needs - SDL2 and the NDK's own GL helper keep the
+//     display up and destroy only the context and the surface.
 //
 // This file additionally owns the port's on-device capture. A phone has no
 // desktop to grab a window from and usually no debugger attached, and the
@@ -114,6 +119,11 @@ int gDepthRequest = 24;
 int gMsaaRequest = 0;
 bool gInitialised = false;
 
+// EGL version of the single, process-scoped display connection, remembered for
+// the log line that used to be printed by the code that initialised it.
+int gEglMajor = 0;
+int gEglMinor = 0;
+
 
 char gError[256] = {0};
 char gInternalDir[512] = {0};
@@ -141,6 +151,10 @@ int gShotCount = 0;
 int gNextShot = 0;
 double gSceneT0 = 0.0;
 bool gSceneT0Valid = false;
+// Logged once per scene. This is the line whose absence answers "did scene 4
+// ever present a frame?" - the question a device-side startup crash turns into
+// the only question that matters.
+bool gSceneFirstFrameLogged = false;
 
 // Offscreen target for the capture blit, recreated only when the size changes.
 GLuint gCaptureFbo = 0;
@@ -196,9 +210,16 @@ void DestroySurface() {
   gSurface = EGL_NO_SURFACE;
 }
 
-// Drops the whole GL device. Called from SDL_GL_DeleteContext so the next scene
-// builds a config of its own (scene 4's MSAA request must not be answered by
-// scene 2's no-MSAA surface) and so the previous scene's GL objects die with it.
+// Drops the scene's half of the GL device: surface and context. Called from
+// SDL_GL_DeleteContext so the next scene builds a config of its own (scene 4's
+// MSAA request must not be answered by scene 2's no-MSAA surface) and so the
+// previous scene's GL objects die with it. The display connection stays up for
+// the life of the process (see the file header).
+//
+// The capture target's object names belong to the context that just died: they
+// are zeroed here, because EnsureCaptureTarget trusts non-zero IDs and would
+// otherwise hand scene 4 a frame-buffer scene 2 created - names that do not
+// exist in the new context - and capture black frames through them.
 void DestroyGL() {
   DestroySurface();
   if (gDisplay != EGL_NO_DISPLAY && gContext != EGL_NO_CONTEXT) {
@@ -207,8 +228,10 @@ void DestroyGL() {
   gContext = EGL_NO_CONTEXT;
   gConfig = nullptr;
   gActualSamples = 0;
-  if (gDisplay != EGL_NO_DISPLAY) eglTerminate(gDisplay);
-  gDisplay = EGL_NO_DISPLAY;
+  gCaptureFbo = 0;
+  gCaptureTex = 0;
+  gCaptureW = 0;
+  gCaptureH = 0;
 }
 
 bool EnsureSurface() {
@@ -217,10 +240,30 @@ bool EnsureSurface() {
     SetError("no Android window for the GL surface");
     return false;
   }
+  // An EGL surface is a producer connected to the native window's BufferQueue,
+  // and Android wants the window's buffers in the chosen config's native
+  // visual format: both SDL2 and the NDK's own GL helper call
+  // ANativeWindow_setBuffersGeometry with the config's EGL_NATIVE_VISUAL_ID
+  // before eglCreateWindowSurface. Scene 4 creates its surface on the window
+  // scene 2 already used, with a (possibly) different config, so the format has
+  // to be re-asserted here rather than assumed to still match.
+  EGLint visualId = 0;
+  if (eglGetConfigAttrib(gDisplay, gConfig, EGL_NATIVE_VISUAL_ID, &visualId) != EGL_TRUE) {
+    visualId = 0;
+  }
+  if (visualId > 0) {
+    const int format = ANativeWindow_getFormat(gNativeWindow);
+    if (format != (int)visualId) {
+      const int rc = ANativeWindow_setBuffersGeometry(gNativeWindow, 0, 0, (int)visualId);
+      PortLog("window format %d -> config visual %d (setBuffersGeometry rc=%d)", format,
+              (int)visualId, rc);
+    }
+  }
   gSurface = eglCreateWindowSurface(gDisplay, gConfig, gNativeWindow, nullptr);
   if (gSurface == EGL_NO_SURFACE) {
     SetError("eglCreateWindowSurface failed");
-    PortLog("eglCreateWindowSurface failed: 0x%04x", eglGetError());
+    PortLog("eglCreateWindowSurface failed: 0x%04x (visual=%d, window format=%d)",
+            eglGetError(), (int)visualId, ANativeWindow_getFormat(gNativeWindow));
     return false;
   }
   if (eglMakeCurrent(gDisplay, gSurface, gSurface, gContext) != EGL_TRUE) {
@@ -229,20 +272,29 @@ bool EnsureSurface() {
     DestroySurface();
     return false;
   }
+  PortLog("GL surface ready: %dx%d, visual=%d, format=%d", gWindow.width, gWindow.height,
+          (int)visualId, ANativeWindow_getFormat(gNativeWindow));
   return true;
 }
 
 bool InitGL() {
-  gDisplay = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+  // The display connection is process-scoped: initialise it once, and on later
+  // scene switches simply reuse it (see the file header for why).
   if (gDisplay == EGL_NO_DISPLAY) {
-    SetError("eglGetDisplay failed");
-    return false;
-  }
-  EGLint major = 0, minor = 0;
-  if (eglInitialize(gDisplay, &major, &minor) != EGL_TRUE) {
-    SetError("eglInitialize failed");
-    gDisplay = EGL_NO_DISPLAY;
-    return false;
+    gDisplay = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+    if (gDisplay == EGL_NO_DISPLAY) {
+      SetError("eglGetDisplay failed");
+      return false;
+    }
+    EGLint major = 0, minor = 0;
+    if (eglInitialize(gDisplay, &major, &minor) != EGL_TRUE) {
+      SetError("eglInitialize failed");
+      gDisplay = EGL_NO_DISPLAY;
+      return false;
+    }
+    gEglMajor = (int)major;
+    gEglMinor = (int)minor;
+    PortLog("EGL %d.%d initialised", gEglMajor, gEglMinor);
   }
 
   // MSAA is requested by scene 4 only. A missing multisample config is not an
@@ -252,6 +304,8 @@ bool InitGL() {
   const int wanted = gMsaaRequest >= 4 ? 4 : (gMsaaRequest >= 2 ? 2 : 0);
   for (int attempt = 0; attempt < 2 && gConfig == nullptr; attempt++) {
     const int samples = attempt == 0 ? wanted : 0;
+    PortLog("choosing ES 3.0 config: attempt %d, msaa=%d, depth=%d", attempt + 1, samples,
+            gDepthRequest);
     const EGLint attribs[] = {
         EGL_SURFACE_TYPE,    EGL_WINDOW_BIT,
         EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT,
@@ -269,6 +323,9 @@ bool InitGL() {
     if (eglChooseConfig(gDisplay, attribs, &config, 1, &count) == EGL_TRUE && count > 0) {
       gConfig = config;
       eglGetConfigAttrib(gDisplay, config, EGL_SAMPLES, &gActualSamples);
+    } else {
+      PortLog("  no match (eglChooseConfig returned 0x%04x, count=%d)", eglGetError(),
+              (int)count);
     }
   }
   if (gConfig == nullptr) {
@@ -286,8 +343,10 @@ bool InitGL() {
     DestroyGL();
     return false;
   }
-  PortLog("EGL %d.%d, ES samples=%d, depth=%d", (int)major, (int)minor, gActualSamples,
-          gDepthRequest);
+  EGLint visualId = 0;
+  eglGetConfigAttrib(gDisplay, gConfig, EGL_NATIVE_VISUAL_ID, &visualId);
+  PortLog("EGL %d.%d, ES samples=%d, depth=%d, visual=%d", gEglMajor, gEglMinor, gActualSamples,
+          gDepthRequest, (int)visualId);
   return true;
 }
 
@@ -740,6 +799,7 @@ void PortBeginScene(const char *label, const double *shotTimes, int shotCount) {
   for (int i = 0; i < shotCount && i < kMaxShots; i++) gShotTimes[gShotCount++] = shotTimes[i];
   gNextShot = 0;
   gSceneT0Valid = false;
+  gSceneFirstFrameLogged = false;
   PortLog("--- %s: %d shot(s) scheduled ---", gSceneLabel, gShotCount);
 }
 
@@ -827,6 +887,8 @@ SDL_GLContext SDL_GL_CreateContext(SDL_Window *window) {
     SetError("the activity has no window yet");
     return nullptr;
   }
+  PortLog("GL context: create (depth=%d, msaa request=%d, display %s)", gDepthRequest,
+          gMsaaRequest, gDisplay == EGL_NO_DISPLAY ? "not initialised" : "in use");
   if (gContext == EGL_NO_CONTEXT && !InitGL()) return nullptr;
   if (!EnsureSurface()) return nullptr;
   PortLog("GL ready: %s | %s", (const char *)glGetString(GL_VERSION),
@@ -887,6 +949,10 @@ void SDL_GL_SwapWindow(SDL_Window *window) {
     return;
   }
   gFrameTotal++;
+  if (!gSceneFirstFrameLogged) {
+    gSceneFirstFrameLogged = true;
+    PortLog("first presented frame: %s (frame %lu)", gSceneLabel, gFrameTotal);
+  }
 }
 
 int SDL_GL_SetSwapInterval(int interval) {
