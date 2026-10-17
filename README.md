@@ -584,6 +584,42 @@ on pixels; the FPS gain is likewise unmeasured, because the host has no frame
 counter for scene 2 and no phone was available. What the host does show is that
 the cheaper deck renders the same scene and that nothing regressed.
 
+### The same sun defect, still present in scene 4's sky
+
+`pole/sky_frag.glsl` measured the sun as `d2 = 2.0 * (1.0 - dot(dir, uSunDir))`
+on a `mediump` `vDir`/`uSunDir`. At fp16, `dot` near 1.0 quantises in steps of
+0.000977 — roughly 40% of the disc's own radius, `R2 = 0.0026` — so the disc
+mask held exactly two values (0 and 1) and its limb term four: a hard-edged,
+banded circle, with the Mie halo stepping along the same arcs. That is why the
+scene 2 halo fix left the sun looking unchanged wherever scene 4 was what you
+were looking at: the two skies are separate programs and this one had not been
+touched.
+
+Simulating the shader's own expressions in fp16 makes the size of it concrete:
+the old form gives 2 distinct disc values with a maximum single-sample step of
+1.00 (a binary mask) and 4 limb values; through the new form the same arithmetic
+gives 154 disc values, a maximum step of 0.02, and 526 limb values. The fix is a
+`precision highp float` in that fragment stage — its whole body is the atmosphere
+integral, so the qualifier goes on the file instead of on two variables — plus an
+angular-distance evaluation of both sun terms: `dot(dir - sun, dir - sun)` for the
+disc and limb, and `|dir - 0.76*sun|²` for the Mie phase denominator. Those forms
+stay smooth even on a driver that ignores `highp`, because they subtract vectors
+that are both ~0.05 apart instead of numbers that are both ~1.
+
+On a driver that does honour `highp`, the curve is unchanged: over the sun's
+region the two forms differ by one fp32 ulp (5.96e-8, 0.002% of `R2`) and locate
+the disc edge at the same 49.97 mrad. That is the whole reason the defect never
+appeared in a host frame — llvmpipe evaluates `mediump` as fp32 — and it is also
+why `android/screenshots/scene4_power_lines.png` is left alone: it cannot show
+the defect, and scene 4's camera is not run-to-run reproducible, so replacing it
+would only churn a frame that does not demonstrate the fix.
+
+Verified: 13/13 shaders valid GLSL ES 1.00, `host-shaders` links 8/8 programs,
+both archives repacked and hashing equal to the new pair. Not verified: this on
+a real phone. The defect is fp16-only, so no host frame can confirm it; what is
+confirmed is that the mask can no longer take two values when the qualifier is
+declined.
+
 ### Cross-port scan: what matches, and what the Vita cannot do
 
 The two ports share the shader tree (`shaders/`, packed into the APK's assets and

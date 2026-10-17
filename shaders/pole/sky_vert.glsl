@@ -9,7 +9,10 @@ attribute vec3 aPos;
 uniform mat4 uViewProj;
 uniform mat4 uModel;
 
-varying vec3 vDir;
+// highp on both sides, like scene 2's sky: the fragment stage measures the
+// sun's angular radius from this direction and the halo lives in a few
+// milliradians, which fp16 (a mobile fragment's mediump) cannot resolve.
+varying highp vec3 vDir;
 
 void main() {
 

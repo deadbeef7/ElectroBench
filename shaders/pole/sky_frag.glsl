@@ -2,10 +2,20 @@
 // GLSL 1.00-style rewrite for vitaGL/SceShaccCg (see that script's RULES); the
 // math is identical to the desktop shader except for the documented rewrites.
 #version 100
-precision mediump float;
+// highp throughout, unlike the rest of the port's fragment shaders. This one is
+// a sky dome: its sun is a 2.9-degree disc plus a Mie halo that both live in the
+// last ~0.3% of dot(dir, sunDir), and a fragment-only mediump (fp16 on mobile
+// GPUs) quantises that dot in steps of 0.000977 - about 40% of the disc's own
+// radius. The disc mask collapsed from 164 values to two (0 and 1, a hard-edged
+// circle) and the halo edge stepped into concentric arcs. Scene 2's sky was
+// fixed with highp varyings alone; this shader's whole body is the atmosphere
+// integral, so the declaration is promoted instead and the two terms that
+// measure the sun are evaluated as angular distances, which stay
+// well-conditioned even where a driver ignores the qualifier.
+precision highp float;
 
 
-varying vec3 vDir;
+varying highp vec3 vDir;
 
 
 
@@ -14,7 +24,7 @@ varying vec3 vDir;
 // mediump inside normalize() and flattened the whole sky (see the note in
 // sky_vert.glsl). vDir is now the unit direction itself, as in the scene 2
 // sky, so the subtraction - and this uniform - are gone.
-uniform vec3  uSunDir;
+uniform highp vec3 uSunDir;
 uniform float uTime;
 
 
@@ -69,8 +79,14 @@ vec3 atmosphere(vec3 dir, vec3 sun) {
 
     float phR = 0.0596831 * (1.0 + mu * mu);
     const float g = 0.76, gg = g * g;
+    // Mie phase from the ANGULAR distance to the sun. 1 + g^2 - 2g*mu is
+    // |dir - g*sun|^2, but written through mu it subtracts numbers near 1
+    // exactly where the halo's whole dynamic range lives; the difference form
+    // keeps those bits.
+    vec3 gSun = g * sun;
+    float mieD2 = dot(dir - gSun, dir - gSun);
     float phM = 0.0795775 * (1.0 - gg)
-              / max(pow(1.0 + gg - 2.0 * g * mu, 1.5), 1e-3);
+              / max(pow(mieD2, 1.5), 1e-3);
 
     vec3 single = kBetaR * phR * kRayGain * Tview * Tsun;
     vec3 mie    = vec3(kBetaM * phM * 0.25) * Tview * Tsun;
@@ -174,7 +190,11 @@ void main() {
     }
 
 
-    float d2 = 2.0 * (1.0 - mu);
+    // |dir - sun|^2 instead of 2(1 - mu): the same curve at the disc's radii,
+    // but it keeps the sub-milliradian detail that decides the disc's edge and
+    // its limb darkening (2(1 - mu) is a cancellation of numbers near 1).
+    vec3 sunDelta = dir - sun;
+    float d2 = dot(sunDelta, sunDelta);
     float R2 = 0.0026;
     float disc = smoothstep(R2 * 1.10, R2 * 0.82, d2);
     float limb = 0.55 + 0.45 * sqrt(clamp(1.0 - d2 / (R2 * 1.05), 0.0, 1.0));
