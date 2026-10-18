@@ -87,13 +87,17 @@ ARCH_x86_64 := -march=x86-64
 # NDK, not vendored here), so its directory is on the include path too.
 INCLUDES := -I$(ROOT)/android/include -I$(ROOT)/include -I$(ROOT)/lib \
             -I$(NDK)/sources/android/native_app_glue
-CXXFLAGS := -std=c++17 -O3 -ffast-math -fPIC -Wall $(INCLUDES)
+# -pthread: src/jobs.hxx hands the scenes' startup CPU work to worker threads
+# (pthreads on every target; see that header for why). The flag is on the
+# compile AND the link line, and for Android it must also reach the host
+# harness below, which builds the same translation units.
+CXXFLAGS := -std=c++17 -O3 -ffast-math -fPIC -Wall -pthread $(INCLUDES)
 CFLAGS := -O2 -fPIC
 # -static-libstdc++: the NDK's clang++ defaults to the *shared* libc++ runtime,
 # which would leave libmain.so with a NEEDED entry for libc++_shared.so that the
 # APK does not contain (dlopen would fail on the device). One self-contained .so
 # per ABI is the whole point of this port, so the runtime is linked in.
-LDFLAGS := -shared -static-libstdc++ -Wl,-u,ANativeActivity_onCreate -Wl,--no-undefined
+LDFLAGS := -shared -static-libstdc++ -pthread -Wl,-u,ANativeActivity_onCreate -Wl,--no-undefined
 LIBS := -lEGL -lGLESv3 -llog -landroid -lm
 
 # lib/lodepng.c is deliberately absent: the vendored lodepng.h is a header-only
@@ -102,13 +106,15 @@ LIBS := -lEGL -lGLESv3 -llog -landroid -lm
 # lodepng symbol.
 PORT_CPP := $(ROOT)/android/jni/android_main.cxx \
             $(ROOT)/android/jni/android_sdl.cxx \
+            $(ROOT)/src/jobs.cxx \
             $(ROOT)/src/scene2.cxx \
             $(ROOT)/src/scene4.cxx
 PORT_HEADERS := $(ROOT)/android/jni/android_port.hxx \
                 $(ROOT)/android/include/GL/glew.h \
                 $(ROOT)/android/include/SDL2/SDL_opengl.h \
                 $(ROOT)/include/SDL2/SDL.h \
-                $(ROOT)/src/font_atlas.hxx
+                $(ROOT)/src/font_atlas.hxx \
+                $(ROOT)/src/jobs.hxx
 SOURCES := $(PORT_CPP) $(PORT_HEADERS)
 
 # The packed shader tree. Listing the files (not the directory) is deliberate:
@@ -130,9 +136,9 @@ all: $(APK)
 # and it is where the frames in android/screenshots/ come from. It says nothing
 # about the Android activity/EGL glue, which only a device can exercise.
 HOST_CXX ?= g++
-HOST_CFLAGS := -std=c++17 -O2 -I$(ROOT)/android/include -I$(ROOT)/include -I$(ROOT)/lib
+HOST_CFLAGS := -std=c++17 -O2 -pthread -I$(ROOT)/android/include -I$(ROOT)/include -I$(ROOT)/lib
 HOST_SRCS := $(ROOT)/android/host/host_main.cxx $(ROOT)/android/host/host_sdl.cxx \
-             $(ROOT)/src/scene2.cxx $(ROOT)/src/scene4.cxx
+             $(ROOT)/src/jobs.cxx $(ROOT)/src/scene2.cxx $(ROOT)/src/scene4.cxx
 HOST_BIN := $(BUILD)/host/host_bench
 HOST_SHOT_SECONDS ?= 3.0
 

@@ -26,6 +26,7 @@
 
 extern bool gWindowedMode;
 #include "font_atlas.hxx" // shared HUD font data and atlas layout
+#include "jobs.hxx"      // startup CPU work on the spare cores (see Setup)
 
 
 #define NAME "ElectroBench - Scene 2"
@@ -279,8 +280,16 @@ static float xf_mod(float x, float m) { float t = x / m; return (t - std::floor(
 static float yf_mod(float y, float m) { float t = y / m; return (t - std::floor(t)) * m; }
 
 // Tileable ripple gradient texture: two phase-shifted RG noise channels.
-static GLuint CreateRippleTexture() {
-  std::vector<unsigned char> px(kRippleSize * kRippleSize * 2);
+// ---------------------------------------------------------------------------
+// Procedural texture data and its upload are two separate steps, because the
+// fills are the only sizeable CPU work in this scene's setup and they can run
+// on worker threads (src/jobs.hxx) while the GL thread compiles the programs.
+// The fills touch nothing but their own buffer; the uploads touch nothing but
+// GL. Setup is the only caller and it never runs one without the other.
+// ---------------------------------------------------------------------------
+static void FillRippleData(std::vector<unsigned char> *out) {
+  std::vector<unsigned char> &px = *out;
+  px.resize((size_t)kRippleSize * kRippleSize * 2);
   for (int y = 0; y < kRippleSize; y++) {
     for (int x = 0; x < kRippleSize; x++) {
       float u = x / (float)kRippleSize, v = y / (float)kRippleSize;
@@ -292,6 +301,9 @@ static GLuint CreateRippleTexture() {
       px[(y * kRippleSize + x) * 2 + 1] = (unsigned char)std::lround(std::fmin(1.0f, std::fmax(0.0f, 0.5f + b + b2 * 0.5f)) * 255.0f);
     }
   }
+}
+
+static GLuint UploadRippleTexture(const std::vector<unsigned char> &px) {
   GLuint tex = 0;
   glGenTextures(1, &tex);
   glBindTexture(GL_TEXTURE_2D, tex);
@@ -305,8 +317,9 @@ static GLuint CreateRippleTexture() {
 }
 
 // RGBA fBm noise for the cloud shader (R/G used as two independent fields).
-static GLuint CreateSkyNoiseTexture() {
-  std::vector<unsigned char> px(kNoiseSize * kNoiseSize * 4);
+static void FillNoiseData(std::vector<unsigned char> *out) {
+  std::vector<unsigned char> &px = *out;
+  px.resize((size_t)kNoiseSize * kNoiseSize * 4);
   for (int y = 0; y < kNoiseSize; y++) {
     for (int x = 0; x < kNoiseSize; x++) {
       float u = x / (float)kNoiseSize, v = y / (float)kNoiseSize;
@@ -318,6 +331,9 @@ static GLuint CreateSkyNoiseTexture() {
       px[(y * kNoiseSize + x) * 4 + 3] = 255;
     }
   }
+}
+
+static GLuint UploadNoiseTexture(const std::vector<unsigned char> &px) {
   GLuint tex = 0;
   glGenTextures(1, &tex);
   glBindTexture(GL_TEXTURE_2D, tex);
@@ -331,8 +347,9 @@ static GLuint CreateSkyNoiseTexture() {
 }
 
 // Grayscale foam / wave-detail texture.
-static GLuint CreateFoamTexture() {
-  std::vector<unsigned char> px(kFoamSize * kFoamSize * 4);
+static void FillFoamData(std::vector<unsigned char> *out) {
+  std::vector<unsigned char> &px = *out;
+  px.resize((size_t)kFoamSize * kFoamSize * 4);
   for (int y = 0; y < kFoamSize; y++) {
     for (int x = 0; x < kFoamSize; x++) {
       float u = x / (float)kFoamSize, v = y / (float)kFoamSize;
@@ -346,6 +363,9 @@ static GLuint CreateFoamTexture() {
       px[(y * kFoamSize + x) * 4 + 3] = 255;
     }
   }
+}
+
+static GLuint UploadFoamTexture(const std::vector<unsigned char> &px) {
   GLuint tex = 0;
   glGenTextures(1, &tex);
   glBindTexture(GL_TEXTURE_2D, tex);
@@ -784,9 +804,22 @@ static void Setup() {
   glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void *)(2 * sizeof(float)));
   glBindVertexArray(0);
 
-  gRippleTex = CreateRippleTexture();
-  gNoiseTex = CreateSkyNoiseTexture();
-  gFoamTex = CreateFoamTexture();
+  // The three procedural textures are filled by workers while this thread
+  // compiles the programs below. Both halves are independent - the fills touch
+  // only their own std::vector, and the compile is GL-thread work that cannot
+  // be split - so on a four-core Vita this is the one place in the port where
+  // three cores are busy at once. The uploads happen after WaitAll(), never
+  // before: a worker must not be racing the GL queue.
+  std::vector<unsigned char> ripplePx, noisePx, foamPx;
+  jobs::Start(3, [&](int which) {
+    if (which == 0) {
+      FillRippleData(&ripplePx);
+    } else if (which == 1) {
+      FillNoiseData(&noisePx);
+    } else {
+      FillFoamData(&foamPx);
+    }
+  });
   CreateEnvResources();
 
   gSeaProg = LinkProgram(resolveAssetPath("shaders/ps14/sea_vert.glsl").c_str(), resolveAssetPath("shaders/ps14/sea_frag.glsl").c_str());
@@ -807,11 +840,17 @@ static void Setup() {
     gSeaProg = LinkProgram(resolveAssetPath("shaders/ps14/sea_vert.glsl").c_str(),
                            resolveAssetPath("shaders/ps14/fallback_sea_frag.glsl").c_str());
   }
-  SCENE2_LOG("scene2: setup %dx%d, gl error 0x%04x, sky=%d sea=%d hud=%d",
-             gWindowWidth, gWindowHeight, (unsigned)glGetError(),
+  SCENE2_LOG("scene2: setup %dx%d, %d cores for the worker threads, gl error 0x%04x, sky=%d sea=%d hud=%d",
+             gWindowWidth, gWindowHeight, jobs::CoreCount(), (unsigned)glGetError(),
              (int)ProgramIsLinked(gSkyProg), (int)ProgramIsLinked(gSeaProg),
              (int)ProgramIsLinked(gHudProg));
 #endif
+  // Workers finished (or this call ran whatever they had not started); their
+  // buffers are complete, so the GL thread can upload them now.
+  jobs::WaitAll();
+  gRippleTex = UploadRippleTexture(ripplePx);
+  gNoiseTex = UploadNoiseTexture(noisePx);
+  gFoamTex = UploadFoamTexture(foamPx);
 
   glEnable(GL_DEPTH_TEST);
   glDepthFunc(GL_LEQUAL);

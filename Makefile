@@ -35,9 +35,13 @@ VPK := ElectroBench-vita.vpk
 # -Wl,-q keeps the relocation sections vita-elf-create needs. -DELECTROBENCH_VITA
 # switches lib/asset_path.hxx to the app0: branch and marks the port's sources.
 CXXFLAGS := -std=c++17 -O3 -ffast-math -mtune=cortex-a9 -mfpu=neon -ftree-vectorize \
-            -DELECTROBENCH_VITA -Iinclude -Ilib
+            -DELECTROBENCH_VITA -Iinclude -Ilib \
+            -pthread
 # -g gives vita-elf-create usable symbol names and costs nothing at runtime.
-LDFLAGS := -Wl,-q
+# -pthread for the worker threads in src/jobs.hxx: the scenes build their
+# startup data on the console's spare cores while the GL thread compiles
+# shaders. vitaSDK ships libpthread.a, which is what -pthread resolves to here.
+LDFLAGS := -Wl,-q -pthread
 
 # vitaGL pulls in the rest (SceGxm, SceDisplay, the shader compiler, the
 # allocator and thread plumbing, taiHEN's kernel bridge for a couple of paths).
@@ -53,7 +57,8 @@ LIBS := -lvitaGL -lvitashark -lSceShaccCgExt -lmathneon \
         -lScePower_stub -lSceTouch_stub -lSceKernelModulemgr_stub -ltaihen \
         -lstdc++ -lm -lc
 
-OBJS := $(BUILD)/vita_main.o $(BUILD)/vita_sdl.o $(BUILD)/scene2.o $(BUILD)/scene4.o
+OBJS := $(BUILD)/vita_main.o $(BUILD)/vita_sdl.o $(BUILD)/jobs.o \
+        $(BUILD)/scene2.o $(BUILD)/scene4.o
 
 # The packed shader tree. Listing the files (not just the directory) matters:
 # regenerating a shader rewrites it in place, which does not touch the

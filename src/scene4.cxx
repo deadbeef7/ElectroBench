@@ -34,6 +34,7 @@
 
 extern bool gWindowedMode;
 #include "font_atlas.hxx"
+#include "jobs.hxx" // startup CPU work on the spare cores (see Setup)
 // --------------------------------------------------------------- math block
 struct Vec3 {
   float x, y, z;
@@ -1218,6 +1219,13 @@ static void AddTreeline() {
     }
   }
 
+}
+
+// The upload half of BuildSceneGeometry: split out so the tessellation above,
+// which is the single largest piece of CPU work in either scene, can run on a
+// worker thread while the GL thread compiles the three programs (Setup). Only
+// this half touches GL, and only after jobs::WaitAll().
+static void UploadSceneGeometry() {
   glGenVertexArrays(1, &gObjVao);
   glGenBuffers(1, &gObjVbo);
   glGenBuffers(1, &gObjIbo);
@@ -1680,7 +1688,11 @@ static void WriteScreenshotPPM(const char *path) {
 // ------------------------------------------------------------------- setup
 static void Setup() {
   BuildSkyMesh();
-  BuildSceneGeometry();
+  // Everything below that is CPU work - the whole pole/wire/house/tree line -
+  // runs on a worker while this thread compiles the programs. BuildSceneGeometry
+  // builds gVerts/gIdx and nothing else; its GL half is UploadSceneGeometry,
+  // called once the worker is joined.
+  jobs::Start(1, [](int) { BuildSceneGeometry(); });
   BuildFontAtlas();
 
   glGenVertexArrays(1, &gHudVao);
@@ -1699,6 +1711,9 @@ static void Setup() {
                          resolveAssetPath("shaders/pole/object_frag.glsl").c_str());
   gHudProg = LinkProgram(resolveAssetPath("shaders/ps14/hud_vert.glsl").c_str(),
                          resolveAssetPath("shaders/pole/hud_frag.glsl").c_str());
+
+  jobs::WaitAll();
+  UploadSceneGeometry();
 
   glEnable(GL_DEPTH_TEST);
   glDepthFunc(GL_LEQUAL);

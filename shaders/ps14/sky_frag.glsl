@@ -2,14 +2,20 @@
 // GLSL 1.00-style rewrite for vitaGL/SceShaccCg (see that script's RULES); the
 // math is identical to the desktop shader except for the documented rewrites.
 #version 100
-precision mediump float;
+// Whole stage at highp, not just the varying. The sun's halo lives in the last
+// ~0.7% of dot(dir, sunDir), and with a mediump default every local in main()
+// - dir, sunAng, the disc/halo masks, the dither - is fp16, which cannot
+// resolve that range: the smooth halo quantised into concentric discs, the
+// "ghost suns" ring around the sun. Declaring only the varying highp (the
+// previous revision) was not enough, because the locals that do the halo math
+// still took the stage default. highp in the fragment stage is mandated by ES
+// 3.0, which is what the APK targets, and SceShaccCg accepts it; scene 4's sky
+// shader has shipped whole-stage highp for the same reason. The masks below
+// also measure the ANGLE to the sun instead of pow(dot, n), so the halo is
+// well conditioned even at the bottom of the highp range.
+precision highp float;
 
-
-// highp, matching sky_vert.glsl. The sun's halo lives in the last ~0.7% of
-// dot(dir, sunDir); the fragment default (mediump) is fp16 on mobile GPUs and
-// cannot resolve it, so the smooth halo quantised into concentric discs — the
-// "ghost suns" ring around the disc. The masks below also measure the ANGLE to
-// the sun instead of pow(dot, n), which is well conditioned in any precision.
+// highp, matching sky_vert.glsl.
 varying highp vec3 vDir;
 
 uniform float uTime;
@@ -380,6 +386,11 @@ void main() {
 
     vec3 outCol = sky;
     if (uTonemap > 0.5) {
+        // The dither hashes gl_FragCoord, which only works while this stage is
+        // highp: at mediump the coordinates lose their low bits above 1024 and
+        // the pattern collapses (963 distinct values at 1080p become 8,
+        // correlated over 13-px runs), too coarse to break the halo's 1-LSB
+        // contours. That is part of why the whole stage above is highp.
         float dith = (hash21(gl_FragCoord.xy + fract(uTime) * 13.0)
                      + hash21(gl_FragCoord.xy * 1.7 + 41.0) - 1.0) * 0.5;
         outCol = encodeScene(sky, dith);

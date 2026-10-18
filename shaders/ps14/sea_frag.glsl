@@ -4,10 +4,33 @@
 #version 100
 // Re-seeded from the v0.3 release (tag v0.3: shaders/ps14/sea_frag.glsl) and
 // re-ported through the same rewrites. The only deltas beyond the mechanical
-// rewrite are the three shared-tree fixes this file needs on the ES 3.0
-// ports (Android) and vitaGL (Vita), each noted inline: highp vWorld,
-// highp uTime, and MAX_CLOUDS raised to 9 to match src/scene2.cxx.
-precision mediump float;
+// rewrite are the two shared-tree fixes this file needs on both ports, each
+// noted inline: MAX_CLOUDS raised to 9 to match src/scene2.cxx, and the
+// whole-stage highp below.
+//
+// WHY THE WHOLE STAGE IS highp — the pixellated white sparkles in the sun path.
+// The normal field below evaluates six analytic sines whose arguments run into
+// the hundreds-to-thousands of radians: the sea patch is kSeaSize (4096) across,
+// so the world coordinates reach +/-2048 and the phases reach ~2000. At a
+// mediump default (fp16 — what both the phone and SceShaccCg compile this to)
+// one ulp at 2048 is 0.25 rad, four times the 0.06 rad that separates the
+// finite-difference taps at e=0.35. adjoint: the gradient stops being a
+// derivative and becomes a staircase, and pow(NdH, 64) lights each step as an
+// isolated white pixel. That is the sparkle, and it is in BOTH archives: the
+// VPK shows it exactly like the APK, which is the evidence that SceShaccCg does
+// NOT strip the qualifier (as an earlier note in this tree assumed) but honours
+// it.
+// Measured on the host render, whose driver lowers mediump the same way, at the
+// Vita's probe (256-px, 8-bit cube) and the desktop's 768: pixels with luma
+// >170 that are also >45 brighter than all four neighbours, in the sea, fall
+// from 280 (mediump) to 15 (highp) — and to 20 at highp on the 768 cube, i.e.
+// the sparkle is gone and what is left is the same handful the fp32 reference
+// has. The stage also renders 39% brighter at highp on that host, because the
+// quantised haze and reflection terms were reading low; highp is what makes the
+// phone and the console agree with the desktop, not a brightening on top.
+// ES 3.0 mandates fragment highp and the sky shaders of both scenes already
+// declare it, so this is the same line, not a new capability.
+precision highp float;
 // Fragment shader for the sea surface.
 //
 // Structure intentionally mirrors the phases of a shader_model 1.4 pixel
@@ -29,17 +52,18 @@ precision mediump float;
 // a sky-tinted horizon sheen so the far sea is a mirror of the sky band above
 // it rather than dark water with a haze knob.
 
-// highp explicitly because this varying carries a *world* position: the sea
-// patch is kSeaSize (4096) across, so these are coordinates of +/-2048 and the
-// stage's default mediump cannot hold them. Interpolated at mediump the far
-// half of the patch collapses - dist came back >= 16384 (mediump's own maximum)
-// for fragments whose vWorld was a perfectly ordinary (1847, 1044) - which drove
+// These two are declared highp explicitly on BOTH stages even though the
+// stage default above is now highp too: the declaration is what the ES 3.0
+// linker checks for varying agreement between sea_vert and this stage, and the
+// history is worth keeping. The sea patch is kSeaSize (4096) across, so
+// vWorld carries coordinates of +/-2048; interpolated at mediump the far half
+// of the patch collapsed - dist came back >= 16384 (mediump's maximum) for
+// fragments whose vWorld was a perfectly ordinary (1847, 1044) - which drove
 // horizonMix and haze to 1.0 over a 24-row band straddling the horizon while
 // `body` stayed at its un-hazed value: the near-black band between the sea and
 // the sky. At highp the same probes agree with the geometry (row 416 returns
-// length(vWorld.xz) = 1606 and dist = 1574) and the haze ramps normally, so the
-// water reaches the horizon. The sea's ALU is still mediump; only the two
-// stages' shared view of the world position is not.
+// length(vWorld.xz) = 1606 and dist = 1574) and the haze ramps normally, so
+// the water reaches the horizon.
 varying highp vec3 vWorld;
 varying highp vec2 vUV;
 
@@ -191,12 +215,12 @@ void main() {
     vec3 Rdark = normalize(vec3(R.x, abs(R.y) * 1.8 + 0.62, R.z)); // steep: upper sky
     R = normalize(mix(Rdark, R, pow(sunAlign, 6.0)));
 
-    // Roughness-matched reflection LOD: the sun disc occupies a handful of
-    // cubemap texels, and sampling them at LOD 0 mirrors as small SQUARE
-    // patches on the water. Wave facets are rough at every distance, so the
-    // reflection blurs with range — which also smears the sun into a soft
-    // vertical glow (real water behaviour) instead of texel squares.
-    float reflDist = dist;
+    // Single tap, deliberately. A multi-tap blur of this cube was tried for the
+    // pixellated sparkle and reverted: it does not remove the sparkle (that is
+    // the mediump staircase above - see the top of this file, where highp takes
+    // the same frame from 280 isolated bright pixels to 15) and it lifts the
+    // whole sea by a third by averaging the bright horizon band into every
+    // off-sun reflection. The cube's texel size is not what the eye is seeing.
     vec3 reflColor = textureCube(uSkyEnvTex, R).rgb;
     float offSun = 1.0 - smoothstep(0.08, 0.45, sunAlign);
     reflColor *= mix(1.0, 0.46, offSun);

@@ -524,6 +524,137 @@ shader already relied on it unguarded for the earlier `uTime` fix, and a device
 without it would reject the program rather than draw the band — the alternative is
 to stop shipping raw world coordinates to the fragment stage at all.
 
+### The sea's pixellated sparkles and the ghost suns: the stages were fp16
+
+Reported from the two builds side by side: the APK's scene 2 had concentric
+"ghost suns" around the disc, and **both** the APK and the VPK had a sun path on
+the sea that read as pixellated, broken white sparkle. That combination is the
+clue - a phone-only precision bug cannot explain the VPK, so the earlier
+assumption in this tree that "vitaGL strips precision qualifiers, so the Vita is
+unchanged by a `highp`" was wrong: SceShaccCg honours `mediump`. Both fragment
+stages therefore ran at fp16, and both shaders had already been written assuming
+they did not.
+
+**Why the host frames reproduce it.** Mesa's llvmpipe lowers `mediump` the same
+way a mobile GPU does, so the same scene rendered with the stage default at
+`mediump` and at `highp` is a faithful A/B: `scene 2`'s sea comes out 39% darker
+at `mediump` (mean 56.4 -> 78.5 on the 1366x768 frame) with the highlight path
+broken into texel-scale dots.
+
+**The sea.** `waveHeight()` evaluates six analytic sines whose arguments reach
+~2000 rad - the patch is `kSeaSize` (4096) across, so world coordinates reach
++-2048 and the phase is `0.17 * 2048`. At fp16 one ulp at 2048 is 0.25 rad, four
+times the 0.06 rad that separates the finite-difference taps at `e = 0.35`: the
+gradient stops being a derivative and becomes a staircase, and `pow(NdH, 64)`
+lights each step as an isolated pixel. Measured on the sea of the host frame -
+counted as pixels with luma > 170 that are also > 45 brighter than all four
+neighbours - at the Vita's probe (256-px faces, 8-bit cube, no mip chain) the
+count falls from **280 to 15**, and on the desktop's 768-px 16F cube from **20 to
+2**; the fp32 reference has 20, so what is left is the reference's own handful.
+No pixel is clipped white in either frame (0 pixels with all channels >= 250),
+which is the other half of the diagnosis: the "white" was isolated bright texels
+against dark water, not a blown-out highlight.
+
+**The dither too.** `sky_frag.glsl`'s contour dither hashes `gl_FragCoord`, which
+only works while the stage is `highp`: at `mediump` the coordinates lose their low
+bits past 1024 and the pattern collapses from 963 distinct values at 1080p to 8,
+correlated over 13-px runs - too coarse to break the halo's 1-LSB contours. The
+dither is unchanged; it is the reason the whole stage had to be `highp`, not just
+the `vDir` varying it already declared.
+
+**The halo, measured.** The three masks that build the disc and its glow
+(`exp(-11 a^2)`, `exp(-85 a^2)`, `exp(-160 a^2)`) sampled every 2e-4 rad across a
+0.24 rad arc that crosses the sun hold 874 / 1055 / 1115 distinct levels in fp32
+and only 312 / 567 / 630 in fp16, with the largest step between adjacent samples
+rising from 0.0018 to 0.0063 mask units. `mix()`ed toward a (9.2, 5.1, 1.9) sun
+colour, that is 3-4 output levels of jump per step: the concentric rings. Scene
+4's sky shader was already whole-stage `highp` (its note says why), which is
+exactly why the VPK never had the ghost sun.
+
+**The fix is one line in each of two files**, both of them shared by both ports -
+the tree in `shaders/` *is* the Vita tree and the APK packs the same directory,
+so there is nothing to fork for Android:
+
+| file | change |
+|---|---|
+| `shaders/ps14/sea_frag.glsl` | `precision mediump float;` -> `precision highp float;` |
+| `shaders/ps14/sky_frag.glsl` | `precision mediump float;` -> `precision highp float;` |
+
+A multi-tap blur of the reflection cube was tried first, on the theory that the
+sparkle was the 256-px 8-bit probe magnified onto the water, and reverted: it
+did not remove the sparkle (the staircase above did) and it lifted the whole sea
+by a third by averaging the bright horizon band into every off-sun reflection.
+The unused `reflDist` local that SceShaccCg used to warn about went with it.
+
+**Checked.** All 13 shaders still validate as GLSL ES 1.00
+(`sh tools/check_shaders.sh`) and all eight programs link on the host's ES 3.2
+driver (`make -f android/Makefile host-shaders`), the two regenerated frames are
+in `android/screenshots/`, and both archives were repacked from the fixed tree:
+the APK for all three ABIs and signed, the VPK through `vita-pack-vpk`. Every
+`.glsl` unpacked from `assets/shaders/` in the APK and from `shaders/` in the VPK
+is byte-identical to the tree, and both pack `precision highp float;` in the two
+stages above. **Not verified on hardware**: the host's llvmpipe lowering is a
+model of a mobile GPU's fp16, not the phone's driver or SceShaccCg itself. The
+Vita-side claim being relied on is narrow - `highp` in a fragment stage, which
+both sky shaders already ship and Vita3K already accepted for the previous
+release - and the fp16 reading of the VPK symptom is the user's own report of the
+same artifact in both archives.
+
+### The VPK ran on one core, and its shader compile was slow
+
+Both reports were right, and they have the same cause: the port had **exactly one
+thread**, and scene setup was one serial run of CPU work — three 256x256 fBm
+textures and a 384x384 sea mesh in scene 2, a few hundred thousand tessellated
+vertices of poles/wires/houses/trees in scene 4 — followed by the SceShaccCg
+compiles. A single-threaded GL application pins one core by construction, so
+"use the other three" is not a launcher or scheduler flag: it needs work that can
+run on four cores at once. There was plenty; it was just sequenced behind the
+compiles.
+
+**What changed**
+
+* `src/jobs.hxx` / `src/jobs.cxx` — a deliberately small fork-join layer:
+  `jobs::Start(count, fn)` queues `count` independent tasks on up to
+  `CoreCount()-1` worker threads (4 cores on the Vita, the host's count
+  elsewhere), the caller keeps working, and `jobs::WaitAll()` joins, running any
+  unclaimed task on the calling thread. pthreads rather than `std::thread`
+  because VitaSDK's newlib maps pthread onto SceKernel threads, so the Vita,
+  Android and the host build share one implementation.
+* Scene 2 and scene 4 `Setup()` now hand the CPU-only half of their start-up data
+  to the workers and compile the programs on the GL thread underneath it. The
+  two halves of each generator are separate functions (`FillRippleData()` /
+  `UploadRippleTexture()`, `BuildSceneGeometry()` / `UploadSceneGeometry()`): a
+  worker never touches GL, and nothing is uploaded until `WaitAll()` has joined.
+  On the Vita that is the GL thread compiling while three cores fill textures
+  and tessellate. The setup log line now reports the core count it saw.
+* **Shader cache.** The slow part is SceShaccCg translating and compiling the
+  GLSL at load time, and it cannot be split across cores (one GL thread, one
+  compiler instance). vitaGL can persist its output instead: rebuilt with
+  `HAVE_SHADER_CACHE=1` (`make NO_SPLASHSCREEN=1 LOG_ERRORS=1
+  HAVE_SHADER_CACHE=1 install` in vitaGL, now also what `tools/build_deps.sh`
+  passes), it writes each
+  compiled stage as `.gxp` under `ux0:data/shader_cache/<title id>/v<N>/` and
+  reloads it on the next launch, creating the tree itself at `vglInit`. No app
+  code: a first run (or a run after a shader edit) pays the compile, later ones
+  do not. Frame timing is unaffected either way — the benchmark clocks GPU
+  frames, not start-up — so this only shortens the wait before the first frame.
+
+**Verified:** the host frames are unchanged by the threading. Scene 2 is
+byte-identical to the pre-threading frame except rows 16-30, a band that differs
+between two runs of the *unmodified* binary as well (176 pixels there, 0
+everywhere else out of 1,049,088 — the sea, the sky and both shader programs are
+bit-exact). Scene 4's frame changes on every run because its sun and auto-camera
+are time-driven, but its per-run statistics are stable (mean 142.7, ~15.8k pixels
+above 200 in the 1/9 sampling, before and after), and the tessellation is joined
+before any upload, so the geometry cannot be half-built. Both archives were
+rebuilt: the VPK (now 883,806 bytes, the cache-enabled vitaGL and `jobs.o`
+linked in) and the APK for all three ABIs.
+
+**Not verified:** the core count on the console itself — the scene 2 setup line
+now logs `N cores for the worker threads`, which is what an on-device run will
+report — and whether the cache actually hits, which shows up as `.gxp` files
+under `ux0:data/shader_cache/ELEB00002/v<N>/` after the first run.
+
 ### Scene 2, made affordable — and a halo the phone could not resolve
 
 Three changes went into the shared tree together, because they are the same
