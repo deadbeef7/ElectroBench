@@ -15,7 +15,7 @@
   android/jni/android_main.cxx) give the scenes the whole screen.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="org.electrobench.android"
+    package="org.deadbeef7.electrobench"
     android:versionCode="1"
     android:versionName="1.0">
 

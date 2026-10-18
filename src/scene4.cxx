@@ -1354,7 +1354,7 @@ static void RenderResults() {
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
   char big[96], timeLine[128], hint[96];
-  std::snprintf(big, sizeof(big), "SCORE : %.0f", gResultsScore);
+  std::snprintf(big, sizeof(big), "SCORE : %.2f", gResultsScore);
   std::snprintf(timeLine, sizeof(timeLine), "Time : %.1fs   Average FPS : %.1f",
                 gResultsElapsed, gResultsFps);
   std::snprintf(hint, sizeof(hint), "Scene 4 score");
@@ -1587,7 +1587,7 @@ static void RenderScene() {
     double elapsed = now - gStartTime;
     double fps = (double)gFrame / elapsed;
     double score = fps * fps * 2.0;
-    std::printf("Benchmark Results - Time : %.1fs, Average FPS : %.1f, Score : %.0f\n",
+    std::printf("Benchmark Results - Time : %.1fs, Average FPS : %.1f, Score : %.2f\n",
                 elapsed, fps, score);
     std::fflush(stdout);
     gFusedPoleScore = score;

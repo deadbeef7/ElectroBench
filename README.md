@@ -137,11 +137,11 @@ different key can replace it. The app runs scene 2's full 45 s benchmark and its
 | **tap**, **A**, **ENTER** or **SPACE** | end the current scene early (the desktop Esc key) |
 
 A phone has no console, so the run reports itself into the app's files directory
-(`/sdcard/Android/data/org.electrobench.android/files/` on a device with external
+(`/sdcard/Android/data/org.deadbeef7.electrobench/files/` on a device with external
 storage, the app-private directory otherwise):
 
 * `stdout.txt` — the scenes' own output, including `Benchmark Results - Time :
-  45.0s, Average FPS : N, Score : N` for each scene.* `portlog.txt` — the port's trace: EGL/ES version and the sample count it really
+  45.0s, Average FPS : N, Score : N.NN` for each scene.* `portlog.txt` — the port's trace: EGL/ES version and the sample count it really
   got, how many shader files were unpacked (and each one's byte count), one line
   per capture, and the device report the two scenes cannot make themselves: the
   GPU vendor/renderer/GLSL version, the uniform/varying/texture limits, whether
@@ -350,7 +350,7 @@ Verified on the committed `ElectroBench-android.apk`, by
 `make -f android/Makefile verify`:
 
 * `aapt2 dump badging` reads the binary manifest back as package
-  `org.electrobench.android`, `sdkVersion:'24'`, `targetSdkVersion:'34'`,
+  `org.deadbeef7.electrobench`, `sdkVersion:'24'`, `targetSdkVersion:'34'`,
   `launchable-activity: android.app.NativeActivity`, and
   `native-code: 'arm64-v8a' 'armeabi-v7a' 'x86_64'`.
 * `apksigner verify` verifies it with APK Signature Scheme v2 **and** v3 (v1 is
