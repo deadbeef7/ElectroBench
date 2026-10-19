@@ -238,8 +238,13 @@ void main() {
     // off-sun reflection, and the LOD ramp above is where the eye actually
     // sees the texels.
     float reflDist = dist;
+    // The blur is a RANGE ramp, not v0.3's 1.5 minimum everywhere: a 1.5-floor
+    // mip pulls the mip-averaged warm horizon band into every reflected pixel,
+    // which reads as a horizontal orange zone across the far sea. Near the
+    // camera the reflection stays sharp; the square texels only appear where
+    // the reflection compresses, which is where the ramp has already blurred.
     vec3 reflColor = textureCube(uSkyEnvTex, R,
-        clamp(1.5 + reflDist * 0.0012, 1.0, 5.0)).rgb;
+        clamp((reflDist - 250.0) * 0.0014, 0.0, 2.5)).rgb;
     float offSun = 1.0 - smoothstep(0.08, 0.45, sunAlign);
     reflColor *= mix(1.0, 0.46, offSun);
 
@@ -324,11 +329,17 @@ void main() {
     vec3 H = normalize(L + V);
     float NdH = max(dot(N, H), 0.0);
     float pathGate = pow(sunAlign, 10.0) * 0.96 + 0.04;
-    float sparkleGate = (0.55 + 0.90 * chaos);
-    float glint = pow(NdH, 520.0) * 6.0;              // pinpoint sparkles
-    float glintMid = pow(NdH, 90.0) * 0.55;           // mid falloff keeps it grainy
-    float glintWide = pow(NdH, 14.0) * 0.22;          // soft sheen around the path
-    color += vec3(1.0, 0.56, 0.24) * (glint + glintMid + glintWide * pathGate)
+    // The chaos gate and the 520 lobe only make sense where a pixel covers
+    // several ripple wavelengths and the lobe is wider than a pixel. Past that
+    // they are pure aliasing: isolated orange dots and orange streaks riding the
+    // path. Both fade out with range; the 90 and 14 lobes carry the path there.
+    float gateFade = smoothstep(250.0, 1100.0, dist);
+    float tightFade = 1.0 - smoothstep(300.0, 1200.0, dist);
+    float sparkleGate = mix(0.55 + 0.90 * chaos, 1.0, gateFade);
+    float glint = pow(NdH, 520.0) * 6.0 * tightFade; // pinpoint sparkles
+    float glintMid = pow(NdH, 90.0) * 0.55;          // mid falloff keeps it grainy
+    float glintWide = pow(NdH, 14.0) * 0.22;         // soft sheen around the path
+    color += vec3(1.0, 0.64, 0.38) * (glint + glintMid + glintWide * pathGate)
              * (0.25 + max(L.y, 0.0) * 1.2) * pathGate * shadow * sparkleGate;
 
     // HDR tone map + gamma
