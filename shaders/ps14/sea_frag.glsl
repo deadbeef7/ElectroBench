@@ -3,10 +3,16 @@
 // math is identical to the desktop shader except for the documented rewrites.
 #version 100
 // Re-seeded from the v0.3 release (tag v0.3: shaders/ps14/sea_frag.glsl) and
-// re-ported through the same rewrites. The only deltas beyond the mechanical
-// rewrite are the two shared-tree fixes this file needs on both ports, each
-// noted inline: MAX_CLOUDS raised to 9 to match src/scene2.cxx, and the
-// whole-stage highp below.
+// re-ported through the same rewrites. The deltas beyond the mechanical
+// rewrite are all noted inline: MAX_CLOUDS raised to 9 to match
+// src/scene2.cxx, the whole-stage highp below, v0.3's roughness-matched
+// reflection LOD carried as the ES 1.00 textureCube LOD-bias overload, v0.3's
+// glitter lobes restored verbatim (they only pixelate at mediump), and the
+// cloud-shadow deck kept as the cheap envelope-only approximation - the puff
+// erosion v0.3 used cost ~100 noise samples per fragment per cloud here,
+// which pinned scene 2 to a few FPS on a phone and kept the Vita from coming
+// up at all. The envelope tracks the same cloud uniforms, so the shadow still
+// lands where the sky's clouds are.
 //
 // WHY THE WHOLE STAGE IS highp — the pixellated white sparkles in the sun path.
 // The normal field below evaluates six analytic sines whose arguments run into
@@ -14,8 +20,7 @@
 // so the world coordinates reach +/-2048 and the phases reach ~2000. At a
 // mediump default (fp16 — what both the phone and SceShaccCg compile this to)
 // one ulp at 2048 is 0.25 rad, four times the 0.06 rad that separates the
-// finite-difference taps at e=0.35. adjoint: the gradient stops being a
-// derivative and becomes a staircase, and pow(NdH, 64) lights each step as an
+// finite-difference taps at e=0.35. adjoint: the gradient stops being a//   derivative and becomes a staircase, and pow(NdH, 520) lights each step as
 // isolated white pixel. That is the sparkle, and it is in BOTH archives: the
 // VPK shows it exactly like the APK, which is the evidence that SceShaccCg does
 // NOT strip the qualifier (as an earlier note in this tree assumed) but honours
@@ -215,13 +220,26 @@ void main() {
     vec3 Rdark = normalize(vec3(R.x, abs(R.y) * 1.8 + 0.62, R.z)); // steep: upper sky
     R = normalize(mix(Rdark, R, pow(sunAlign, 6.0)));
 
-    // Single tap, deliberately. A multi-tap blur of this cube was tried for the
-    // pixellated sparkle and reverted: it does not remove the sparkle (that is
-    // the mediump staircase above - see the top of this file, where highp takes
-    // the same frame from 280 isolated bright pixels to 15) and it lifts the
+    // Roughness-matched reflection LOD, restored from v0.3. The sun disc
+    // occupies a handful of cubemap texels, and sampling them at LOD 0 mirrors
+    // them as small SQUARE patches on the water - the glitched blocks inside
+    // the sun-lit path. Wave facets are rough at every distance, so the
+    // reflection blurs with range, which also smears the sun into a soft
+    // vertical glow (real water behaviour) instead of texel squares. v0.3
+    // wrote this as
+    //   textureLod(uSkyEnvTex, R, clamp(1.5 + reflDist * 0.0012, 1.0, 5.0));
+    // ES 1.00 has no textureLod in a fragment stage, but the LOD-bias overload
+    // of textureCube carries the same request - vitaGL maps it to Cg
+    // texCUBEbias for SceShaccCg. The Vita's cube has no mip chain (vitaGL has
+    // no cube mipmaps), so there the bias clamps to base level and is a no-op;
+    // on the phone and the host the cube is mipmapped and the squares go. A
+    // multi-tap BLUR of this cube was also tried and reverted: it lifts the
     // whole sea by a third by averaging the bright horizon band into every
-    // off-sun reflection. The cube's texel size is not what the eye is seeing.
-    vec3 reflColor = textureCube(uSkyEnvTex, R).rgb;
+    // off-sun reflection, and the LOD ramp above is where the eye actually
+    // sees the texels.
+    float reflDist = dist;
+    vec3 reflColor = textureCube(uSkyEnvTex, R,
+        clamp(1.5 + reflDist * 0.0012, 1.0, 5.0)).rgb;
     float offSun = 1.0 - smoothstep(0.08, 0.45, sunAlign);
     reflColor *= mix(1.0, 0.46, offSun);
 
@@ -292,27 +310,26 @@ void main() {
     color = mix(color, skyAtHorizon, haze * (0.30 + 0.70 * haze));
 
     // ---- phase 3: address + blend - sun glitter path ----
-    // A real microfacet lobe instead of the three hand-fitted pow(NdH, 520 /
-    // 90 / 14) terms this used to add. Those three summed to ~6.5 at NdH=1
-    // with the tightest exponent at 520: past the near field that lobe is
-    // narrower than one pixel, so per-pixel wave normals lit isolated white
-    // pixels, and the peak pushed the whole column past the tonemap's white
-    // point, where every lit pixel clipped to a flat square with no gradient
-    // - the pixelated white mess in the sun path. The tightest lobe is now 64
-    // (3% quantisation even in fp16, where 520 stepped by 40%) and the summed
-    // peak stays near 2.0, so the highlight keeps a gradient all the way up.
+    // v0.3's three hand-fitted lobes, restored: a tight sparkle core (520), a
+    // grainy mid falloff (90) and a soft sheen (14), gated to the sun's azimuth
+    // column so the glow stays a narrow path with dark water either side,
+    // killed inside cloud shadows, tinted orange, with the sparkle variance
+    // riding the ripple chaos. What made these lobes pixelate here but not on
+    // the reference is precision, not the exponents: at a mediump default
+    // (fp16) pow(NdH, 520) steps in 40% jumps - each quantised wave normal
+    // lights one isolated white pixel, which is the sparkle. The whole-stage
+    // highp above puts this arithmetic back at fp32-class precision, where the
+    // 520 lobe is the smooth pinpoint the reference shows, so the exponents
+    // stay exactly as v0.3 had them.
     vec3 H = normalize(L + V);
-    float NdH = clamp(dot(N, H), 0.0, 1.0);
-    float pathGate = pow(sunAlign, 10.0) * 0.985 + 0.015;
-    // the grain swings the path by ~1.4x near the camera, but a 190x noise
-    // tile is sub-pixel at range and aliased noise on a tight lobe is exactly
-    // the pixelation, so it fades to a flat 1.0 with distance
-    float grain = mix(1.0, 0.80 + 0.40 * chaos, exp(-dist * 0.0025));
-    float glint = pow(NdH, 64.0) * 1.30;       // tight, but no longer sub-pixel
-    float glintMid = pow(NdH, 20.0) * 0.52;    // mid falloff keeps it grainy
-    float glintWide = pow(NdH, 6.0) * 0.24;    // broad, continuous sheen
-    color += vec3(1.0, 0.78, 0.55) * (glint + glintMid + glintWide) * grain
-             * (0.25 + max(L.y, 0.0) * 1.2) * pathGate * shadow;
+    float NdH = max(dot(N, H), 0.0);
+    float pathGate = pow(sunAlign, 10.0) * 0.96 + 0.04;
+    float sparkleGate = (0.55 + 0.90 * chaos);
+    float glint = pow(NdH, 520.0) * 6.0;              // pinpoint sparkles
+    float glintMid = pow(NdH, 90.0) * 0.55;           // mid falloff keeps it grainy
+    float glintWide = pow(NdH, 14.0) * 0.22;          // soft sheen around the path
+    color += vec3(1.0, 0.56, 0.24) * (glint + glintMid + glintWide * pathGate)
+             * (0.25 + max(L.y, 0.0) * 1.2) * pathGate * shadow * sparkleGate;
 
     // HDR tone map + gamma
     color = color / (color + vec3(1.0));

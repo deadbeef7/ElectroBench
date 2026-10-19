@@ -545,8 +545,9 @@ broken into texel-scale dots.
 ~2000 rad - the patch is `kSeaSize` (4096) across, so world coordinates reach
 +-2048 and the phase is `0.17 * 2048`. At fp16 one ulp at 2048 is 0.25 rad, four
 times the 0.06 rad that separates the finite-difference taps at `e = 0.35`: the
-gradient stops being a derivative and becomes a staircase, and `pow(NdH, 64)`
-lights each step as an isolated pixel. Measured on the sea of the host frame -
+gradient stops being a derivative and becomes a staircase, and the glitter
+lobe - `pow(NdH, 64)` at the time, v0.3's 520 since restored, which steps
+harder - lights each step as an isolated pixel. Measured on the sea of the host frame -
 counted as pixels with luma > 170 that are also > 45 brighter than all four
 neighbours - at the Vita's probe (256-px faces, 8-bit cube, no mip chain) the
 count falls from **280 to 15**, and on the desktop's 768-px 16F cube from **20 to
@@ -599,6 +600,48 @@ Vita-side claim being relied on is narrow - `highp` in a fragment stage, which
 both sky shaders already ship and Vita3K already accepted for the previous
 release - and the fp16 reading of the VPK symptom is the user's own report of the
 same artifact in both archives.
+
+### The sun path had square patches: the reflection LOD had been dropped
+
+A later report against both archives - "a glitched zone in the zone lit up by
+the sea" - is the one thing the revert above did not solve, because that revert
+gone further than removing the blur: it also replaced v0.3's
+`textureLod(uSkyEnvTex, R, clamp(1.5 + reflDist * 0.0012, 1.0, 5.0))` with a
+plain `textureCube`, i.e. an implicit LOD. That is what mirrors the sun disc's
+few cubemap texels back as small square patches: the disc is only a handful of
+texels wide, implicit LOD follows the screen-space derivative of R (which is
+*small* out at the far sea, where the reflection compresses), so the far half
+of the glitter path sampled the cube at or near LOD 0 - blocky texel squares
+inside the lit zone. v0.3's ramp is the fix, and it is a ramp, not a blur: the
+reflection sharpens again near the camera, so it lifts nothing the way the
+multi-tap did.
+
+**The port.** ES 1.00 has no `textureLod` in a fragment stage, so the line is
+carried as the LOD-bias overload `textureCube(s, dir, bias)` with v0.3's
+absolute value as the bias - vitaGL maps that to Cg `texCUBEbias` for
+SceShaccCg, and glslangValidator accepts it as core ES 1.00. A Vita3K boot of
+the repacked VPK confirms that half: `libshacccg.suprx` compiles the new
+`sea_frag.glsl` and links the sea pair (only the usual unreferenced-`dir`
+warning) - the same boot renders scene 2 black with *both* the old and the new
+shader (`Fail to get program` on a pair whose hash is identical either way),
+so that emulator's scene-2 draw path is broken here independently of this
+change. The Vita's cube
+has no mip chain (vitaGL has no cube mipmaps), so the bias clamps to base
+level there and is a no-op; on the APK and the host the cube is mipmapped and
+the squares go. The same port restores v0.3's glitter lobes
+(`pow(NdH, 520/90/14)` plus `sparkleGate`) verbatim, which only ever
+pixelated at mediump - the whole-stage `highp` above is what lets them stay as
+v0.3 had them.
+
+**Measured on the host frames** (1366x768, 768-px 16F cube), the glitch
+signature - flat bright plateaus inside the lit path, counted as WxW windows
+with mean luma > 110 and per-pixel variance < 30 - falls from 798 to 77 at
+W=6, 138 to 8 at W=10 and 44 to 3 at W=14. The isolated-bright-pixel count the
+fp16 section above uses comes out at 14, the reference's own handful, no pixel
+clips white, and the sea as a whole reads 12% darker because the blurred sun
+disc reflects less energy (mean sea luma 78.8 -> 69.2). All 13 shaders still
+validate as GLSL ES 1.00 (`sh tools/check_shaders.sh`) and all eight programs
+still link on host ES 3.2 (`make -f android/Makefile host-shaders`).
 
 ### The VPK ran on one core, and its shader compile was slow
 
