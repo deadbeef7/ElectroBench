@@ -39,14 +39,28 @@ they are recorded here:
    world * view * projection. `sceGumLoadIdentity()` on PROJECTION and VIEW is
    not enough; the model stack must be set to identity too (done once in
    `GuInit`), or every draw collapses to a point while the clear still works.
-2. **`sceGumPerspective` takes radians.** `Scene2FovY()` is degrees (the GL
-   ports feed it to glm), so it must be converted before the call.
-3. **Do not copy textures into VRAM with `sceGuCopyImage`.** The GE samples
+2. **`sceGumPerspective`/`sceGumLookAt` do not draw here.** With this
+   toolchain a probe triangle 25 units in front of the eye never appears with
+   them, in degrees or radians, while the same matrices loaded by hand with
+   `sceGuSetMatrix` render immediately. `SetSceneMatrix()` therefore builds the
+   projection and view explicitly (row-vector form: `w' = z`, `z' = z*A + B`
+   with near -> 0). Only `sceGumOrtho` is still used, for the sky and HUD.
+3. **The depth buffer is inverted-Z: use `GU_GEQUAL`.** `sceGuDepthRange(65535,
+   0)` with `sceGuClearDepth(0)` - the pairing every PSPSDK sample uses - means
+   nearer fragments carry *larger* depth values. With `GU_LEQUAL` every
+   fragment loses against the cleared 0, so any pass that leaves the depth test
+   enabled (the entire sea) is silently discarded while the depth-disabled sky
+   and HUD still draw. `sceGuDepthMask(GU_TRUE)` *disables* depth writes, so the
+   opaque body pass takes `GU_FALSE` and the additive passes `GU_TRUE`.
+4. **`sceGumOrtho` takes (left, right, BOTTOM, top).** Passing `(…, 1, -1, …)`
+   draws clip-space y=+1 at the bottom of the screen, which flips the whole sky
+   and puts its sun in the wrong place.
+5. **Do not copy textures into VRAM with `sceGuCopyImage`.** The GE samples
    textures straight out of main RAM, which is what the PSPSDK `blit` sample
    does (a static RAM array with `sceGuTexImage`). A block transfer with the
    destination/pitch given the wrong way is rejected, and a rejected transfer
    stops the display list, so every draw after it disappears. Textures are
    therefore sampled in place; `sceKernelDcacheWritebackAll()` after rebuilding
    them is all that is needed.
-4. `sceGuDrawArray` does not upload GUM matrices; `sceGumUpdateMatrix()` does.
+6. `sceGuDrawArray` does not upload GUM matrices; `sceGumUpdateMatrix()` does.
    (Only matters for `sceGuDrawArray`; `sceGumDrawArray` pushes them itself.)

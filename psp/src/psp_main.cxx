@@ -167,8 +167,12 @@ void GuInit() {
   sceGuViewport(2048, 2048, kScreenW, kScreenH);
   sceGuScissor(0, 0, kScreenW, kScreenH);
   sceGuEnable(GU_SCISSOR_TEST);
+  // Inverted-Z buffer: near maps to 65535 and the clear value is 0, so the
+  // depth test must be GEQUAL (this is what the PSPSDK samples pair with these
+  // two calls). With LEQUAL every fragment loses against the cleared 0 and any
+  // pass that leaves the depth test on - i.e. the whole sea - is discarded.
   sceGuDepthRange(65535, 0);
-  sceGuDepthFunc(GU_LEQUAL);
+  sceGuDepthFunc(GU_GEQUAL);
   sceGuEnable(GU_DEPTH_TEST);
   sceGuFrontFace(GU_CW);
   sceGuDisable(GU_CULL_FACE);
@@ -187,43 +191,66 @@ void GuInit() {
   sceGuDisplay(1);
 }
 
+// The 3D matrices are built by hand and pushed with sceGuSetMatrix instead of
+// going through sceGumPerspective/sceGumLookAt: on this toolchain those two
+// produce matrices that the GE never rasterises anything with (a probe triangle
+// 25 units in front of the eye simply does not appear), while the same values
+// set explicitly do. The GE uses row vectors, so the projection is the GL one
+// transposed: w' = z (looking down +Z) and z' = z*A + B with near -> 0.
 void SetSceneMatrix() {
   float eye[3];
   float yaw, pitch;
   Scene2Camera(eye, &yaw, &pitch);
-  // Scene2FovY() is the vertical field of view in DEGREES (it is fed to glm on
-  // the GL ports); sceGumPerspective takes radians. Handing it 55 directly
-  // builds a nonsense projection and every sea vertex is clipped away.
-  const float fov = Scene2FovY() * 3.14159265f / 180.0f;
 
-  sceGumMatrixMode(GU_PROJECTION);
-  sceGumLoadIdentity();
-  sceGumPerspective(fov, (float)kScreenW / (float)kScreenH, 1.0f, 5000.0f);
+  const float nearZ = 1.0f, farZ = 5000.0f;
+  const float fov = Scene2FovY() * 3.14159265f / 180.0f; // Scene2FovY() is degrees
+  const float f = 1.0f / std::tan(fov * 0.5f);
+  ScePspFMatrix4 proj;
+  std::memset(&proj, 0, sizeof(proj));
+  proj.x.x = f / ((float)kScreenW / (float)kScreenH);
+  proj.y.y = f;
+  proj.z.z = farZ / (farZ - nearZ);
+  proj.z.w = 1.0f;
+  proj.w.z = -farZ * nearZ / (farZ - nearZ);
 
-  // The scene's camera orbits and always faces the sun; sceGumLookAt builds
-  // the view in the GE's own convention (row vectors, -Z forward), so there is
-  // no hand-built matrix to get wrong.
+  // Look-at, +Z forward: the camera always faces the sun.
   const float cy = std::cos(yaw), sy = std::sin(yaw);
   const float cp = std::cos(pitch), sp = std::sin(pitch);
-  ScePspFVector3 e = {eye[0], eye[1], eye[2]};
-  ScePspFVector3 c = {eye[0] + sy * cp * 50.0f, eye[1] + sp * 50.0f, eye[2] + cy * cp * 50.0f};
-  ScePspFVector3 up = {0.0f, 1.0f, 0.0f};
-  sceGumMatrixMode(GU_VIEW);
-  sceGumLoadIdentity();
-  sceGumLookAt(&e, &c, &up);
-  // sceGum* only edits the local stack; the GE keeps the matrices until this
-  // upload. Without it every sceGuDrawArray transforms with a stale matrix
-  // and the whole scene is dropped (the clear still shows, which is what made
-  // this look like "nothing renders at all").
-  sceGumUpdateMatrix();
+  const float fwd[3] = {sy * cp, sp, cy * cp};
+  const float horiz = std::sqrt(fwd[0] * fwd[0] + fwd[2] * fwd[2]);
+  const float right[3] = {horiz > 1e-5f ? fwd[2] / horiz : 1.0f, 0.0f,
+                          horiz > 1e-5f ? -fwd[0] / horiz : 0.0f};
+  const float up[3] = {fwd[1] * right[2] - fwd[2] * right[1],
+                       fwd[2] * right[0] - fwd[0] * right[2],
+                       fwd[0] * right[1] - fwd[1] * right[0]};
+  ScePspFMatrix4 view;
+  std::memset(&view, 0, sizeof(view));
+  view.x.x = right[0]; view.x.y = up[0]; view.x.z = fwd[0];
+  view.y.x = right[1]; view.y.y = up[1]; view.y.z = fwd[1];
+  view.z.x = right[2]; view.z.y = up[2]; view.z.z = fwd[2];
+  view.w.x = -(right[0] * eye[0] + right[1] * eye[1] + right[2] * eye[2]);
+  view.w.y = -(up[0] * eye[0] + up[1] * eye[1] + up[2] * eye[2]);
+  view.w.z = -(fwd[0] * eye[0] + fwd[1] * eye[1] + fwd[2] * eye[2]);
+  view.w.w = 1.0f;
+
+  ScePspFMatrix4 ident;
+  std::memset(&ident, 0, sizeof(ident));
+  ident.x.x = 1.0f; ident.y.y = 1.0f; ident.z.z = 1.0f; ident.w.w = 1.0f;
+
+  sceGuSetMatrix(GU_PROJECTION, &proj);
+  sceGuSetMatrix(GU_VIEW, &view);
+  sceGuSetMatrix(GU_MODEL, &ident);
 }
 
 void SetSkyMatrix() {
   // The sky grid is clip-space (-1..1) with z=0, drawn under an orthographic
   // projection: the perspective would clip it at the near plane.
+  // sceGumOrtho takes (left, right, BOTTOM, top): bottom must be -1 and top +1,
+  // otherwise the grid's y=+1 row (the zenith) is drawn at the bottom of the
+  // screen and the sky - sun included - appears upside down.
   sceGumMatrixMode(GU_PROJECTION);
   sceGumLoadIdentity();
-  sceGumOrtho(-1.0f, 1.0f, 1.0f, -1.0f, -1.0f, 1.0f);
+  sceGumOrtho(-1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f);
   sceGumMatrixMode(GU_VIEW);
   sceGumLoadIdentity();
   sceGumUpdateMatrix();

@@ -589,7 +589,9 @@ void Scene2DrawSky() {  // The sky grid is in clip-space coordinates (-1..1), so
 
 void Scene2Draw() {
   sceGuEnable(GU_DEPTH_TEST);
-  sceGuDepthMask(GU_TRUE); // the opaque body may write depth
+  // GU_TRUE disables depth writes, GU_FALSE allows them: the opaque body is
+  // the pass that must write depth, the additive passes must not.
+  sceGuDepthMask(GU_FALSE);
   sceGuDisable(GU_CULL_FACE);
 
   // pass 1: body colour (opaque)
@@ -598,7 +600,7 @@ void Scene2Draw() {
   sceGuDrawArray(GU_TRIANGLES, GU_COLOR_8888 | GU_VERTEX_32BITF | GU_INDEX_16BIT,
                  kSegments * kRings * 6, gIndex, gBody);
 
-  sceGuDepthMask(GU_FALSE); // the additive passes must not occlude each other
+  sceGuDepthMask(GU_TRUE); // the additive passes must not occlude each other
   sceGuEnable(GU_BLEND);
   sceGuBlendFunc(GU_ADD, GU_SRC_ALPHA, GU_FIX, 0, 0xFFFFFFFF); // additive
   sceGuEnable(GU_TEXTURE_2D);
