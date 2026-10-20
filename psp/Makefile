@@ -17,6 +17,15 @@
 TARGET := ElectroBench
 OBJS := src/psp_main.o src/psp_scene2.o
 
+# BUILD_PRX=1 is what makes this EBOOT bootable on a console. Without it
+# build.mak packs the *stripped ELF* into DATA.PSP, and PPSSPP happily loads
+# that while the PSP's own module manager rejects it (XMB: "The game could not
+# be started. (8002013C)"). With it, the link uses prxspecs/linkfile.prx and
+# psp-prxgen output (~PSP) is what DATA.PSP carries, which is what the loader
+# on a CFW expects. The PRX stays unsigned - every CFW (PRO/ARK) accepts that;
+# only OFW needs a Sony key we do not have.
+BUILD_PRX = 1
+
 # -O3 -ffast-math: the Allegrex FPU is the VFPU; gcc vectorises the per-vertex
 # math into it and the LUT-based trig below is what keeps the shading inside a
 # frame budget. -G0 keeps small globals in real memory (the GE DMAs vertex
@@ -40,7 +49,7 @@ PSP_EBOOT_ICON := ICON0.PNG
 PSP_EBOOT_ICON1 := NULL
 
 EXTRA_TARGETS := ICON0.PNG EBOOT.PBP
-EXTRA_CLEAN := ICON0.PNG
+EXTRA_CLEAN := ICON0.PNG $(TARGET).prx
 
 # PSPSDK's build.mak ships no suffix rules; these are the port's own. The
 # sources are C++ because they share src/font_atlas.hxx with the other ports.

@@ -20,11 +20,15 @@ Needs a pspdev toolchain (`psp-gcc`, `mksfo`, `pack-pbp`, `psp-g++`).
 
 ## Status
 
-`EBOOT.PBP` boots, draws the dusk sky, the sea (body + additive reflection +
+`EBOOT.PBP` draws the dusk sky, the sea (body + additive reflection +
 glitter) and the HUD at 333/333/166 MHz. Verified under PPSSPP (SDL/GLES) by
 rendering a frame and screenshotting it: no GE errors, no rejected block
 transfers, both framebuffers presenting. The 45 s benchmark loop and the
 `ms0:/ElectroBench-psp.txt` result file are wired the same as the other ports.
+
+`DATA.PSP` carries a **PRX** (`BUILD_PRX = 1`), not the ELF that earlier builds
+packed. The ELF form is what the console rejected with
+`The game could not be started. (8002013C)` - see note 7.
 
 Not yet done: the on-screen score matches the GL slabs only approximately (the
 GE cannot tone-map per pixel), and performance has only been measured under
@@ -64,3 +68,18 @@ they are recorded here:
    them is all that is needed.
 6. `sceGuDrawArray` does not upload GUM matrices; `sceGumUpdateMatrix()` does.
    (Only matters for `sceGuDrawArray`; `sceGumDrawArray` pushes them itself.)
+7. **Pack a PRX, not the ELF.** This Makefile originally left `BUILD_PRX`
+   unset, so PSPSDK's build.mak packed the stripped *ELF* into `DATA.PSP`
+   (its first four bytes were `\x7fELF`). PPSSPP loads that - it sniffs an ELF
+   in the PBP - and every emulator screenshot looked fine, so the mistake only
+   showed up on a console, where the XMB loader hands that blob to the module
+   manager, which cannot read a `~PSP` module header out of it and fails with
+   `8002013C` (`SCE_KERNEL_ERROR_LIBRARY_NOTFOUND`). With `BUILD_PRX = 1` the
+   link uses `prxspecs` + `linkfile.prx`, `psp-prxgen` emits an `ET_SCE_PRX`
+   with a real `.rodata.sceModuleInfo`, and *that* is what `DATA.PSP` holds.
+   Check with `psp-readelf -h ElectroBench.prx`: `Type: (ffa0)` is correct; a
+   plain `EXEC` means the PBP will not boot on hardware even if it runs in an
+   emulator.
+
+   The PRX stays unsigned, which every CFW (PRO/ARK) accepts; only OFW would
+   need a Sony key we do not have.

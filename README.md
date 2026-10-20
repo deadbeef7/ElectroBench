@@ -866,3 +866,29 @@ down from the other ports by construction: 8-bit colour instead of `RGBA16F`, 25
 faces instead of 768², no mip chain, and a one-in-four-frame refresh. All four follow
 from the copy going through guest memory and from vitaGL's cube format table;
 `kEnvMapSize` and `kEnvMapRefreshFrames` are the dials if a console says otherwise.
+
+### The Vita VPK was shipping a sea shader older than the tree
+
+The "the sea fix is not in the Vita version" report had a plain cause: the VPK was
+packed at the *previous* shader revision. `9b79c67` changed
+`shaders/ps14/sea_frag.glsl` (range-ramped reflection LOD, plus distance fades on
+the 520 glitter lobe and its chaos gate) and repacked only the APK;
+`ElectroBench-vita.vpk` still carried the `4bb873c` bytes, so on a console the
+square sun patches and the isolated orange sparkles were exactly as before the
+fix. Nothing was wrong with the shader or with vitaGL - the archive just predated
+it.
+
+The Makefile already lists `$(wildcard shaders/*/*.glsl)` as a prerequisite of the
+VPK for this reason; the rebuild simply was not run. It is now, and the check is
+per file rather than by eye:
+
+```sh
+unzip -q ElectroBench-vita.vpk -d /tmp/vpk && for f in shaders/*/*.glsl; do
+  cmp -s "$f" "/tmp/vpk/$f" || echo "MISMATCH $f"; done   # prints nothing
+```
+
+All 13 packed shaders are byte-identical to the tree, `sea_frag.glsl` included
+(sha1 `35a1951f…`). One limit stays: the reflection LOD is a cube mip *bias*, and
+the Vita's cube has no mip chain, so at the far sea that particular smoothing is
+still a no-op there. The sparkle fix does not depend on the cube at all, which is
+why it is the one that had to reach the console.
