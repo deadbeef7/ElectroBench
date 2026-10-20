@@ -1,6 +1,8 @@
 // ElectroBench — PlayStation Portable port: application shell.
 //
-// One scene (2, the dusk ocean) driven through the Graphics Engine:
+// Two scenes (2, the dusk ocean, then 4, the power-line corridor) driven
+// through the Graphics Engine, 45 s each, the same order and run length as the
+// Vita and Android builds:
 //   * 480x272 16-bit framebuffer + 16-bit depth, both in the 2 MB EDRAM, double
 //     buffered through sceGuSwapBuffers
 //   * two 5650 buffers and the depth buffer live at EDRAM offsets 0 / 512 KiB
@@ -25,6 +27,7 @@
 
 #include "font_atlas.hxx"
 #include "psp_scene2.hxx"
+#include "psp_scene4.hxx"
 
 PSP_MODULE_INFO("ElectroBench", 0, 1, 0);
 PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER | THREAD_ATTR_VFPU);
@@ -39,7 +42,7 @@ constexpr unsigned int kDrawOffset = kPspDrawVram;
 constexpr unsigned int kDispOffset = kPspDispVram;
 constexpr unsigned int kDepthOffset = kPspDepthVram;
 constexpr int kBenchMs = 45000;                   // same 45 s run as the original
-constexpr int kResultsMs = 12000;
+constexpr int kResultsMs = 6000;                  // then hand over to the next scene
 constexpr int kSkyRefreshFrames = 10;
 
 // Display list. GU_DIRECT lets this grow to whatever the frame needs (three
@@ -197,13 +200,9 @@ void GuInit() {
 // 25 units in front of the eye simply does not appear), while the same values
 // set explicitly do. The GE uses row vectors, so the projection is the GL one
 // transposed: w' = z (looking down +Z) and z' = z*A + B with near -> 0.
-void SetSceneMatrix() {
-  float eye[3];
-  float yaw, pitch;
-  Scene2Camera(eye, &yaw, &pitch);
-
-  const float nearZ = 1.0f, farZ = 5000.0f;
-  const float fov = Scene2FovY() * 3.14159265f / 180.0f; // Scene2FovY() is degrees
+void SetSceneMatrix(const float eye[3], float yaw, float pitch, float fovDeg,
+                    float nearZ, float farZ) {
+  const float fov = fovDeg * 3.14159265f / 180.0f;
   const float f = 1.0f / std::tan(fov * 0.5f);
   ScePspFMatrix4 proj;
   std::memset(&proj, 0, sizeof(proj));
@@ -213,7 +212,7 @@ void SetSceneMatrix() {
   proj.z.w = 1.0f;
   proj.w.z = -farZ * nearZ / (farZ - nearZ);
 
-  // Look-at, +Z forward: the camera always faces the sun.
+  // Look-at, +Z forward.
   const float cy = std::cos(yaw), sy = std::sin(yaw);
   const float cp = std::cos(pitch), sp = std::sin(pitch);
   const float fwd[3] = {sy * cp, sp, cy * cp};
@@ -256,34 +255,30 @@ void SetSkyMatrix() {
   sceGumUpdateMatrix();
 }
 
-void WriteResults(const char *text) {
-  int fd = sceIoOpen("ms0:/ElectroBench-psp.txt", PSP_O_WRONLY | PSP_O_CREAT | PSP_O_TRUNC, 0777);
-  if (fd < 0) return;
-  sceIoWrite(fd, text, (int)strlen(text));
-  sceIoClose(fd);
-}
-
 double NowSeconds() { return (double)sceKernelGetSystemTimeWide() * 1e-6; }
 
-} // namespace
+const char *SceneName(int scene) {
+  return scene == 2 ? "scene 2 (dusk ocean)" : "scene 4 (power lines)";
+}
 
-int main(int argc, char *argv[]) {
-  scePowerSetClockFrequency(333, 333, 166);
-  sceCtrlSetSamplingCycle(0);
-  sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
+struct SceneStat {
+  int frames;
+  double seconds;
+  double fps;
+};
 
-  SetupCallbacks();
-  GuInit();
-  BuildFontTexture();
-  Scene2Init();
-
+// One benchmark run: kBenchMs of scene, then the result panel for kResultsMs.
+// Both scenes are initialised up front, so the hand-over between them does not
+// pay the scene-4 geometry build (the largest single piece of CPU work in
+// either scene) inside the second scene's timing.
+SceneStat RunScene(int scene) {
+  SceneStat stat{0, 0.0, 0.0};
   const double start = NowSeconds();
   double lastHud = start;
-  int frames = 0, hudFrames = 0;
   double fps = 0.0;
+  int frames = 0, hudFrames = 0, frame = 0;
   bool results = false;
   double resultsAt = 0.0;
-  int frame = 0;
 
   SceCtrlData pad;
 
@@ -292,20 +287,48 @@ int main(int argc, char *argv[]) {
     const double t = now - start;
 
     sceCtrlPeekBufferPositive(&pad, 1);
-    if (pad.Buttons & PSP_CTRL_START) break;
+    if (pad.Buttons & PSP_CTRL_START) {
+      gRunning = false;
+      break;
+    }
+    // SELECT skips straight to the next scene's results panel. The timed
+    // figures are frozen at that moment, so the results screen's own frames do
+    // not dilute the average.
+    if ((pad.Buttons & PSP_CTRL_SELECT) && !results) {
+      results = true;
+      resultsAt = now;
+      stat.frames = frames;
+      stat.seconds = t;
+      stat.fps = t > 0.0 ? (double)frames / t : 0.0;
+    }
 
-    const int refresh = (frame % kSkyRefreshFrames) == 0;
-    Scene2UpdateCamera(t);
-    Scene2Build(t, refresh);
+    if (scene == 2) {
+      const int refresh = (frame % kSkyRefreshFrames) == 0;
+      Scene2UpdateCamera(t);
+      Scene2Build(t, refresh);
+    } else {
+      Scene4Update(t);
+    }
 
     sceGuStart(GU_DIRECT, gList);
     sceGuClearColor(0xFF1A0D10); // warm dusk black, ABGR
     sceGuClearDepth(0);
     sceGuClear(GU_COLOR_BUFFER_BIT | GU_DEPTH_BUFFER_BIT);
-    SetSkyMatrix();
-    Scene2DrawSky();
-    SetSceneMatrix();
-    Scene2Draw();
+
+    float eye[3], yaw, pitch;
+    if (scene == 2) {
+      SetSkyMatrix();
+      Scene2DrawSky();
+      Scene2Camera(eye, &yaw, &pitch);
+      SetSceneMatrix(eye, yaw, pitch, Scene2FovY(), 1.0f, 5000.0f);
+      Scene2Draw();
+    } else {
+      SetSkyMatrix();
+      Scene4DrawSky();
+      Scene4Camera(eye, &yaw, &pitch);
+      SetSceneMatrix(eye, yaw, pitch, Scene4FovY(), 0.35f, 950.0f);
+      Scene4Draw();
+    }
 
     HudBegin();
     char line[64];
@@ -313,17 +336,16 @@ int main(int argc, char *argv[]) {
       snprintf(line, sizeof(line), "FPS: %d", (int)(fps + 0.5));
       HudText(line, 8.0f, 6.0f, 2.0f, Warm());
       HudText("ELECTROBENCH PSP", 8.0f, 26.0f, 1.0f, White());
-      snprintf(line, sizeof(line), "SCENE 2  %dS", (int)t);
+      snprintf(line, sizeof(line), "SCENE %d  %dS", scene, (int)t);
       HudText(line, 8.0f, 40.0f, 1.0f, White());
     } else {
-      double secs = (now - resultsAt);
-      snprintf(line, sizeof(line), "SCENE 2 RESULTS");
+      snprintf(line, sizeof(line), "SCENE %d RESULTS", scene);
       HudText(line, 60.0f, 96.0f, 2.0f, Warm());
-      snprintf(line, sizeof(line), "AVG FPS: %.1f", fps);
+      snprintf(line, sizeof(line), "AVG FPS: %.1f", stat.fps);
       HudText(line, 60.0f, 132.0f, 2.0f, White());
-      snprintf(line, sizeof(line), "FRAMES: %d", frames);
+      snprintf(line, sizeof(line), "FRAMES: %d", stat.frames);
       HudText(line, 60.0f, 152.0f, 1.0f, White());
-      if (secs > (double)kResultsMs * 0.001) break;
+      if (now - resultsAt > (double)kResultsMs * 0.001) break;
     }
     HudDraw();
 
@@ -343,13 +365,56 @@ int main(int argc, char *argv[]) {
     if (!results && t * 1000.0 >= (double)kBenchMs) {
       results = true;
       resultsAt = now;
-      char out[256];
-      snprintf(out, sizeof(out),
-                    "ElectroBench PSP\nscene 2 (dusk ocean)\nframes: %d\navg fps: %.1f\n"
-                    "run: %.1f s\nclock: 333/333/166 MHz\n",
-                    frames, fps, t);
-      WriteResults(out);
-      frames = 0;
+      // Average over the whole timed run, not the last one-second sample.
+      stat.frames = frames;
+      stat.seconds = t;
+      stat.fps = t > 0.0 ? (double)frames / t : 0.0;
+    }
+  }
+
+  // A quit (START) before the run finished leaves the stat empty; main() then
+  // omits that scene from the result file.
+  return stat;
+}
+
+} // namespace
+
+int main(int argc, char *argv[]) {
+  scePowerSetClockFrequency(333, 333, 166);
+  sceCtrlSetSamplingCycle(0);
+  sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
+
+  SetupCallbacks();
+  GuInit();
+  BuildFontTexture();
+  // Both scenes are built before the first timed frame; Scene4Init's geometry
+  // bake would otherwise be charged to whatever scene runs second.
+  Scene2Init();
+  Scene4Init();
+
+  char report[512];
+  int used = 0;
+  used += snprintf(report + used, sizeof(report) - (size_t)used,
+                   "ElectroBench PSP\nclock: 333/333/166 MHz\n");
+
+  const int order[2] = {2, 4};
+  for (int i = 0; i < 2; i++) {
+    if (!gRunning) break;
+    const int scene = order[i];
+    SceneStat st = RunScene(scene);
+    if (st.frames > 0)
+      used += snprintf(report + used, sizeof(report) - (size_t)used,
+                       "%s\nframes: %d\navg fps: %.1f\nrun: %.1f s\n\n",
+                       SceneName(scene), st.frames, st.fps, st.seconds);
+    if (!gRunning) break;
+    if (used > (int)sizeof(report) - 128) break;
+  }
+  {
+    int fd = sceIoOpen("ms0:/ElectroBench-psp.txt",
+                       PSP_O_WRONLY | PSP_O_CREAT | PSP_O_TRUNC, 0777);
+    if (fd >= 0) {
+      sceIoWrite(fd, report, used);
+      sceIoClose(fd);
     }
   }
 

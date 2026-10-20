@@ -1,13 +1,21 @@
 # ===========================================================================
-# ElectroBench -- PlayStation Portable port (SCENE 2, the dusk ocean).
+# ElectroBench -- PlayStation Portable port (SCENE 2 and SCENE 4).
 #
-# The PSP's Graphics Engine has no shaders: this port rebuilds scene 2 as a
-# fixed-function pipeline (sceGu) instead of translating GLSL. The wave field,
-# sun palette, cloud deck and glitter gates are the same numbers as
-# shaders/ps14/{sea,sky}_frag.glsl; the per-fragment work the GE cannot do
-# (wave normals, cloud shadows, fresnel) runs per-vertex in VFPU float code on
-# the 333 MHz Allegrex, and the reflection/glitter detail that needs to be
-# per-pixel is carried by textures and the GE's blend units.
+# The PSP's Graphics Engine has no shaders: this port rebuilds both scenes as
+# fixed-function pipelines (sceGu) instead of translating GLSL.
+#
+# Scene 2 (dusk ocean): the wave field, sun palette, cloud deck and glitter
+# gates are the same numbers as shaders/ps14/{sea,sky}_frag.glsl; the
+# per-fragment work the GE cannot do (wave normals, cloud shadows, fresnel)
+# runs per-vertex in VFPU float code on the 333 MHz Allegrex, and the
+# reflection/glitter detail that needs to be per-pixel is carried by textures
+# and the GE's blend units.
+#
+# Scene 4 (power lines): the static geometry is baked once into one indexed
+# vertex array with per-vertex lighting from the object shader's terms, the
+# cables are drawn as lines (a 3 cm conductor is sub-pixel at 480x272), depth
+# haze is the GE's linear fog, and the sky is a CPU-baked equirect panorama
+# plus an additive sun sprite.
 #
 # Build (needs a pspdev toolchain, see psp/README.md):
 #   make -C psp          # -> psp/EBOOT.PBP
@@ -15,7 +23,7 @@
 # ===========================================================================
 
 TARGET := ElectroBench
-OBJS := src/psp_main.o src/psp_scene2.o
+OBJS := src/psp_main.o src/psp_scene2.o src/psp_scene4.o
 
 # BUILD_PRX=1 is what makes this EBOOT bootable on a console. Without it
 # build.mak packs the *stripped ELF* into DATA.PSP, and PPSSPP happily loads

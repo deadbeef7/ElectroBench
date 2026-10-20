@@ -1,10 +1,20 @@
 # ElectroBench PSP
 
-Scene 2 (the dusk ocean) rebuilt on the PSP's fixed-function Graphics Engine.
-There are no shaders on the GE, so `psp/src/psp_scene2.cxx` does the wave field,
-cloud shadows, fresnel and sea palette per vertex in float code, and the GE's
-blend units carry the reflection/glitter passes additively. The HUD uses the
-same 8x8 atlas as the Vita and Android ports.
+Scenes 2 (the dusk ocean) and 4 (the power-line corridor) rebuilt on the PSP's
+fixed-function Graphics Engine. There are no shaders on the GE, so both scenes
+are re-derived from the desktop sources instead of translated:
+
+* `psp/src/psp_scene2.cxx` does the wave field, cloud shadows, fresnel and sea
+  palette per vertex in float code; the GE's blend units carry the reflection
+  and glitter passes additively.
+* `psp/src/psp_scene4.cxx` bakes the static pole-line geometry (poles, arms,
+  insulators, transformers, houses, walls, trees, pylons, road) into one
+  indexed vertex array with per-vertex lighting from `object_frag.glsl`'s
+  terms, draws the cables as `GU_LINES`, uses the GE's linear fog for the dusk
+  haze, and generates the sky as a CPU-baked equirect panorama plus an additive
+  sun sprite.
+
+The HUD uses the same 8x8 atlas as the Vita and Android ports.
 
 ## Build
 
@@ -20,11 +30,30 @@ Needs a pspdev toolchain (`psp-gcc`, `mksfo`, `pack-pbp`, `psp-g++`).
 
 ## Status
 
-`EBOOT.PBP` draws the dusk sky, the sea (body + additive reflection +
-glitter) and the HUD at 333/333/166 MHz. Verified under PPSSPP (SDL/GLES) by
-rendering a frame and screenshotting it: no GE errors, no rejected block
-transfers, both framebuffers presenting. The 45 s benchmark loop and the
-`ms0:/ElectroBench-psp.txt` result file are wired the same as the other ports.
+`EBOOT.PBP` runs both scenes in the same order as the Vita/Android builds:
+scene 2 for 45 s, its result panel, scene 4 for 45 s, then scene 4's result
+panel and exit. `SELECT` ends the current scene early, `START` quits. The
+combined fps report is appended to `ms0:/ElectroBench-psp.txt`.
+
+Both scenes are initialised before the first timed frame, so scene 4's geometry
+bake (the largest single piece of CPU work in either scene) is never charged to
+a scene's average. Scene 4's static vertex budget is 25,420 of 60,000 vertices
+and 46,890 indices; the build prints the counts at startup.
+
+Scene 4's approximations, all forced by the GE:
+
+* lighting is baked per vertex with the sun the run starts under. `SunDirNow()`
+  moves its azimuth by only 0.004 rad/s and clamps its elevation at 0.15, so
+  over a 45 s run the error is under a 5650 quantisation step.
+* the wet-surface reflection of the road/ground is a constant warm term rather
+  than a per-pixel grazing reflection (there is no view vector to bake with).
+  The far field is the GE's linear fog.
+* the sky panorama is rebuilt every 10 s, not per frame: its integral costs
+  ~20 libm calls per texel. The 2.9-degree sun disc is a separate additive
+  sprite, because a sky grid dense enough to resolve the disc would cost a
+  full-screen tessellation every frame.
+* cables are one-pixel lines: at 480x272 a 3 cm conductor is sub-pixel, and the
+  desktop tube tessellation would cost more vertices than the rest of the scene.
 
 `DATA.PSP` carries a **PRX** (`BUILD_PRX = 1`), not the ELF that earlier builds
 packed. The ELF form is what the console rejected with
