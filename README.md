@@ -24,10 +24,11 @@ ElectroBench-android.apk  the installable APK (same two scenes)
 `lib/asset_path.hxx` gained one `#ifdef ELECTROBENCH_VITA` branch so the scenes
 read assets from `app0:/` (the packed VPK) instead of walking the CWD.
 
-**`tools/` is untracked from git on purpose** — it is build tooling only. It is
-still used locally: `tools/build_deps.sh` (deps), `tools/make_icon.py` (the
-LiveArea icon), `tools/check_shaders.sh` (shader validation) and
-`tools/kaggle-vita3k.ipynb` (run the VPK under Vita3K on a GPU cloud box).
+**`tools/` is untracked from git on purpose** — it holds local-only helpers
+such as `tools/build_deps.sh` and the emulator notebooks. Anything `make`
+needs is tracked in `buildtools/` instead (the icon generator, the shader
+check and the codegen check); the previous split is why a fresh clone could not
+build the VPK or run `make check` without the local tools directory.
 
 ## Requirements
 
@@ -222,6 +223,43 @@ shots=off              # no captures
   are no-ops for GXM): re-initialising GXM mid-run is the riskier path, at the
   cost of scene 2's GL objects staying resident while scene 4 runs.
 
+## Hardware use (both consoles)
+
+The ports are judged on how much of each SoC they use, so the pieces are listed
+here and checked by a script instead of living only in commit messages.
+
+**PSP.** Every per-vertex float op runs on the VFPU. The six-sine sea wave
+field is evaluated four waves per instruction with `vsin.q`/`vcos.q` and
+`vdot.q` reductions (`psp/src/psp_waves.hxx`), on top of the scalar VFPU trig
+LUT. `atan2`, `asin`, `acos` and the two `pow` calls in the per-vertex shader
+were libm calls; they are now minimax polynomials and integer powers
+(`psp/src/psp_fastmath.hxx`), and `buildtools/test_psp_math.cxx` measures their error
+against libm (1.9e-4 rad worst case for atan2, 2.0e-4 for asin/acos). The GE
+handles what it is good at: additive reflection/glitter blending, linear fog,
+and a 16-bit double-buffered EDRAM framebuffer with the depth buffer in the
+same 2 MB. Deliberately not used: the Media Engine (PSPSDK here has no ME
+loader, and the sea is bound by geometry, not by a separable DSP job) and the
+4 MB volatile RAM (both scenes already fit in the 32 MB of main RAM, so using
+it would add a second allocator for no measured gain).
+
+**Vita.** Four cores are used by `src/jobs.hxx` (three workers plus the GL
+thread: scene 2 fills three textures concurrently, scene 4 bakes its geometry),
+the scenes compile with `-mfpu=neon -ftree-vectorize` (`scene2.o` contains
+384 NEON operations, `scene4.o` 1,213), and the clocks are set to
+444/222/222/166 MHz including the GPU crossbar. The clocks the firmware
+effectively granted are logged through `PortTrace`.
+
+`sh buildtools/check_codegen.sh` fails if the PSP object stops containing the VFPU
+quad kernel or the Vita objects stop containing NEON; `make -C psp check-math`
+runs the host math test. Both are part of the verification below.
+
+**Icons.** One four-colour mark (cream field, ink pole whose crossarms spell
+the E, ember half-sun, indigo horizon) is drawn by `buildtools/make_icons.py` for
+all three targets: a 144x80 palettised ICON0 for the PSP, the 128x128
+palettised LiveArea icon for the Vita, and real 48/72/96/144/192 mipmaps for
+Android. The ports share the geometry, so the same logo cannot drift between
+them.
+
 ## Vita3K notes
 
 A full run under Vita3K (`tools/kaggle-vita3k.ipynb` workflow, or
@@ -277,7 +315,7 @@ hash as those file names, which is what makes the mapping possible.
 
 Verified:
 
-* `make check` (`tools/check_shaders.sh`): every shader is valid **GLSL ES
+* `make check` (`buildtools/check_shaders.sh`): every shader is valid **GLSL ES
   1.00** per `glslangValidator`, and no `in`/`out`/`layout`/`texture()`/
   `fwidth()`/`flat` declaration survives for vitaGL's translator.
 * Clean `make`: compiles, links against `libvitaGL.a`, and
@@ -588,7 +626,7 @@ by a third by averaging the bright horizon band into every off-sun reflection.
 The unused `reflDist` local that SceShaccCg used to warn about went with it.
 
 **Checked.** All 13 shaders still validate as GLSL ES 1.00
-(`sh tools/check_shaders.sh`) and all eight programs link on the host's ES 3.2
+(`sh buildtools/check_shaders.sh`) and all eight programs link on the host's ES 3.2
 driver (`make -f android/Makefile host-shaders`), the two regenerated frames are
 in `android/screenshots/`, and both archives were repacked from the fixed tree:
 the APK for all three ABIs and signed, the VPK through `vita-pack-vpk`. Every
@@ -640,7 +678,7 @@ W=6, 138 to 8 at W=10 and 44 to 3 at W=14. The isolated-bright-pixel count the
 fp16 section above uses comes out at 14, the reference's own handful, no pixel
 clips white, and the sea as a whole reads 12% darker because the blurred sun
 disc reflects less energy (mean sea luma 78.8 -> 69.2). All 13 shaders still
-validate as GLSL ES 1.00 (`sh tools/check_shaders.sh`) and all eight programs
+validate as GLSL ES 1.00 (`sh buildtools/check_shaders.sh`) and all eight programs
 still link on host ES 3.2 (`make -f android/Makefile host-shaders`).
 
 ### The VPK ran on one core, and its shader compile was slow
@@ -800,7 +838,7 @@ The two ports share the shader tree (`shaders/`, packed into the APK's assets an
 the VPK's `app0:`) and the two scene translation units (`src/scene2.cxx`,
 `src/scene4.cxx`); only the platform layer differs (`android/jni` + ES 3.0 stand-ins
 against `src/vita_main.cxx`/`src/vita_sdl.cxx` + vitaGL). So every shader change and
-every scene change lands on both, and `tools/check_shaders.sh` is one script run by
+every scene change lands on both, and `buildtools/check_shaders.sh` is one script run by
 both `make check` and `make -f android/Makefile check`.
 
 **Scene 2's environment cube map was the one thing vitaGL could not do.** The scene

@@ -43,7 +43,6 @@ constexpr unsigned int kDispOffset = kPspDispVram;
 constexpr unsigned int kDepthOffset = kPspDepthVram;
 constexpr int kBenchMs = 45000;                   // same 45 s run as the original
 constexpr int kResultsMs = 6000;                  // then hand over to the next scene
-constexpr int kSkyRefreshFrames = 10;
 
 // Display list. GU_DIRECT lets this grow to whatever the frame needs (three
 // sea passes of ~5.3k vertices, the sky grid and the HUD); 2 MB is far above
@@ -100,6 +99,9 @@ void HudGlyph(int c, float x, float y, float scale, unsigned int color) {
   float uv[4];
   FontAtlasGlyphUV(c, uv);
   if (uv[2] == 0.0f && uv[3] == 0.0f) return;
+  // gHudVerts is sized for the longest label this shell prints; clamp instead
+  // of trusting every future string to stay inside it (a glyph is 6 vertices).
+  if (gHudCount + 6 > (int)(sizeof(gHudVerts) / sizeof(gHudVerts[0]))) return;
   const float w = 8.0f * scale, h = 8.0f * scale;
   float vx = x, vy = y;
   HudVertex *v = &gHudVerts[gHudCount];
@@ -123,6 +125,7 @@ void HudText(const char *text, float x, float y, float scale, unsigned int color
 
 void HudDraw() {
   if (gHudCount == 0) return;
+
   sceGuDisable(GU_DEPTH_TEST);
   sceGuEnable(GU_BLEND);
   sceGuBlendFunc(GU_ADD, GU_SRC_ALPHA, GU_ONE_MINUS_SRC_ALPHA, 0, 0);
@@ -153,6 +156,9 @@ void HudDraw() {
                  gHudCount, nullptr, gHudVerts);
   sceGuDisable(GU_TEXTURE_2D);
   sceGuDisable(GU_BLEND);
+  // Restore depth writes: both scenes draw their opaque geometry next frame
+  // and would be invisible against the cleared depth buffer without this.
+  sceGuDepthMask(GU_FALSE);
   sceGuEnable(GU_DEPTH_TEST);
 }
 
@@ -257,6 +263,21 @@ void SetSkyMatrix() {
 
 double NowSeconds() { return (double)sceKernelGetSystemTimeWide() * 1e-6; }
 
+// Every scene sets up the state it needs, but a pass that leaves something on
+// (the sea leaves its additive passes with depth writes off, the HUD leaves
+// texturing on) would leak into the next frame or the next scene. Reset the
+// pieces both scenes share, once per frame, after the clear.
+void ResetDrawState() {
+  sceGuDisable(GU_FOG);
+  sceGuDisable(GU_BLEND);
+  sceGuDisable(GU_TEXTURE_2D);
+  sceGuDisable(GU_ALPHA_TEST);
+  sceGuDisable(GU_CULL_FACE);
+  sceGuEnable(GU_DEPTH_TEST);
+  sceGuDepthMask(GU_FALSE);
+  sceGuDepthFunc(GU_GEQUAL);
+}
+
 const char *SceneName(int scene) {
   return scene == 2 ? "scene 2 (dusk ocean)" : "scene 4 (power lines)";
 }
@@ -276,8 +297,9 @@ SceneStat RunScene(int scene) {
   const double start = NowSeconds();
   double lastHud = start;
   double fps = 0.0;
-  int frames = 0, hudFrames = 0, frame = 0;
+  int frames = 0, hudFrames = 0;
   bool results = false;
+  bool sceneDone = false;
   double resultsAt = 0.0;
 
   SceCtrlData pad;
@@ -303,9 +325,8 @@ SceneStat RunScene(int scene) {
     }
 
     if (scene == 2) {
-      const int refresh = (frame % kSkyRefreshFrames) == 0;
       Scene2UpdateCamera(t);
-      Scene2Build(t, refresh);
+      Scene2Build(t);
     } else {
       Scene4Update(t);
     }
@@ -314,6 +335,7 @@ SceneStat RunScene(int scene) {
     sceGuClearColor(0xFF1A0D10); // warm dusk black, ABGR
     sceGuClearDepth(0);
     sceGuClear(GU_COLOR_BUFFER_BIT | GU_DEPTH_BUFFER_BIT);
+    ResetDrawState();
 
     float eye[3], yaw, pitch;
     if (scene == 2) {
@@ -345,7 +367,7 @@ SceneStat RunScene(int scene) {
       HudText(line, 60.0f, 132.0f, 2.0f, White());
       snprintf(line, sizeof(line), "FRAMES: %d", stat.frames);
       HudText(line, 60.0f, 152.0f, 1.0f, White());
-      if (now - resultsAt > (double)kResultsMs * 0.001) break;
+      if (now - resultsAt > (double)kResultsMs * 0.001) sceneDone = true;
     }
     HudDraw();
 
@@ -356,7 +378,6 @@ SceneStat RunScene(int scene) {
 
     frames++;
     hudFrames++;
-    frame++;
     if (now - lastHud >= 1.0) {
       fps = (double)hudFrames / (now - lastHud);
       hudFrames = 0;
@@ -370,6 +391,12 @@ SceneStat RunScene(int scene) {
       stat.seconds = t;
       stat.fps = t > 0.0 ? (double)frames / t : 0.0;
     }
+
+    // Leave the run only once the frame is complete. A break between
+    // sceGuStart and sceGuFinish leaves the display list open, and the next
+    // scene's list is then enqueued behind a stream the GE never sees the end
+    // of: the console hangs on the results panel instead of starting scene 4.
+    if (sceneDone) break;
   }
 
   // A quit (START) before the run finished leaves the stat empty; main() then
@@ -380,6 +407,8 @@ SceneStat RunScene(int scene) {
 } // namespace
 
 int main(int argc, char *argv[]) {
+  (void)argc;
+  (void)argv;
   scePowerSetClockFrequency(333, 333, 166);
   sceCtrlSetSamplingCycle(0);
   sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);

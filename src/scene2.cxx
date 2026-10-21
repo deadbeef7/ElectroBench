@@ -195,12 +195,17 @@ static GLuint CompileShader(GLenum type, const char *src, const char *name) {
   return sh;
 }
 
+#ifdef ELECTROBENCH_VITA
+// Only the Vita fallback path needs to ask whether a program linked (it swaps in
+// the minimal shader when the device compiler rejects one). On the other
+// targets an unused static function is a -Wunused-function warning.
 static bool ProgramIsLinked(const Program &p) {
   if (!p.handle) return false;
   GLint ok = GL_FALSE;
   glGetProgramiv(p.handle, GL_LINK_STATUS, &ok);
   return ok != GL_FALSE;
 }
+#endif
 
 static Program LinkProgram(const char *vsPath, const char *fsPath) {
   Program p;

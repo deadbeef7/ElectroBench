@@ -857,7 +857,7 @@ float gEye[3] = {0.0f, 0.0f, 4.0f};
 float gYaw = 0.0f, gPitch = 0.0f;
 float gSun[3] = {-0.30f, 0.20f, 0.93f};
 float gSceneTime = 0.0f;
-float gSkyBuiltAt = -1000.0f;
+int gSkyRow = 0;   // next panorama row to rebuild
 
 // --------------------------------------------------------------- sky panorama
 constexpr int kSkyW = 128, kSkyH = 64;
@@ -940,15 +940,18 @@ inline float EncodeSky(float x) {
   return std::pow(enc, 1.0f / 2.2f);
 }
 
-// The panorama is rebuilt every few seconds, not every frame: the integral is
-// ~20 libm calls per texel and the sun moves 0.004 rad/s, so at 128x64 every
-// 10 s the visible change is under a pixel while the per-frame cost stays zero.
-void BuildSkyTexture(float timeSec) {
+// Only rows [y0, y1) are baked, so the panorama can be refreshed a row at a
+// time. The integral is ~20 libm calls per texel and the sun moves 0.004 rad/s;
+// baking all 8192 texels in one frame stalled the picture for the better part
+// of a second every ten seconds, which read as the scene freezing and picking
+// up again. One row per frame spreads that over ~3 s of drift that is under a
+// texel wide.
+void BuildSkyRows(float timeSec, int y0, int y1) {
   const float *sun = gSun;
   const float driftx = timeSec * 0.0060f;
   const float driftz = -timeSec * 0.0023f;
 
-  for (int y = 0; y < kSkyH; y++) {
+  for (int y = y0; y < y1; y++) {
     float elev = (0.5f - ((float)y + 0.5f) / (float)kSkyH) * PI;
     float ce = std::cos(elev), se = std::sin(elev);
     for (int x = 0; x < kSkyW; x++) {
@@ -1026,8 +1029,13 @@ void BuildSkyTexture(float timeSec) {
       gSkyTex[y * kSkyW + x] = Pack5551(EncodeSky(r), EncodeSky(g), EncodeSky(b));
     }
   }
-  sceKernelDcacheWritebackRange(gSkyTex, sizeof(gSkyTex));
+  // The GE samples the panorama straight out of RAM: publish only the band
+  // that changed.
+  sceKernelDcacheWritebackRange(&gSkyTex[y0 * kSkyW],
+                                (y1 - y0) * kSkyW * (int)sizeof(unsigned short));
 }
+
+void BuildSkyTexture(float timeSec) { BuildSkyRows(timeSec, 0, kSkyH); }
 
 void BuildSunTexture() {
   for (int y = 0; y < kSunSize; y++) {
@@ -1142,7 +1150,7 @@ void Scene4Init() {
   BuildSkyIndices();
   BuildSunTexture();
   BuildSkyTexture(0.0f);
-  gSkyBuiltAt = 0.0f;
+  gSkyRow = 0;
 
   // Pole layout (matches src/scene4.cxx's BuildSceneGeometry).
   for (int i = 0; i < 15; i++) {
@@ -1266,11 +1274,9 @@ void Scene4Camera(float outEye[3], float *yaw, float *pitch) {
 float Scene4FovY() { return kFovY; }
 
 void Scene4DrawSky() {
-  // Rebuild the panorama at most every 10 s; see BuildSkyTexture().
-  if (gSceneTime - gSkyBuiltAt > 10.0f) {
-    BuildSkyTexture(gSceneTime);
-    gSkyBuiltAt = gSceneTime;
-  }
+  // One row of the panorama per frame; see BuildSkyRows().
+  BuildSkyRows(gSceneTime, gSkyRow, gSkyRow + 1);
+  gSkyRow = (gSkyRow + 1) % kSkyH;
   BuildSkyGrid();
   sceKernelDcacheWritebackRange(gSkyGrid, sizeof(gSkyGrid));
   sceKernelDcacheWritebackRange(gSunQuad, sizeof(gSunQuad));

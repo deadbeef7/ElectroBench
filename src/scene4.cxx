@@ -169,7 +169,6 @@ static Program LinkProgram(const char *vsPath, const char *fsPath) {
 static const char *const gName = "ElectroBench - Scene 4 (Lain)";
 static const int WIDTH = 1280, HEIGHT = 720;
 static const float kGroundY = 0.0f;
-static const Vec3 kSunDir{-0.30f, 0.20f, 0.93f};
 
 static Vec3 SunDirNow(double t) {
   float az = -0.30f - 0.004f * (float)t;               
@@ -258,8 +257,6 @@ static const float kMatKerb = 15.0f;
 static const float kMatConcrete = 16.0f;
 static const Vec3 kConcreteGrey{0.212f, 0.216f, 0.218f};
 
-static const Vec3 kWoodDark{0.165f, 0.115f, 0.085f};   // creosote (treeline)
-static const Vec3 kWoodOld{0.230f, 0.180f, 0.140f};   // weathered timber
 static const Vec3 kCeramic{0.780f, 0.760f, 0.700f};   // insulator glaze
 static const Vec3 kCable{0.055f, 0.050f, 0.055f};    // rubber wire
 static const Vec3 kCableOld{0.085f, 0.075f, 0.070f};
@@ -345,7 +342,6 @@ static void AddTelecomBundle(const Vec3 &a, const Vec3 &b, int seed,
   int drops = 2 + (seed % 2);                    
   for (int i = 0; i < drops; i++) {
     float t = 0.18f + 0.62f * (float)((seed * 13 + i * 29) % 100) / 100.0f;
-    float drop = 0.35f + 0.55f * (float)((seed * 17 + i * 41) % 100) / 100.0f;
     Vec3 peel = WirePoint(a, b, sag, t);
     Vec3 p{peel.x, peel.y - 0.035f, peel.z};
     AddCylinder(Vec3Add(peel, Vec3{0, -0.035f, 0}), Vec3Add(peel, Vec3{0, 0.035f, 0}),
@@ -382,11 +378,6 @@ static void AddWire(const Vec3 &a, const Vec3 &b, float sag, float radius,
   Vec3 delta = Vec3Sub(b, a);
   float len = Vec3Len(delta);
   if (len < 1e-3f) return;
-
-  Vec3 dir = Vec3Scale(delta, 1.0f / len);
-  Vec3 side = Vec3PerpTo(dir);
-  Vec3 up = Vec3Norm(Vec3Cross(side, dir));
-  float halfSpan = len * 0.5f;
 
   std::vector<Vec3> centres(samples + 1);
   for (int i = 0; i <= samples; i++) {

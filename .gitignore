@@ -8,13 +8,18 @@ build-*/
 *.o
 *.so
 
+# PSP intermediate link products (EBOOT.PBP is the tracked artifact)
+/psp/ElectroBench.elf
+/psp/ElectroBench.prx
+
 # Local test artifacts
 *.ppm
 scratch_*.py
 __pycache__/
 
-# Audit/dev scripts (untracked per request)
-scripts/
+# Audit/dev scripts (untracked per request). Anchored to the repo root: an
+# unanchored `tools/` also hid psp/tools/, whose icon script is tracked.
+/scripts/
 
 # Vita build tooling stays local-only on this branch
-tools/
+/tools/

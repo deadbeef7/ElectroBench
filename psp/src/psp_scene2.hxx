@@ -23,10 +23,10 @@ void Scene2Init();
 // Advances the auto camera to time t (seconds since scene start).
 void Scene2UpdateCamera(double t);
 
-// CPU work for one frame: clouds, sky texture (when skyRefresh), the ray-cast
+// CPU work for one frame: clouds, one band of the sky panorama, the ray-cast
 // sky grid and every sea vertex's shading. Ends with a data-cache writeback
 // because the GE DMAs these arrays out of RAM.
-void Scene2Build(double timeSeconds, int skyRefresh);
+void Scene2Build(double timeSeconds);
 
 // Emits the GL command list for the sky backdrop (depth test off).
 void Scene2DrawSky();

@@ -17,6 +17,9 @@
 // maroon horizon, the indigo water body, the nine-cloud deck from scene2.cxx.
 #include "psp_scene2.hxx"
 
+#include "psp_fastmath.hxx"
+#include "psp_waves.hxx"
+
 #include <pspgu.h>
 #include <pspgum.h>
 #include <pspkernel.h>
@@ -38,6 +41,9 @@ constexpr int kMaxIndices = kSegments * kRings * 6;
 constexpr int kSkyW = 256, kSkyH = 128;
 constexpr int kSparkW = 128, kSparkH = 128;
 constexpr int kChaosW = 128;
+// Rows of the sky panorama rebuilt per frame. kSkyH / kSkyRowsPerFrame frames
+// make one full pass (32 at the default), so no single frame carries the bake.
+constexpr int kSkyRowsPerFrame = 4;
 constexpr int kSkyGridX = 14, kSkyGridY = 9;
 constexpr int kSkyGridVerts = (kSkyGridX + 1) * (kSkyGridY + 1);
 
@@ -78,6 +84,10 @@ inline float WrapAngle(float x) {
 inline float FastSin(float x) {
   x = WrapAngle(x) * (4096.0f / TWO_PI);
   int i = (int)x;
+  // WrapAngle can round a tiny negative input to exactly TWO_PI, which makes
+  // i == 4096 and gSin[i + 1] read past the table. Masking keeps the lookup in
+  // range (the value at 4096 is the same as at 0 anyway).
+  i &= 4095;
   float f = x - (float)i;
   return gSin[i] + (gSin[i + 1] - gSin[i]) * f;
 }
@@ -89,6 +99,9 @@ inline float FastExpNeg(float x) { // x >= 0 -> exp(-x)
   float t = x * 64.0f;
   int i = (int)t;
   float f = t - (float)i;
+  // Same one-past-the-end case as FastSin: x just under 8 can round t up to
+  // 512, and gExp[513] does not exist.
+  if (i > 511) { i = 511; f = 1.0f; }
   return gExp[i] + (gExp[i + 1] - gExp[i]) * f;
 }
 
@@ -113,37 +126,11 @@ inline float Chaos(float x, float z) {
 }
 
 // --------------------------------------------------------------- wave field
-// Same six sines as waveHeight() in shaders/ps14/sea_frag.glsl.
-struct Wave { float dx, dz, k, w, amp; };
-const Wave kWaves[6] = {
-    {0.98f, 0.20f, 0.170f, 1.30f, 1.55f},
-    {-0.64f, 0.77f, 0.240f, 1.60f, 1.00f},
-    {0.36f, -0.93f, 0.380f, 2.10f, 0.55f},
-    {-0.91f, -0.42f, 0.540f, 2.70f, 0.34f},
-    {0.59f, 0.81f, 0.860f, 3.40f, 0.20f},
-    {-0.20f, 0.98f, 1.450f, 4.40f, 0.11f},
-};
-
-inline float WaveHeight(float x, float z, float t) {
-  float h = 0.0f;
-  for (int i = 0; i < 6; i++) {
-    const Wave &w = kWaves[i];
-    h += FastSin((x * w.dx + z * w.dz) * w.k + t * w.w) * w.amp;
-  }
-  return h;
-}
-
-inline void WaveGradient(float x, float z, float t, float *gx, float *gz) {
-  float sx = 0.0f, sz = 0.0f;
-  for (int i = 0; i < 6; i++) {
-    const Wave &w = kWaves[i];
-    float c = FastCos((x * w.dx + z * w.dz) * w.k + t * w.w) * w.amp * w.k;
-    sx += w.dx * c;
-    sz += w.dz * c;
-  }
-  *gx = -sx; // height gradient -> normal slope (matches the GLSL's -dh/dx)
-  *gz = -sz;
-}
+// The six waves themselves live in psp_waves.hxx, which evaluates them four at
+// a time on the VFPU (vsin.q/vcos.q/vdot.q) and has a portable twin that the
+// host test checks against the direct sum. One call returns the height and
+// both gradient components; the old two-call version evaluated every sine
+// twice.
 
 // Micro-chop the fragment shader adds near the camera (detailNormals()).
 inline void DetailGradient(float x, float z, float t, float dist, float *gx, float *gz) {
@@ -230,10 +217,17 @@ inline unsigned short Pack5551(float r, float g, float b) {
 // The sky palette: the same dusk the sky_frag tonemaps to - indigo overhead,
 // a maroon band, gold sun with a wide glow, warm horizon bars, then the nine
 // drifting clouds with warm undersides.
-void BuildSkyTexture(float t) {
+//
+// Only rows [y0, y1) are rebuilt, so the panorama can be refreshed in bands a
+// few rows at a time. Every texel costs an acos, a handful of libm pow()s and
+// the nine-cloud loop; baking all 32,768 of them in one frame froze the scene
+// for seconds at a time, which looked like the sea stopping and starting
+// again. The cloud drift is 0.0025 rad/s, so spreading one pass over ~half a
+// second is invisible.
+void BuildSkyRows(float t, int y0, int y1) {
   (void)t;
   const float sd[3] = {kSunDir[0], kSunDir[1], kSunDir[2]};
-  for (int y = 0; y < kSkyH; y++) {
+  for (int y = y0; y < y1; y++) {
     float elev = (0.5f - (float)y / (float)(kSkyH - 1)) * PI;
     float ce = FastCos(elev), se = FastSin(elev);
     for (int x = 0; x < kSkyW; x++) {
@@ -252,7 +246,7 @@ void BuildSkyTexture(float t) {
 
       // sun: angular distance, glow + disc
       float cosA = dx * sd[0] + dy * sd[1] + dz * sd[2];
-      float ang = std::acos(Clamp(cosA, -1.0f, 1.0f));
+      float ang = pspfast::Acos(Clamp(cosA, -1.0f, 1.0f));
       float glow = FastExpNeg(ang * 7.5f);
       float halo = FastExpNeg(ang * 2.2f);
       r += 1.55f * glow + 0.55f * halo;
@@ -299,8 +293,13 @@ void BuildSkyTexture(float t) {
       gSkyTex[y * kSkyW + x] = Pack5551(r, g, b);
     }
   }
-
+  // The GE samples the panorama straight out of RAM: publish just the band
+  // that changed rather than write back the whole cache mid-frame.
+  sceKernelDcacheWritebackRange(&gSkyTex[y0 * kSkyW],
+                                (y1 - y0) * kSkyW * (int)sizeof(unsigned short));
 }
+
+void BuildSkyTexture(float t) { BuildSkyRows(t, 0, kSkyH); }
 
 void BuildSparkTexture() {
   unsigned int s = 0x1234567u;
@@ -350,6 +349,7 @@ inline unsigned int Color8888(float r, float g, float b, float a) {
 
 // ------------------------------------------------------------------- state
 float gRingRadius[kRings + 1];
+int gSkyRow = 0;   // next sky panorama row to rebuild
 float gCamEye[3];
 float gCamYaw = 0.0f, gCamPitch = 0.0f;
 const float gFovY = 55.0f;
@@ -401,8 +401,8 @@ void BuildSkyGrid() {
       float dz = fwd[2] + right[2] * nx * tanHalf * aspect + up[2] * ny * tanHalf;
       float il = 1.0f / std::sqrt(dx * dx + dy * dy + dz * dz);
       dx *= il; dy *= il; dz *= il;
-      float azim = std::atan2(dz, dx);
-      float elev = std::asin(Clamp(dy, -1.0f, 1.0f));
+      float azim = pspfast::Atan2(dz, dx);
+      float elev = pspfast::Asin(Clamp(dy, -1.0f, 1.0f));
       gSky[n].u = azim / TWO_PI;
       gSky[n].v = 0.5f - elev / PI;
       gSky[n].x = nx;
@@ -416,6 +416,7 @@ void BuildSkyGrid() {
 
 // --------------------------------------------------------------------- API
 void Scene2Init() {
+  pspwaves::Init();
   BuildMathTables();
   BuildGrid();
   BuildSparkTexture();
@@ -436,10 +437,17 @@ void Scene2UpdateCamera(double t) {
   gCamPitch = 0.030f + 0.022f * FastSin(ft * 0.034f);
 }
 
-void Scene2Build(double timeSeconds, int skyRefresh) {
+void Scene2Build(double timeSeconds) {
   const float t = (float)timeSeconds;
   UpdateClouds(t);
-  if (skyRefresh) BuildSkyTexture(t);
+  // One band of the panorama per frame; see BuildSkyRows().
+  {
+    const int y0 = gSkyRow;
+    int y1 = y0 + kSkyRowsPerFrame;
+    if (y1 > kSkyH) y1 = kSkyH;
+    BuildSkyRows(t, y0, y1);
+    gSkyRow = (y1 >= kSkyH) ? 0 : y1;
+  }
   BuildSkyGrid();
 
   const float eye[3] = {gCamEye[0], gCamEye[1], gCamEye[2]};
@@ -454,11 +462,11 @@ void Scene2Build(double timeSeconds, int skyRefresh) {
       float ang = TWO_PI * (float)s / (float)kSegments;
       float sx = eye[0] + FastCos(ang) * rr;
       float sz = eye[2] + FastSin(ang) * rr;
-      float h = WaveHeight(sx, sz, t);
+      const pspwaves::Field wf = pspwaves::FieldAt(sx, sz, t);
+      float h = wf.height;
       float wy = h;
 
-      float gx, gz;
-      WaveGradient(sx, sz, t, &gx, &gz);
+      float gx = wf.gx, gz = wf.gz;
       float dxz = std::sqrt((sx - eye[0]) * (sx - eye[0]) + (sz - eye[2]) * (sz - eye[2]));
       DetailGradient(sx, sz, t, dxz, &gx, &gz);
       float nl = 1.0f / std::sqrt(gx * gx + 1.0f + gz * gz);
@@ -521,7 +529,7 @@ void Scene2Build(double timeSeconds, int skyRefresh) {
       bodyG += 0.18f * sunAlign * warmGate * shadow * crest * 0.55f;
       bodyB += 0.14f * sunAlign * warmGate * shadow * crest * 0.55f;
 
-      float fresnel = 0.022f + 0.978f * std::pow(1.0f - ndv, 5.0f);
+      float fresnel = 0.022f + 0.978f * pspfast::Pow5(1.0f - ndv);
       fresnel = Clamp(fresnel * 1.25f + 0.045f, 0.0f, 0.92f);
       float horizonMix = SmoothStep(1500.0f, 1900.0f, dxz);
       float haze = 1.0f - FastExpNeg(dxz * 0.00075f);
@@ -531,11 +539,11 @@ void Scene2Build(double timeSeconds, int skyRefresh) {
       float reflW = 1.0f - bodyW;
 
       float horizonW = Saturate(h1 + h2);
-      float azim = std::atan2(mrz, mrx);
-      float elev = std::asin(Clamp(mry, -1.0f, 1.0f));
+      float azim = pspfast::Atan2(mrz, mrx);
+      float elev = pspfast::Asin(Clamp(mry, -1.0f, 1.0f));
       float uR = azim / TWO_PI;
       float vR = Mix(0.5f - elev / PI, 0.5f, horizonW);
-      float uH = std::atan2(dirXZz, dirXZx) / TWO_PI;
+      float uH = pspfast::Atan2(dirXZz, dirXZx) / TWO_PI;
       uR = Mix(uR, uH, horizonW);
 
       // pass 1 has no texture, so its vertices are colour-first (the GE reads
@@ -550,7 +558,7 @@ void Scene2Build(double timeSeconds, int skyRefresh) {
       rf.x = sx; rf.y = wy; rf.z = sz;
 
       // glitter: smooth path gate per vertex x sparkle texture per pixel
-      float pathGate = std::pow(sunAlign, 10.0f) * 0.96f + 0.04f;
+      float pathGate = pspfast::Pow10(sunAlign) * 0.96f + 0.04f;
       float nearField = 1.0f - SmoothStep(260.0f, 950.0f, dxz);
       float gate = Mix(1.0f, 0.55f + 0.90f * chaos, nearField);
       float glintGain = (0.55f + 0.22f * pathGate) * (0.25f + (sdy > 0.0f ? sdy : 0.0f) * 1.2f);

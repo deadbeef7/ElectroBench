@@ -66,7 +66,7 @@ OBJS := $(BUILD)/vita_main.o $(BUILD)/vita_sdl.o $(BUILD)/jobs.o \
 # holding the previous revision of the shaders.
 SHADERS := $(wildcard shaders/*/*.glsl)
 
-.PHONY: all clean check vpk
+.PHONY: all clean check vpk check-codegen
 all: $(VPK)
 
 # ------------------------------------------------------------------ compile
@@ -111,13 +111,21 @@ $(VPK): $(EBOOT) $(SFO) $(BUILD)/icon0.png $(SHADERS)
 		$@
 	@echo "VPK: $@ ($$(stat -c%s $@ ) bytes)"
 
-$(BUILD)/icon0.png: tools/make_icon.py
+# Shared drawing (buildtools/make_icons.py) so the Vita icon cannot drift from
+# the PSP and Android ones; make_icon_vita.py is only the 128x128 palettised
+# entry point. buildtools/ is tracked precisely because `make` needs it.
+$(BUILD)/icon0.png: buildtools/make_icon_vita.py buildtools/make_icons.py
 	@mkdir -p $(BUILD)
-	python3 tools/make_icon.py $@
+	python3 buildtools/make_icon_vita.py $@
 
 # -------------------------------------------------------------------- checks
 check:
-	sh tools/check_shaders.sh
+	sh buildtools/check_shaders.sh
+
+# Asserts the PSP VFPU kernel and this build's NEON codegen are present in the
+# objects (see buildtools/check_codegen.sh). Needs the PSP port built too.
+check-codegen:
+	sh buildtools/check_codegen.sh
 
 clean:
 	rm -rf $(BUILD) $(VPK)

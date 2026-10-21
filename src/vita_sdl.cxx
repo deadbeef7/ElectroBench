@@ -150,6 +150,16 @@ int SDL_Init(Uint32 flags) {
   scePowerSetArmClockFrequency(444);
   scePowerSetBusClockFrequency(222);
   scePowerSetGpuClockFrequency(222);
+  // The fourth clock domain: the GPU crossbar. The usual 444/222/222/166
+  // homebrew profile raises it with the other three; leaving it at the default
+  // throttles the GPU's memory path even when the core itself is at 222 MHz.
+  scePowerSetGpuXbarClockFrequency(166);
+  // Log what the firmware actually accepted, not what was requested: a
+  // console on battery/safe mode can refuse a clock, and a bug report that
+  // says "clocks: 444/222/222/166" is worth more than one that says "asked".
+  PortTrace("clocks: arm=%d bus=%d gpu=%d xbar=%d MHz",
+            scePowerGetArmClockFrequency(), scePowerGetBusClockFrequency(),
+            scePowerGetGpuClockFrequency(), scePowerGetGpuXbarClockFrequency());
   gInitialised = true;
   return 0;
 }

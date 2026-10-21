@@ -35,7 +35,13 @@ endif
 ifeq ($(strip $(SDK)),)
 $(warning ANDROID_SDK_ROOT is not set: run 'sh android/fetch_toolchain.sh', or pass SDK=/path/to/sdk)
 endif
-BUILD_TOOLS ?= $(SDK)/build-tools/34.0.0
+# The pinned layout fetch_toolchain.sh creates is build-tools/34.0.0, but an
+# SDK installed by Android Studio keeps the platform codename (android-14 for
+# build-tools 34). Accept either: prefer the pinned name, otherwise use the
+# last directory the SDK has, which is the newest one.
+BUILD_TOOLS ?= $(shell if [ -d "$(SDK)/build-tools/34.0.0" ]; then \
+	  echo "$(SDK)/build-tools/34.0.0"; \
+	else ls -d "$(SDK)"/build-tools/* 2>/dev/null | tail -1; fi)
 PLATFORM_JAR ?= $(SDK)/platforms/android-34/android.jar
 
 # The NDK ships one prebuilt per host; the name is what decides which one.
@@ -122,7 +128,19 @@ SOURCES := $(PORT_CPP) $(PORT_HEADERS)
 # timestamp alone, so a directory prerequisite would repack the previous
 # revision of the shaders.
 SHADERS := $(wildcard $(ROOT)/shaders/*/*.glsl)
-RES := $(BUILD)/res/mipmap/ic_launcher.png
+# One launcher bitmap per density, generated from the shared four-colour mark
+# in buildtools/make_icons.py. The launcher does not downsample a single 256x256
+# file well (and never sharpens it), so mdpi gets a real 48px drawing.
+ICON_DENSITIES := mdpi hdpi xhdpi xxhdpi xxxhdpi
+ICON_SIZE_mdpi := 48
+ICON_SIZE_hdpi := 72
+ICON_SIZE_xhdpi := 96
+ICON_SIZE_xxhdpi := 144
+ICON_SIZE_xxxhdpi := 192
+RES := $(foreach d,$(ICON_DENSITIES),$(BUILD)/res/mipmap-$(d)/ic_launcher.png)
+# The pre-density path is left over in build trees made before this rule; it
+# would otherwise be compiled alongside the new ones.
+STALE_RES := $(BUILD)/res/mipmap
 SO_FILES := $(foreach abi,$(ABIS),$(BUILD)/$(abi)/libmain.so)
 
 .PHONY: all clean check verify doctor apk host-render host-png host-shaders
@@ -191,20 +209,28 @@ endef
 $(foreach abi,$(ABIS),$(eval $(call ABI_RULE,$(abi))))
 
 # ------------------------------------------------------------------------ icon
-$(RES): $(ROOT)/android/make_android_icon.py
+$(BUILD)/res/mipmap-%/ic_launcher.png: $(ROOT)/android/make_android_icon.py $(ROOT)/buildtools/make_icons.py
 	@mkdir -p $(dir $@)
-	python3 $< $@
+	@rm -rf $(STALE_RES)
+	python3 $< $@ --size $(ICON_SIZE_$*)
 
 # ----------------------------------------------------------------------- debug
 # A throwaway signing identity. Anything installed from this APK must be
 # uninstalled before an APK signed with a different key can replace it, and a
 # rebuilt APK gets a new key unless this file is kept (it lives in
 # build-android/, which is not committed).
+# Keeping the identity across builds is the point (an APK signed with a new key
+# cannot replace the installed one), so `make -B` must not re-run keytool into
+# "alias <androiddebugkey> already exists": reuse the existing keystore.
 $(KEYSTORE):
 	@mkdir -p $(BUILD)
-	$(KEYTOOL) -genkeypair -keystore $@ -storepass android -keypass android \
-	    -alias androiddebugkey -dname "CN=ElectroBench Debug,O=ElectroBench,C=US" \
-	    -keyalg RSA -keysize 2048 -validity 10000
+	@if [ -f $@ ]; then \
+	    echo "reusing signing identity $@"; \
+	else \
+	    $(KEYTOOL) -genkeypair -keystore $@ -storepass android -keypass android \
+	        -alias androiddebugkey -dname "CN=ElectroBench Debug,O=ElectroBench,C=US" \
+	        -keyalg RSA -keysize 2048 -validity 10000; \
+	fi
 
 # -------------------------------------------------------------------------- APK
 $(APK): $(SO_FILES) $(RES) $(SHADERS) $(ROOT)/android/AndroidManifest.xml $(KEYSTORE)
@@ -235,9 +261,10 @@ $(APK): $(SO_FILES) $(RES) $(SHADERS) $(ROOT)/android/AndroidManifest.xml $(KEYS
 # ----------------------------------------------------------------------- checks
 # Same shader validation the Vita port runs: every shader must be valid GLSL ES
 # 1.00, which is also what an ES 3.0 context compiles them as (no #version line
-# means 1.00). Kept in the shared tools/ script so the two ports cannot drift.
+# means 1.00). Kept in the shared buildtools/ script so the two ports cannot
+# drift.
 check:
-	sh $(ROOT)/tools/check_shaders.sh
+	sh $(ROOT)/buildtools/check_shaders.sh
 
 verify: $(APK)
 	@echo "--- manifest (binary manifest read back by aapt2)"
