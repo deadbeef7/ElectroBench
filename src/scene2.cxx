@@ -42,14 +42,14 @@ static const float kSeaSize = 4096.0f;   // world size of the ocean patch: reach
 // differently: vitaGL raises GL_INVALID_ENUM for any glFramebufferTexture2D
 // textarget other than GL_TEXTURE_2D, so the Vita cannot render into a cube face
 // at all and instead renders each face into a 2D target and copies it into the
-// cube (see CreateEnvResources/DrawSkyToEnvMap). That copy goes through guest
-// memory, so six 768x768 faces would be ~28 MB of readback+upload per refresh:
-// there the faces are 256 and the probe refreshes every kEnvMapRefreshFrames
-// frames. Nothing else in the scene depends on the face size.
-#ifdef ELECTROBENCH_VITA
-static const int kEnvMapSize = 256;
-static const int kEnvMapRefreshFrames = 4;
-#else
+// The environment probe is desktop/Android only now. The Vita's sea evaluates
+// the sky gradient analytically instead (sea_frag.glsl's uEnvCube), so it keeps
+// a 1x1 cube purely to leave sampler unit 1 bound to a complete texture. That
+// removes the port's whole readback path - six glReadPixels round trips plus a
+// free/reallocate of the cube per refresh - which is what pinned scene 2 to
+// ~1 FPS, and it removes the base-level cube sampling that mirrored the sun and
+// the clouds onto the water as flat, hard-edged sheets.
+#ifndef ELECTROBENCH_VITA
 static const int kEnvMapSize = 768;      // cubemap face resolution — higher fidelity reflections
 #endif
 static const int kNoiseSize = 256;       // fBm noise texture size
@@ -60,6 +60,14 @@ static const float kCloudAzim[MAX_CLOUDS] = {0.18f, 0.88f, 1.75f, 2.65f, 3.75f, 
 static const float kCloudElev[MAX_CLOUDS] = {0.190f, 0.300f, 0.250f, 0.380f, 0.220f, 0.330f, 0.160f, 0.420f, 0.465f};
 static const float kCloudRad[MAX_CLOUDS]  = {0.048f, 0.037f, 0.030f, 0.043f, 0.027f, 0.036f, 0.050f, 0.026f, 0.030f};
 static const float kCloudStretch[MAX_CLOUDS] = {3.3f, 2.4f, 2.1f, 2.8f, 2.2f, 2.3f, 3.6f, 4.6f, 4.2f};
+
+
+// The sky's palette, used by the dome below and by the sea's analytic
+// reflection (uSky* uniforms): one set of numbers, so the water cannot mirror a
+// different sky than the one drawn above it.
+static const float kSkyZenith[3]  = {0.012f, 0.016f, 0.048f}; // deep blue-black overhead
+static const float kSkyMid[3]     = {0.028f, 0.022f, 0.048f}; // dark slatemauve mid sky
+static const float kSkyHorizon[3] = {0.115f, 0.055f, 0.062f}; // warm maroon horizon band
 static const int kFoamSize = 256;        // foam texture size
 
 
@@ -516,10 +524,6 @@ static size_t gNextShot = 0;
 static int gWindowWidthOverride = 0;          // --width, 0 = full resolution
 static bool gDumpEnv = false;                 // --dump-env: write cubemap faces to /tmp once
 static bool gDumpEnvDone = false;
-#ifdef ELECTROBENCH_VITA
-static GLuint gEnvFaceTex = 0;                // the 2D target a cube face is drawn into
-static int gEnvMapFramesSinceUpdate = kEnvMapRefreshFrames;  // populate on the first frame
-#endif
 
 static GLuint gHudVao = 0, gHudVbo = 0;
 static int gHudQuadCount = 0;
@@ -562,58 +566,47 @@ static Vec3 OrbitCamPos() {
 }
 
 // --------------------------------------------------------------- env cubemap
+// On the Vita the sea does not sample the cubemap at all (sea_frag.glsl's
+// uEnvCube = 0), so we only need a 1x1 placeholder face per side to keep
+// sampler unit 1 bound to a complete texture. On desktop/Android the cube is a
+// real 768² RGBA16F mipmapped FBO attachment driven by DrawSkyToEnvMap below.
 static void CreateEnvResources() {
+#ifdef ELECTROBENCH_VITA
+  // 1x1 RGBA black placeholder, one per cube face — enough to keep sampler 1
+  // bound so DrawSea's glBindTexture(GL_TEXTURE_CUBE_MAP, gEnvCube) is valid.
   glGenTextures(1, &gEnvCube);
   glBindTexture(GL_TEXTURE_CUBE_MAP, gEnvCube);
-  for (int i = 0; i < 6; i++) {
-#ifdef ELECTROBENCH_VITA
-    // vitaGL's cube path accepts GL_UNSIGNED_BYTE data for a GL_RGBA face and
-    // answers the desktop GL_RGBA16F/GL_FLOAT allocation below with
-    // GL_INVALID_ENUM (_glTexImage2D_CubeIMPL's format table in source/textures.c),
-    // so the port allocates a face the way that table allows.
-    glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, GL_RGBA, kEnvMapSize, kEnvMapSize, 0,
-                 GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+  const unsigned char black[4] = {0, 0, 0, 255};
+  for (int i = 0; i < 6; i++)
+    glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, GL_RGBA, 1, 1, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, black);
+  glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 #else
+  glGenTextures(1, &gEnvCube);
+  glBindTexture(GL_TEXTURE_CUBE_MAP, gEnvCube);
+  for (int i = 0; i < 6; i++)
     glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, GL_RGBA16F, kEnvMapSize, kEnvMapSize, 0,
                  GL_RGBA, GL_FLOAT, nullptr);
-#endif
-  }
-#ifdef ELECTROBENCH_VITA
-  // vitaGL has no cube mip chain (source/textures.c: "FIXME: Add proper mipmaps
-  // support for cubemaps"), so GL_LINEAR_MIPMAP_LINEAR would leave the sampler
-  // incomplete. Neither textureCube in sea_frag.glsl takes a LOD bias, so plain
-  // GL_LINEAR is the complete filter for what the reflection needs.
-  glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-#else
   glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-#endif
   glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
   glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-#ifndef ELECTROBENCH_VITA
-  // vitaGL's glTexParameteri has no wrap-R case and reports it as GL_INVALID_ENUM;
-  // the S/T clamps above are what CLAMP_TO_EDGE cube sampling uses anyway.
   glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
-#endif
-#ifdef ELECTROBENCH_VITA
-  // The colour target the six faces are drawn into, for the reason given at
-  // kEnvMapSize: on this port a cube face cannot be one.
-  glGenTextures(1, &gEnvFaceTex);
-  glBindTexture(GL_TEXTURE_2D, gEnvFaceTex);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, kEnvMapSize, kEnvMapSize, 0,
-               GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 #endif
 
   glGenFramebuffers(1, &gEnvFbo);
   glGenRenderbuffers(1, &gEnvDepth);
   glBindRenderbuffer(GL_RENDERBUFFER, gEnvDepth);
+#ifndef ELECTROBENCH_VITA
   glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, kEnvMapSize, kEnvMapSize);
+#endif
   glBindFramebuffer(GL_FRAMEBUFFER, gEnvFbo);
+#ifndef ELECTROBENCH_VITA
   glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, gEnvDepth);
+#endif
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
@@ -635,6 +628,9 @@ static void BindSkyUniforms(const Mat4 &vp) {
   glUniform1fv(gSkyProg.loc("uCloudStretch"), MAX_CLOUDS, kCloudStretch);
 }
 
+// Desktop/Android only: render the sky dome into the 768² cubemap, then
+// mipmap it. The Vita no longer samples this cube (sea_frag.glsl's uEnvCube),
+// so the probe pass does not run there at all.
 static void DrawSkyToEnvMap(const Mat4 &proj) {
   static const GLenum faces[6] = {GL_TEXTURE_CUBE_MAP_POSITIVE_X, GL_TEXTURE_CUBE_MAP_NEGATIVE_X,
                                   GL_TEXTURE_CUBE_MAP_POSITIVE_Y, GL_TEXTURE_CUBE_MAP_NEGATIVE_Y,
@@ -651,11 +647,7 @@ static void DrawSkyToEnvMap(const Mat4 &proj) {
 
   Mat4 view;
   for (int i = 0; i < 6; i++) {
-#ifdef ELECTROBENCH_VITA
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gEnvFaceTex, 0);
-#else
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, faces[i], gEnvCube, 0);
-#endif
     Mat4Identity(view);
     Mat4LookAt(view, {0, 0, 0}, fwd[i], up[i]);
     Mat4 vp;
@@ -666,38 +658,24 @@ static void DrawSkyToEnvMap(const Mat4 &proj) {
     glUniform1f(gSkyProg.loc("uRadius"), 10.0f);
     glUniform1f(gSkyProg.loc("uTonemap"), 0.0f);
     glDrawElements(GL_TRIANGLES, gDomeMesh.indexCount, GL_UNSIGNED_INT, nullptr);
-#ifdef ELECTROBENCH_VITA
-    // Move the face just drawn into its cube face. vitaGL implements this call as
-    // glReadPixels + glTexImage2D(GL_TEXTURE_CUBE_MAP_*), which is the route into
-    // the cube that its format table accepts - the reason the face is drawn into a
-    // 2D target first. GL's row order is bottom-up and glTexImage2D reads it the
-    // same way, so the face keeps its orientation.
-    glBindTexture(GL_TEXTURE_CUBE_MAP, gEnvCube);
-    glCopyTexImage2D(faces[i], 0, GL_RGBA, 0, 0, kEnvMapSize, kEnvMapSize, 0);
-#endif
   }
-#ifndef ELECTROBENCH_VITA
   glBindTexture(GL_TEXTURE_CUBE_MAP, gEnvCube);
   glGenerateMipmap(GL_TEXTURE_CUBE_MAP);
-#endif
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
   glEnable(GL_CULL_FACE);
 }
 
-// The probe is a camera-independent capture of the sky dome, so refreshing it less
-// often than every frame only delays how quickly cloud drift reaches the
-// reflection. On the Vita a refresh is six readback+upload round trips through
-// guest memory (see kEnvMapSize), so it happens every kEnvMapRefreshFrames frames;
-// the desktop and Android builds keep the per-frame path they have always had.
+// The probe is a camera-independent capture of the sky dome. Desktop/Android
+// refresh it every frame (the cube is a real FBO attachment there). The Vita's
+// sea does not sample the cube at all (sea_frag.glsl's uEnvCube), so there is
+// nothing to refresh — and skipping it removes the six glReadPixels round trips
+// through guest memory plus the free/reallocate of the whole cube per refresh
+// that pinned scene 2 to ~1 FPS.
 static void UpdateEnvMap(const Mat4 &envProj) {
-#ifdef ELECTROBENCH_VITA
-  if (gEnvMapFramesSinceUpdate < kEnvMapRefreshFrames) {
-    gEnvMapFramesSinceUpdate++;
-    return;
-  }
-  gEnvMapFramesSinceUpdate = 1;  // this frame counts as the interval's first
-#endif
+#ifndef ELECTROBENCH_VITA
   DrawSkyToEnvMap(envProj);
+#endif
+  (void)envProj;
 }
 
 static void DumpEnvFacesOnce() {
@@ -879,6 +857,21 @@ static void DrawSea(const Mat4 &view, double timeSec, const Vec3 &eye) {
   glUniform3f(gSeaProg.loc("uSunDir"), gSunDir.x, gSunDir.y, gSunDir.z);
   glUniform3f(gSeaProg.loc("uHorizonColor"), 0.10f, 0.052f, 0.062f); // dark maroon haze, melts into the sky band
   glUniform3f(gSeaProg.loc("uWaterColor"), 0.034f, 0.020f, 0.052f); // near-black indigo body like the dusk reference
+  // 1 = mirror the environment cubemap, 0 = evaluate the same sky gradient
+  // analytically in the shader. The Vita takes 0: its cube is filled by a
+  // readback+upload per face and cannot carry a mip chain, and sampling it at
+  // base level put flat, hard-edged copies of the sun and the clouds on the
+  // water (the patches that stay still while the camera orbits). The analytic
+  // path has no texels to alias, costs no readback, and drops two texture
+  // fetches per pixel; the sea's glitter lobe still draws the sun path.
+#ifdef ELECTROBENCH_VITA
+  glUniform1f(gSeaProg.loc("uEnvCube"), 0.0f);
+#else
+  glUniform1f(gSeaProg.loc("uEnvCube"), 1.0f);
+#endif
+  glUniform3fv(gSeaProg.loc("uSkyZenith"), 1, kSkyZenith);
+  glUniform3fv(gSeaProg.loc("uSkyMid"), 1, kSkyMid);
+  glUniform3fv(gSeaProg.loc("uSkyHorizon"), 1, kSkyHorizon);
   glActiveTexture(GL_TEXTURE0);
   glBindTexture(GL_TEXTURE_2D, gRippleTex);
   glUniform1i(gSeaProg.loc("uRippleTex"), 0);
