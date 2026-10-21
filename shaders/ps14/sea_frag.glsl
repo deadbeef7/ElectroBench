@@ -1,4 +1,3 @@
-// GENERATED from shaders/ps14/sea_frag.glsl by vitaport/tools/make_vita_shaders.py -- do not edit.
 // GLSL 1.00-style rewrite for vitaGL/SceShaccCg (see that script's RULES); the
 // math is identical to the desktop shader except for the documented rewrites.
 #version 100
@@ -87,6 +86,20 @@ uniform vec3  uEyePos;
 uniform vec3  uSunDir;
 uniform vec3  uHorizonColor;
 uniform vec3  uWaterColor;
+
+// 1 = mirror the environment cubemap, 0 = evaluate the same sky gradient in
+// this stage (see analyticSky). The Vita takes 0: its cube is filled by a
+// readback + upload per face and cannot carry a mip chain, so base-level
+// sampling mirrored the sun disc and the cloud silhouettes onto the water as
+// flat, hard-edged sheets that sit still while the camera orbits, i.e. a
+// reflection that reads as broken instead of as water. The other ports keep
+// the cube (mipmapped, 16F) and are bit-identical to before.
+uniform float uEnvCube;
+// sky_frag.glsl's palette, verbatim, so the analytic reflection cannot drift
+// from the sky actually drawn above the water.
+uniform vec3  uSkyZenith;
+uniform vec3  uSkyMid;
+uniform vec3  uSkyHorizon;
 
 // 9, not v0.3's 7: src/scene2.cxx uploads nine clouds' worth of uniforms
 // (MAX_CLOUDS is 9 there and in sky_frag.glsl, which the sea's shadow deck
@@ -178,6 +191,24 @@ void detailNormals(vec2 p, float t, float dist, inout vec2 grad) {
     grad += vec2(0.22, -0.97) * 4.40 * w3 * 0.010;
 }
 
+// Analytic twin of sky_frag.glsl's skyGradient() plus its glow terms. Cloud
+// silhouettes are deliberately left out: this path exists for the port whose
+// reflection probe has no mip chain, and a rough sea's reflection is a blurred
+// sky there too, not a sharp one.
+vec3 analyticSky(vec3 dir, vec3 sd) {
+    float h = clamp(dir.y, 0.0, 1.0);
+    vec3 s = mix(uSkyHorizon, uSkyMid, smoothstep(0.0, 0.14, h));
+    s = mix(s, uSkyZenith, smoothstep(0.10, 0.38, h));
+    float sa = max(dot(dir, sd), 0.0);
+    s *= 0.22 + 0.78 * pow(sa, 4.0);
+    float sunAng = length(dir - sd);
+    float glow = exp(-11.0 * sunAng * sunAng) * 0.42
+               + exp(-25.0 * sunAng * sunAng) * 0.62;
+    glow *= 1.0 - smoothstep(0.05, 0.55, h) * 0.85;
+    s = mix(s, vec3(1.55, 0.52, 0.18), clamp(glow, 0.0, 0.52));
+    return s;
+}
+
 void main() {
     vec3 sd = normalize(uSunDir);
     vec3 dir = normalize(vWorld - uEyePos);   // fragment direction (eye -> point)
@@ -243,8 +274,13 @@ void main() {
     // which reads as a horizontal orange zone across the far sea. Near the
     // camera the reflection stays sharp; the square texels only appear where
     // the reflection compresses, which is where the ramp has already blurred.
-    vec3 reflColor = textureCube(uSkyEnvTex, R,
-        clamp((reflDist - 250.0) * 0.0014, 0.0, 2.5)).rgb;
+    vec3 reflColor;
+    if (uEnvCube > 0.5) {
+        reflColor = textureCube(uSkyEnvTex, R,
+            clamp((reflDist - 250.0) * 0.0014, 0.0, 2.5)).rgb;
+    } else {
+        reflColor = analyticSky(R, sd);
+    }
     float offSun = 1.0 - smoothstep(0.08, 0.45, sunAlign);
     reflColor *= mix(1.0, 0.46, offSun);
 
@@ -302,7 +338,13 @@ void main() {
     // (grazing fresnel -> nearly pure reflection up there), so by geometry
     // the water edge converges into the sky with no haze knob needed.
     vec2 dxdz = vWorld.xz - uEyePos.xz;
-    vec3 skyAtHorizon = textureCube(uSkyEnvTex, normalize(vec3(dxdz.x, 0.012, dxdz.y))).rgb;
+    vec3 horizonDir = normalize(vec3(dxdz.x, 0.012, dxdz.y));
+    vec3 skyAtHorizon;
+    if (uEnvCube > 0.5) {
+        skyAtHorizon = textureCube(uSkyEnvTex, horizonDir).rgb;
+    } else {
+        skyAtHorizon = analyticSky(horizonDir, sd);
+    }
     float horizonMix = smoothstep(1500.0, 1900.0, dist);
     color = mix(color, skyAtHorizon, horizonMix * 0.85);
 
