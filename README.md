@@ -896,14 +896,37 @@ wall-clock time: two renders of the identical binary differ by 807,704 px), so f
 the check is the measurement, not the image — its over-195 pixel count comes out 962
 against 961 for the committed frame, and 12,106 before the burnout fix.
 
-**Two honest limits on the cube fix.** Nothing has run on a real console, so the
-reflection *pixels* stay unverified — and the emulator cannot settle it either,
-because Vita3K drops scene 2's draws for its own shader-bank reason, which leaves the
-faces the copy path fills empty there. And the Vita's reflection is a fidelity step
-down from the other ports by construction: 8-bit colour instead of `RGBA16F`, 256²
-faces instead of 768², no mip chain, and a one-in-four-frame refresh. All four follow
-from the copy going through guest memory and from vitaGL's cube format table;
-`kEnvMapSize` and `kEnvMapRefreshFrames` are the dials if a console says otherwise.
+**The Vita no longer samples a reflection cube at all.** With the port's first
+hardware report the remaining defect was named precisely: flat, hard-edged
+patches sitting on the water on both sides of the frame that **stay still while
+the camera orbits** — a reflection, not foam and not a hole. That is exactly what
+a base-level cubemap sample does here. The probe is a *camera-independent*
+capture of the sky, `glCopyTexImage2D` fills it through guest memory, and
+vitaGL cannot build a mip chain for a cubemap, so the sea mirrored a 128-texel
+sky at full sharpness: the sun disc and the cloud silhouettes landed as flat
+sheets, and nothing about them moves when the eye does.
+
+The Vita now evaluates the same sky gradient in `sea_frag.glsl`
+(`uniform float uEnvCube`, 0 there, 1 on desktop/Android) — `analyticSky()` is
+`sky_frag.glsl`'s `skyGradient()` plus its glow terms, driven by the same palette
+constants, with the cloud silhouettes deliberately omitted. Consequences:
+
+* no readback path at all: `UpdateEnvMap` is empty, no FBO is created and the
+  cube is a 1x1 placeholder, so the six `glReadPixels` round trips and the
+  free/reallocate of the whole cube per refresh are gone (they are what pinned
+  scene 2 to the 1 FPS in the report);
+* two fewer texture fetches per sea pixel;
+* nothing left to alias or seam: the reflection is continuous by construction.
+
+Measured on the host's ES driver, same frame, Vita path before vs after: pixels
+in the sea whose strongest neighbour difference exceeds 70 fall from 3,455 to
+1,114 and above 40 from 9,086 to 3,654 — below the mipmapped desktop path's own
+2,182/11,555 — while the sea's mean luma goes 64.27 -> 61.84 (the desktop frame
+is 66.54) and the left/right thirds move by under 2/255. The horizon row is
+unchanged to the last decimal, because the far sea and the sky above it are now
+fed from the same palette. The desktop/Android pixels are untouched: their
+branch still samples the 768² `RGBA16F` mipmapped cube exactly as before.
+
 
 ### The Vita VPK was shipping a sea shader older than the tree
 

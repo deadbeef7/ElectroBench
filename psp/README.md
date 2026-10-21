@@ -137,18 +137,26 @@ they are recorded here:
    them is all that is needed.
 6. `sceGuDrawArray` does not upload GUM matrices; `sceGumUpdateMatrix()` does.
    (Only matters for `sceGuDrawArray`; `sceGumDrawArray` pushes them itself.)
-7. **Pack a PRX, not the ELF.** This Makefile originally left `BUILD_PRX`
-   unset, so PSPSDK's build.mak packed the stripped *ELF* into `DATA.PSP`
-   (its first four bytes were `\x7fELF`). PPSSPP loads that - it sniffs an ELF
-   in the PBP - and every emulator screenshot looked fine, so the mistake only
-   showed up on a console, where the XMB loader hands that blob to the module
-   manager, which cannot read a `~PSP` module header out of it and fails with
-   `8002013C` (`SCE_KERNEL_ERROR_LIBRARY_NOTFOUND`). With `BUILD_PRX = 1` the
-   link uses `prxspecs` + `linkfile.prx`, `psp-prxgen` emits an `ET_SCE_PRX`
-   with a real `.rodata.sceModuleInfo`, and *that* is what `DATA.PSP` holds.
-   Check with `psp-readelf -h ElectroBench.prx`: `Type: (ffa0)` is correct; a
-   plain `EXEC` means the PBP will not boot on hardware even if it runs in an
-   emulator.
+7. **A user-mode module must not import a kernel library.** The console
+   answers `0x8002013C` (`SCE_KERNEL_ERROR_LIBRARY_NOTFOUND`) when it cannot
+   resolve one of the module's imports, and it refuses kernel libraries to a
+   user module at all. This port linked `-lpspkernel` *by name* in its own
+   `LIBS`, which sits in front of the `-lpspuser -lpspkernel` tail build.mak
+   appends: ld therefore satisfied `sceKernelCreateThread`, `sceIoOpen`,
+   `sceKernelGetSystemTimeWide` and friends out of the **kernel** stubs, and
+   the EBOOT asked for `ThreadManForKernel`, `IoFileMgrForKernel`,
+   `LoadExecForKernel`, `StdioForKernel`, `SysclibForKernel` and
+   `UtilsForKernel`. PPSSPP resolves those anyway, which is why the emulator
+   ran it and only hardware failed. Drop `-lpspkernel` from `LIBS` and the
+   import table becomes user-only, which is what a homebrew EBOOT should look
+   like; check with
+   `psp-objdump -s -j .rodata.sceResident ElectroBench.prx | grep -c ForKernel`
+   (must be 0).
 
-   The PRX stays unsigned, which every CFW (PRO/ARK) accepts; only OFW would
-   need a Sony key we do not have.
+8. **`BUILD_PRX = 1` is still required, but it is not the 8002013C fix.**
+   Without it build.mak packs the stripped ELF and there is no
+   `.rodata.sceModuleInfo` at all. With it, this toolchain's `psp-prxgen`
+   emits an `ET_SCE_PRX` (`Type: ffa0`) rather than a `~PSP` envelope - that
+   is also what PSPSDK's own `gu/cube` sample ships in `DATA.PSP`, so it is
+   the expected shape here, not a symptom. The PRX stays unsigned, which every
+   CFW (PRO/ARK) accepts; only OFW would need a Sony key we do not have.
