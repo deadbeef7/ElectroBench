@@ -195,12 +195,28 @@ void detailNormals(vec2 p, float t, float dist, inout vec2 grad) {
 // silhouettes are deliberately left out: this path exists for the port whose
 // reflection probe has no mip chain, and a rough sea's reflection is a blurred
 // sky there too, not a sharp one.
+//
+// The three horizon terms of the sky stage ARE here, though, and that was the
+// fix for the hard line where the water meets the sky. sky_frag.glsl draws
+// skyGradient() (which carries the +8% low-altitude boost) and then adds the
+// warm dust band `vec3(0.16, 0.075, 0.055) * (1 - smoothstep(0, 0.05, h))`
+// under the cloud deck. Both are a large fraction of the sky's own colour in
+// the first few degrees above the horizon, and this twin had neither: the far
+// sea - which is ~80% skyAtHorizon after the haze mix - landed about 30 luma
+// below the sky it is supposed to mirror, i.e. a dark straight edge along the
+// waterline instead of a continuous band. Everything below is skyGradient()'s
+// structure with the sky stage's own numbers.
 vec3 analyticSky(vec3 dir, vec3 sd) {
     float h = clamp(dir.y, 0.0, 1.0);
     vec3 s = mix(uSkyHorizon, uSkyMid, smoothstep(0.0, 0.14, h));
     s = mix(s, uSkyZenith, smoothstep(0.10, 0.38, h));
     float sa = max(dot(dir, sd), 0.0);
-    s *= 0.22 + 0.78 * pow(sa, 4.0);
+    float shadowedWarmth = 0.22 + 0.78 * pow(sa, 4.0);
+    float horizonBoost = smoothstep(0.0, 0.20, h) * (1.0 - smoothstep(0.20, 0.60, h));
+    s *= shadowedWarmth + 0.08 * horizonBoost;
+    // The dust band the sky stage adds on top of the gradient (verbatim).
+    s += vec3(0.16, 0.075, 0.055) * (1.0 - smoothstep(0.0, 0.05, h)) *
+         (0.45 + 0.55 * pow(sa, 2.0));
     float sunAng = length(dir - sd);
     float glow = exp(-11.0 * sunAng * sunAng) * 0.42
                + exp(-25.0 * sunAng * sunAng) * 0.62;
@@ -321,10 +337,38 @@ void main() {
     float crest = smoothstep(0.55, 1.25, hC) * mix(0.25, 1.0, shadow);
     float slopeFacing = max(dot(N, L), 0.0) * warmGate + 0.15;
     float chaos = texture2D(uRippleTex, vUV * 190.0 + vec2(uTime * 0.011, -uTime * 0.007)).g;
-    float foam = texture2D(uFoamTex, vUV * 23.0 + vec2(uTime * 0.010, 0.0)).r;
-    foam *= texture2D(uFoamTex, vUV * 41.0 - vec2(0.0, uTime * 0.013)).g;
-    foam *= crest * slopeFacing * (0.35 + 0.65 * chaos);
-    body += vec3(0.55, 0.48, 0.58) * foam * 0.55; // dim warm-gray foam
+    // 92 / 161 rather than v0.3's 23 / 41: the patch is 4096 m across, so the
+    // old tiling put one foam texel every 0.7 m and 0.4 m - a crest a few
+    // metres wide then held two or three texels of a smooth noise field, i.e.
+    // one flat value, and every crest rendered as a flat pale card instead of
+    // foam. At 0.17 m and 0.10 m the same crest carries real texture, which is
+    // what makes it read as broken water.
+    // Zero-mean, so that a texture which samples as a CONSTANT cannot paint
+    // foam: 4*(a-0.5)*(b-0.5) is 0 for any flat sample and positive only where
+    // both layers are dense. That matters because the crest gate below is the
+    // only other factor: a sampler that returns one value across the surface
+    // (a unit the device did not bind, or a mip level chosen once for a whole
+    // crest) then turned every crest into a flat pale card on the water - the
+    // pale patches on both sides of the frame. With the zero-mean form the
+    // texture has to *vary* for foam to exist at all.
+    float foam = max(texture2D(uFoamTex, vUV * 92.0 + vec2(uTime * 0.010, 0.0)).r - 0.5, 0.0)
+               * max(texture2D(uFoamTex, vUV * 161.0 - vec2(0.0, uTime * 0.013)).g - 0.5, 0.0)
+               * 4.0;
+    // Foam is a NEAR-field feature. Past a few hundred metres a crest is
+    // narrower than a pixel: the foam texture can only be resolved as its mip
+    // average, the crest gate stops varying, and the additive term below then
+    // paints flat pale plates on the water instead of foam - the pale patches
+    // on both sides of the frame on the console, where the grazing-angle mip
+    // selection lands on one level across whole crests. Fading it out by 420 m
+    // leaves the far sea to the reflection and the haze, which are continuous.
+    float foamFade = 1.0 - smoothstep(120.0, 420.0, dist);
+    foam *= crest * slopeFacing * (0.35 + 0.65 * chaos) * foamFade;
+    // Foam brightens the water's own shading rather than replacing it. As a
+    // pure additive term at the old gain (0.55 of a pale lavender over a body
+    // of ~0.05) it flattened the wave's light inside every crest, which is what
+    // made the patches read as cards laid on the water rather than as foam.
+    body *= 1.0 + foam * 1.35;
+    body += vec3(0.55, 0.48, 0.58) * foam * 0.20; // dim warm-gray foam
 
     // subsurface glow against the light: THIN CRESTS transmit a dim jade-green
     // where sunlight actually passes through the water. Gated to the sun's

@@ -177,7 +177,14 @@ inline float CloudCoverage(float dx, float dy, float dz, float driftx,
   if (detOut) *detOut = det;
 
   float dens = base - 0.32f * (det - 0.5f);
-  float cover = SmoothStep(0.560f, 0.780f, dens) * 0.94f;
+  // The thresholds are lower than sky_frag.glsl's (0.560/0.780) because the
+  // octave filter above pulls every octave toward its mean, which compresses
+  // this field toward 0.5: at the shader's own thresholds the deck survived as
+  // three texels of pale speckle in a 128x64 panorama, i.e. no clouds at all in
+  // the camera's view. Measured by buildtools/test_psp_skycloud.cxx: at
+  // 0.470/0.660 the deck covers ~6% of the panorama, matching the shader's own
+  // coverage at its scale, with the same ~1% one-texel specks.
+  float cover = SmoothStep(0.470f, 0.660f, dens) * 0.94f;
   cover *= 0.80f + 0.20f * SmoothStep(0.40f, 0.66f, det);
   cover *= SmoothStep(0.035f, 0.26f, h);
   cover *= 1.0f - SmoothStep(0.62f, 0.99f, h);

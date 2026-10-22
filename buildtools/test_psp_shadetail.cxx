@@ -13,13 +13,16 @@
 // at the same camera and sun), measured from that frame:
 //
 //   gravel, foreground   (132, 106, 85)
-//   carriageway, wet     (163, 110, 77)
 //   dark wall / p1        (100,  79, 59)   -- the darkest surface in the frame
 //   distant houses       (141, 120, 99)   -- what haze converges toward
 //
 // and it prints the GE fog colour the port derives from the same tail. The
 // fog colour has to sit near the haze the objects converge to; a dark one is
 // what made the far field read as a black band.
+//
+// The carriageway is checked for being asphalt (near-neutral, mid-grey) rather
+// than against a reference pixel: the one the desktop frame offers, (163,110,77),
+// is the sun's side of the shot and turned the road red on the console.
 //
 // Build and run:
 //   g++ -O2 -std=c++17 -Ipsp/src buildtools/test_psp_shadetail.cxx -o build/test_psp_shadetail
@@ -67,7 +70,7 @@ float Luma(const float c[3]) {
 int main() {
   const Case cases[] = {
       {"gravel, up", kGravel, 0.0f, 1.0f, 0.0f, pspshade::kMatGround, {132, 106, 85}, 18},
-      {"carriageway, up", kRoad, 0.0f, 1.0f, 0.0f, pspshade::kMatRoad, {163, 110, 77}, 22},
+      {"carriageway, up", kRoad, 0.0f, 1.0f, 0.0f, pspshade::kMatRoad, {-1, -1, -1}, 0},
       {"kerb, top", kKerb, 0.0f, 1.0f, 0.0f, pspshade::kMatKerb, {-1, -1, -1}, 0},
       {"marking, up", kPaint, 0.0f, 1.0f, 0.0f, pspshade::kMatLine, {-1, -1, -1}, 0},
       // A wall turned away from the sun: the ambient-only case that used to
@@ -104,6 +107,23 @@ int main() {
       std::printf("%s (%+d,%+d,%+d)\n", ok ? "ok  " : "FAIL", dr, dg, db);
       if (!ok) failures++;
     }
+  }
+
+  // The carriageway has no reference pixel on purpose: matching the desktop
+  // frame's road sample (163,110,77 - the sun's side of the frame) made the
+  // surface read as red tarmac at 480x272. What it has to be is asphalt, i.e.
+  // near-neutral and mid-grey, so that is what is asserted.
+  {
+    float out[3];
+    pspshade::Surface(kRoad, 0.0f, 1.0f, 0.0f, kSun, pspshade::kMatRoad, out);
+    const float luma = Luma(out);
+    const int r = Rgb(out, 0), g = Rgb(out, 1), b = Rgb(out, 2);
+    const int spread = (r > g ? (r > b ? r - (g < b ? g : b) : b - (r < g ? r : g))
+                              : (g > b ? g - (r < b ? r : b) : b - (r < g ? r : g)));
+    std::printf("  %-20s (%3d,%3d,%3d)  spread %d, luma %.2f %s\n", "asphalt check", r, g, b,
+                spread, (double)luma,
+                (spread <= 22 && luma > 0.42f && luma < 0.62f) ? "ok" : "FAIL");
+    if (!(spread <= 22 && luma > 0.42f && luma < 0.62f)) failures++;
   }
 
   float fog[3];

@@ -151,16 +151,21 @@ inline void Surface(const float albedo[3], float nx, float ny, float nz,
   }
 
   // The wet-surface reflection: object_frag.glsl adds skyRefl * wetF, a grazing
-  // reflection of the (warm) sky that is what makes the carriageway read as wet
+  // reflection of the sky that is what makes the carriageway read as wet
   // asphalt rather than a black strip. The view vector is not available in a
-  // baked vertex colour, so each of those materials gets a constant radiance
-  // with the reflection's colour instead of its angular falloff. These are
-  // linear radiance additions, like the shader's: the display tail below is
-  // what lifts them, so they must not carry a lift of their own.
-  // Measured against the desktop frame (buildtools/test_psp_shadetail.cxx): the
-  // road at (163,110,77), the gravel at (128,100,78), the kerb a pale grey.
+  // baked vertex colour, so those materials get a constant radiance instead of
+  // the reflection's angular falloff. These are linear radiance additions, like
+  // the shader's: the display tail below is what lifts them, so they must not
+  // carry a lift of their own.
+  // The road's term is deliberately near-neutral. Matching the desktop frame's
+  // own road pixel (163,110,77 - the frame is the sun's side, so the carriageway
+  // there is lit by the full sunset) made the surface read as red tarmac at
+  // 480x272, where the whole frame is already warm and there is no detail to
+  // say "asphalt" with. A grey reflection (142,130,124 after the tail) is what
+  // reads as road; buildtools/test_psp_shadetail.cxx asserts neutrality rather
+  // than the reference pixel for exactly that reason.
   if (m == kMatRoad) {
-    r += 0.196f; g += 0.039f; b += 0.000f;
+    r += 0.105f; g += 0.100f; b += 0.098f;
   } else if (m == kMatGround) {
     r += 0.000f; g += 0.000f; b += 0.000f;
   } else if (m == kMatKerb) {

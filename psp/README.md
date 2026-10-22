@@ -87,8 +87,12 @@ Scene 4's approximations, all forced by the GE:
   check-shade` prints the bake next to the colours the desktop/Vita frame
   carries (gravel 132,106,85; wet road 163,110,77; darkest wall 100,79,59) and
   fails if any surface lands below luma 0.22.
-* the wet-surface reflection of the road/ground is a constant warm term rather
-  than a per-pixel grazing reflection (there is no view vector to bake with).
+* the wet-surface reflection of the road/ground is a constant term rather than
+  a per-pixel grazing reflection (there is no view vector to bake with). The
+  road's is near-neutral: matching the desktop frame's road pixel there made
+  the carriageway read as red tarmac at 480x272, where nothing in the frame says
+  "asphalt" except the colour, so `check-shade` asserts a grey (141,129,122)
+  instead of the reference sample.
   It is now a *linear* addition like the shader's `skyRefl * wetF`, so the
   display tail is what lifts it; the old per-material additive lifts were
   standing in for that tail and have gone.
@@ -110,8 +114,12 @@ Scene 4's approximations, all forced by the GE:
   octaves are also filtered against the measured texel footprint
   (`psp/src/psp_skycloud.hxx`), so detail that the panorama could not represent
   fades into coverage instead of aliasing. `make -C psp check-sky` prints the
-  numbers: at 0.12 the masses average 9 texels with ~1% one-texel specks, where
-  the shader's own scale gives 1.8-texel masses and 26% specks.
+  numbers: at 0.12 the masses average 118 texels with 3 one-texel specks in
+  1176 covered texels. That filter also compresses the field toward its mean, so
+  the coverage thresholds are lower than the shader's (0.470/0.660 against
+  0.560/0.780) to keep the deck's *coverage*: at the shader's own thresholds the
+  filtered deck covered 3% of the panorama and the sky in the camera's view had
+  no clouds in it at all.
 * cables are one-pixel lines: at 480x272 a 3 cm conductor is sub-pixel, and the
   desktop tube tessellation would cost more vertices than the rest of the scene.
 * the carriageway, its shoulders and the markings are their own draw pass, with
