@@ -76,7 +76,13 @@ USE_USER_LIBS = 1
 
 # PSPSDK's build.mak ships no suffix rules; these are the port's own. The
 # sources are C++ because they share src/font_atlas.hxx with the other ports.
-%.o: %.cxx
+#
+# The headers are prerequisites too, and that is not cosmetic: the shading and
+# the sky bake live in psp_shadetail.hxx and psp_skycloud.hxx, so a `make` after
+# editing one of them used to print "Nothing to be done" and leave the previous
+# EBOOT in place - the binary then disagrees with the tree it was built from.
+PSP_HEADERS := $(wildcard src/*.hxx) ../src/font_atlas.hxx
+%.o: %.cxx $(PSP_HEADERS)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 %.o: %.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@

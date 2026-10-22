@@ -746,8 +746,8 @@ void AddGroundGeometry() {
   // group is drawn with the depth test off instead of fighting the ground per
   // pixel. The kerbs belong to it for the same reason: their bottom faces are
   // on the ground plane.
+  const float road[3] = {0.115f, 0.120f, 0.132f};
   {
-    const float road[3] = {0.115f, 0.120f, 0.132f};
     const float edge[3] = {0.235f, 0.215f, 0.190f};
     const float paint[3] = {0.520f, 0.480f, 0.420f};
     for (int e = 0; e < 2; e++) {
@@ -796,6 +796,12 @@ void AddGroundGeometry() {
     }
   }
   gRoadIdxCount = gSolidIdxCount - gRoadIdxOffset;
+  // Build fingerprint in the log: the baked carriageway colour is what tells a
+  // running EBOOT apart from an older one (the red-tarmac revision baked
+  // 0x516CA3, the asphalt one 0x7A818D), and printf already goes to the
+  // emulator's console for the vertex counts above.
+  printf("scene4: carriageway colour %06X\n",
+         Shade(0.0f, 1.0f, 0.0f, road, kMatRoad) & 0xFFFFFFu);
 }
 
 // Ground shadows: five fading strips per pole, projected away from the sun so
