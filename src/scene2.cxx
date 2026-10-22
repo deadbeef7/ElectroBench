@@ -630,7 +630,10 @@ static void BindSkyUniforms(const Mat4 &vp) {
 
 // Desktop/Android only: render the sky dome into the 768² cubemap, then
 // mipmap it. The Vita no longer samples this cube (sea_frag.glsl's uEnvCube),
-// so the probe pass does not run there at all.
+// so the probe pass does not run there at all — and kEnvMapSize, the FBO
+// attachments and the readback below only exist on that path, so the whole
+// function is compiled out on the Vita.
+#ifndef ELECTROBENCH_VITA
 static void DrawSkyToEnvMap(const Mat4 &proj) {
   static const GLenum faces[6] = {GL_TEXTURE_CUBE_MAP_POSITIVE_X, GL_TEXTURE_CUBE_MAP_NEGATIVE_X,
                                   GL_TEXTURE_CUBE_MAP_POSITIVE_Y, GL_TEXTURE_CUBE_MAP_NEGATIVE_Y,
@@ -664,6 +667,10 @@ static void DrawSkyToEnvMap(const Mat4 &proj) {
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
   glEnable(GL_CULL_FACE);
 }
+#else
+// No probe pass on the Vita: the 1x1 placeholder cube never needs redrawing.
+static void DrawSkyToEnvMap(const Mat4 &proj) { (void)proj; }
+#endif
 
 // The probe is a camera-independent capture of the sky dome. Desktop/Android
 // refresh it every frame (the cube is a real FBO attachment there). The Vita's
@@ -683,9 +690,8 @@ static void DumpEnvFacesOnce() {
   // This dump reads each cube face back one at a time, which needs the very
   // attachment vitaGL refuses, and it writes to /tmp, which the Vita does not have.
   // WriteScreenshotPPM (what --screenshot/--shot-times use) is the port's own
-  // capture path and works on both.
-  return;
-#endif
+  // capture path and works on both, so there is nothing to compile here.
+#else
   if (!gDumpEnv || gDumpEnvDone) return;
   gDumpEnvDone = true;
   static const GLenum faces[6] = {GL_TEXTURE_CUBE_MAP_POSITIVE_X, GL_TEXTURE_CUBE_MAP_NEGATIVE_X,
@@ -711,6 +717,7 @@ static void DumpEnvFacesOnce() {
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
   std::printf("env faces dumped\n");
   std::fflush(stdout);
+#endif
 }
 
 // ------------------------------------------------------------------- HUD
