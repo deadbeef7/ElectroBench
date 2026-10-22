@@ -47,8 +47,20 @@ ASFLAGS := $(CFLAGS)
 # uses: controller (pause/exit), power (333 MHz clock), rtc, kernel.
 # Order matters: libpspgum (sceGumDrawArray) calls sceGuSetMatrix out of
 # libpspgu, so gum has to come first for the single-pass ld to resolve it.
+#
+# -lpspkernel is deliberately absent. Naming it here puts the *kernel* stubs in
+# front of build.mak's user-mode tail, so ld satisfies sceKernelCreateThread,
+# sceIoOpen, sceKernelGetSystemTimeWide and friends out of ThreadManForKernel /
+# IoFileMgrForKernel / ... and the EBOOT asks the console for kernel libraries a
+# user-mode module cannot import: "The game could not be started. (8002013C)".
+# PPSSPP resolves them anyway, which is why only hardware failed. USE_USER_LIBS
+# below keeps the tail itself kernel-free too.
 LIBS := -lpspgum -lpspgu -lpspvfpu -lpspctrl -lpsppower -lpsprtc \
-        -lpspdebug -lpspkernel -lm
+        -lpspdebug -lm
+
+# build.mak links one of three default tails; the default one (neither flag set)
+# ends in "-lpspuser -lpspkernel". A homebrew EBOOT must be a user-mode module,
+# so take the user-only tail: no kernel stub is on the link line at all.
 
 # 333/333/166: the maximum the hardware allows. The port's whole budget (mesh
 # shading on the CPU, textures, framebuffers) is planned around it.
@@ -58,6 +70,9 @@ PSP_EBOOT_ICON1 := NULL
 
 EXTRA_TARGETS := ICON0.PNG EBOOT.PBP
 EXTRA_CLEAN := ICON0.PNG $(TARGET).prx
+
+# User-only PSPSDK tail: -lpspuser without -lpspkernel (see LIBS above).
+USE_USER_LIBS = 1
 
 # PSPSDK's build.mak ships no suffix rules; these are the port's own. The
 # sources are C++ because they share src/font_atlas.hxx with the other ports.

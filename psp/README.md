@@ -151,7 +151,10 @@ they are recorded here:
    import table becomes user-only, which is what a homebrew EBOOT should look
    like; check with
    `psp-objdump -s -j .rodata.sceResident ElectroBench.prx | grep -c ForKernel`
-   (must be 0).
+   (must be 0). `USE_USER_LIBS = 1` is set as well, because build.mak's default
+   tail ends in `-lpspuser -lpspkernel`: without the flag the kernel archive is
+   back on the link line after the port's own libraries, and a stray reference
+   could still resolve from it.
 
 8. **`BUILD_PRX = 1` is still required, but it is not the 8002013C fix.**
    Without it build.mak packs the stripped ELF and there is no
