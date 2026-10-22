@@ -23,6 +23,9 @@
 // src/scene4.cxx, so the two scenes frame the same shot.
 #include "psp_scene4.hxx"
 
+#include "psp_shadetail.hxx"   // material shading + display tail (host-tested)
+#include "psp_skycloud.hxx"     // the baked sky's cloud deck (host-tested)
+
 #include <pspgu.h>
 #include <pspkernel.h>
 
@@ -64,7 +67,10 @@ SolidVertex gSolid[kMaxSolidVerts] __attribute__((aligned(16)));
 unsigned short gSolidIdx[kMaxSolidIndices] __attribute__((aligned(16)));
 int gSolidVerts = 0;
 int gSolidIdxCount = 0;
-int gGroundIdxCount = 0;   // index count of the ground/road part of the array
+int gGroundIdxCount = 0;   // index count of the ground part of the array
+// The carriageway is drawn as its own pass, after the ground and with depth
+// testing off; see Scene4Draw().
+int gRoadIdxOffset = 0, gRoadIdxCount = 0;
 
 LineVertex gLine[kMaxLineVerts] __attribute__((aligned(16)));
 int gLineVerts = 0;
@@ -76,11 +82,25 @@ unsigned short gShadowIdx[6000] __attribute__((aligned(16)));
 int gShadowVerts = 0, gShadowIdxCount = 0;
 
 // --------------------------------------------------------------- materials
-enum Material {
-  kMatPaint, kMatWood, kMatGround, kMatRoad, kMatLine, kMatCable,
-  kMatCeramic, kMatMetal, kMatWall, kMatRoof, kMatGlass, kMatLeaf,
-  kMatGlow, kMatSteel, kMatKerb, kMatConcrete,
-};
+// The material list and the shading itself live in psp_shadetail.hxx, which
+// carries object_frag.glsl's light sum *and* its display tail; see Shade().
+using pspshade::Material;
+using pspshade::kMatPaint;
+using pspshade::kMatWood;
+using pspshade::kMatGround;
+using pspshade::kMatRoad;
+using pspshade::kMatLine;
+using pspshade::kMatCable;
+using pspshade::kMatCeramic;
+using pspshade::kMatMetal;
+using pspshade::kMatWall;
+using pspshade::kMatRoof;
+using pspshade::kMatGlass;
+using pspshade::kMatLeaf;
+using pspshade::kMatGlow;
+using pspshade::kMatSteel;
+using pspshade::kMatKerb;
+using pspshade::kMatConcrete;
 
 // Palette (identical to src/scene4.cxx).
 const float kConcreteGrey[3] = {0.212f, 0.216f, 0.218f};
@@ -144,67 +164,23 @@ inline unsigned short Pack5551(float r, float g, float b) {
 }
 
 // ------------------------------------------------------------------ shading
-// object_frag.glsl's directional term, baked. The sun is the one the scene
-// starts with: SunDirNow() only swings its azimuth by 0.004 rad/s and clamps
-// its elevation at 0.15, so across one 45 s run the difference is under the
-// 5-bit quantisation of a 5650 target.
+// object_frag.glsl's shading, baked. The sun is the one the scene starts with:
+// SunDirNow() only swings its azimuth by 0.004 rad/s and clamps its elevation
+// at 0.15, so across one 45 s run the difference is under the 5-bit
+// quantisation of a 5650 target.
+//
+// pspshade::Surface() returns the colour the fragment shader would have
+// *displayed* -- its light sum followed by the silhouette lift, the tonemap,
+// the split tone and the gamma -- because the GE writes this value straight to
+// the framebuffer. Baking the radiance instead is what turned every shadowed
+// wall on the console into a black silhouette while the sky, which is baked
+// through its own tonemap, stayed correct.
 float gBakeSun[3] = {0.0f, 0.0f, 0.0f};
 
-unsigned int Shade(float nx, float ny, float nz, const float c[3], Material m,
-                   float alpha = 1.0f) {
-  if (m == kMatGlow) {   // street-lamp lenses, lit windows, vending fronts
-    return Color8888(c[0] * 1.05f, c[1] * 1.05f, c[2] * 1.05f, alpha);
-  }
-
-  const float up = ny * 0.5f + 0.5f;
-  const float ambR = Mix(0.125f, 0.395f, up);
-  const float ambG = Mix(0.086f, 0.340f, up);
-  const float ambB = Mix(0.064f, 0.360f, up);
-
-  float wrap = 0.0f;
-  if (m == kMatCable) wrap = 0.35f;
-  else if (m == kMatSteel) wrap = 0.13f;
-
-  float ndl = nx * gBakeSun[0] + ny * gBakeSun[1] + nz * gBakeSun[2];
-  float diff = Saturate((ndl + wrap) / (1.0f + wrap));
-
-  const float sunR = 1.00f, sunG = 0.66f, sunB = 0.34f;
-  float r = c[0] * (ambR + sunR * diff * 1.15f);
-  float g = c[1] * (ambG + sunG * diff * 1.15f);
-  float b = c[2] * (ambB + sunB * diff * 1.15f);
-
-  // A glint on the hard materials. The desktop BRDF needs the per-pixel view
-  // vector; with a baked vertex colour only the sun angle is left, so this is
-  // the top-face highlight that carries the galvanised steel silhouette.
-  if (m == kMatSteel || m == kMatMetal || m == kMatCeramic ||
-      m == kMatKerb || m == kMatRoof || m == kMatGlass) {
-    float sharp = (m == kMatGlass) ? 48.0f : (m == kMatCeramic ? 26.0f : 20.0f);
-    float glint = std::pow(Saturate(ndl), sharp) * 0.24f;
-    r += glint * sunR;
-    g += glint * sunG;
-    b += glint * sunB;
-  }
-  if (m == kMatGlass && ny > 0.0f) {   // window glass mirrors the dusk sky
-    r += 0.030f;
-    g += 0.034f;
-    b += 0.055f;
-  }
-
-  // The wet-surface reflection. object_frag.glsl adds skyRefl * wetF to the
-  // road and kerb, and that grazing reflection is what makes the carriageway
-  // read as warm grey rather than black; with the view vector unavailable in a
-  // baked vertex colour, a constant warm term per surface carries the same
-  // lift. The far field is left to the GE fog.
-  if (m == kMatRoad) {
-    r += 0.30f; g += 0.24f; b += 0.18f;
-  } else if (m == kMatGround) {
-    r += 0.23f; g += 0.19f; b += 0.14f;
-  } else if (m == kMatKerb) {
-    r += 0.19f; g += 0.16f; b += 0.12f;
-  } else if (m == kMatLine) {
-    r += 0.16f; g += 0.14f; b += 0.10f;
-  }
-  return Color8888(r, g, b, alpha);
+unsigned int Shade(float nx, float ny, float nz, const float c[3], Material m) {
+  float out[3];
+  pspshade::Surface(c, nx, ny, nz, gBakeSun, m, out);
+  return Color8888(out[0], out[1], out[2], 1.0f);
 }
 
 // ---------------------------------------------------------------- geometry
@@ -745,6 +721,9 @@ void AddTreeline() {
 }
 
 // --------------------------------------------------------------- the ground
+// Order matters: gravel and kerbs first (they are the depth-writing ground
+// pass), then the carriageway, its shoulders and the markings, which are a
+// separate depth-test-free pass (see Scene4Draw()).
 void AddGroundGeometry() {
   const float n[3] = {0.0f, 1.0f, 0.0f};
   // The ground is sliced along Z rather than drawn as one quad: the GE's fog
@@ -757,12 +736,31 @@ void AddGroundGeometry() {
                      {430.0f, kGroundY, zz}, {-430.0f, kGroundY, zz}};
     AddQuad(q, n[0], n[1], n[2], kGravel, kMatGround);
   }
-  // Carriageway, shoulders, kerbs, centre dashes, edge lines.
+  gGroundIdxCount = gSolidIdxCount;
+  gRoadIdxOffset = gGroundIdxCount;
+  const float z0 = -200.0f, z1 = 520.0f;
+
+  // Carriageway, kerbs, shoulders and markings. Everything here sits 3-19 cm
+  // above the gravel, which 16-bit depth cannot separate past ~27 m at this
+  // projection (one depth step is 5.3 cm at 35 m and 11.8 m at 520 m), so this
+  // group is drawn with the depth test off instead of fighting the ground per
+  // pixel. The kerbs belong to it for the same reason: their bottom faces are
+  // on the ground plane.
   {
-    const float z0 = -200.0f, z1 = 520.0f;
-    const float road[3] = {0.195f, 0.190f, 0.198f};
+    const float road[3] = {0.115f, 0.120f, 0.132f};
     const float edge[3] = {0.235f, 0.215f, 0.190f};
     const float paint[3] = {0.520f, 0.480f, 0.420f};
+    for (int e = 0; e < 2; e++) {
+      float sgn = e ? 1.0f : -1.0f;
+      float xc = (e ? kRoadX + kRoadHalf : kRoadX - kRoadHalf) + sgn * 0.16f;
+      // Sliced along Z for the same reason as the ground: a single 720 m box
+      // would give the kerb a fog gradient unrelated to its distance.
+      for (float z = z0; z < z1; z += kSlice) {
+        float zz = z + kSlice > z1 ? z1 : z + kSlice;
+        AddBox(xc, kKerbTopY * 0.5f, (z + zz) * 0.5f, 0.16f,
+               kKerbTopY * 0.5f, (zz - z) * 0.5f, kKerbTint, kMatKerb);
+      }
+    }
     for (float z = z0; z < z1; z += kSlice) {
       float zz = z + kSlice > z1 ? z1 : z + kSlice;
       float q[4][3] = {{kRoadX - kRoadHalf, kRoadY, z},
@@ -778,30 +776,26 @@ void AddGroundGeometry() {
         AddQuad(s, n[0], n[1], n[2], edge, kMatGround);
       }
     }
-    for (int e = 0; e < 2; e++) {
-      float sgn = e ? 1.0f : -1.0f;
-      float xc = (e ? kRoadX + kRoadHalf : kRoadX - kRoadHalf) + sgn * 0.16f;
-      // Sliced along Z for the same reason as the ground: a single 720 m box
-      // would give the kerb a fog gradient unrelated to its distance.
-      for (float z = z0; z < z1; z += kSlice) {
-        float zz = z + kSlice > z1 ? z1 : z + kSlice;
-        AddBox(xc, kKerbTopY * 0.5f, (z + zz) * 0.5f, 0.16f,
-               kKerbTopY * 0.5f, (zz - z) * 0.5f, kKerbTint, kMatKerb);
-      }
-    }
     for (float z = -60.0f; z < 400.0f; z += 8.0f) {
       float d[4][3] = {{kRoadX - 0.09f, kPaintY, z}, {kRoadX + 0.09f, kPaintY, z},
                        {kRoadX + 0.09f, kPaintY, z + 3.0f},
                        {kRoadX - 0.09f, kPaintY, z + 3.0f}};
       AddQuad(d, n[0], n[1], n[2], paint, kMatLine);
     }
+    // Edge lines are sliced like everything else on this ribbon: one 720 m quad
+    // has its fog interpolated between two vertices, which is the very artefact
+    // the sliced ground exists to avoid.
     for (int e = 0; e < 2; e++) {
       float xl = e ? kRoadX + kRoadHalf - 0.40f : kRoadX - kRoadHalf + 0.26f;
-      float l[4][3] = {{xl, kPaintY, z0}, {xl + 0.14f, kPaintY, z0},
-                       {xl + 0.14f, kPaintY, z1}, {xl, kPaintY, z1}};
-      AddQuad(l, n[0], n[1], n[2], paint, kMatLine);
+      for (float z = z0; z < z1; z += kSlice) {
+        float zz = z + kSlice > z1 ? z1 : z + kSlice;
+        float l[4][3] = {{xl, kPaintY, z}, {xl + 0.14f, kPaintY, z},
+                         {xl + 0.14f, kPaintY, zz}, {xl, kPaintY, zz}};
+        AddQuad(l, n[0], n[1], n[2], paint, kMatLine);
+      }
     }
   }
+  gRoadIdxCount = gSolidIdxCount - gRoadIdxOffset;
 }
 
 // Ground shadows: five fading strips per pole, projected away from the sun so
@@ -857,6 +851,9 @@ float gEye[3] = {0.0f, 0.0f, 4.0f};
 float gYaw = 0.0f, gPitch = 0.0f;
 float gSun[3] = {-0.30f, 0.20f, 0.93f};
 float gSceneTime = 0.0f;
+// The GE fog colour (ABGR, as sceGuFog expects), derived from the shading in
+// Scene4Init(): one colour for the whole scene, see Scene4Draw().
+unsigned int gFogColour = 0xFF000000u;
 int gSkyRow = 0;   // next panorama row to rebuild
 
 // --------------------------------------------------------------- sky panorama
@@ -873,33 +870,10 @@ SkyVertex gSkyGrid[kSkyGridVerts] __attribute__((aligned(16)));
 unsigned short gSkyIdx[kSkyGridX * kSkyGridY * 6] __attribute__((aligned(16)));
 SunVertex gSunQuad[6] __attribute__((aligned(16)));
 
-float gNoise[64 * 64];
-
-void BuildNoiseTable() {
-  unsigned int s = 0x7F4A7C15u;
-  for (int i = 0; i < 64 * 64; i++) {
-    s ^= s << 13; s ^= s >> 17; s ^= s << 5;
-    gNoise[i] = (float)((s >> 8) & 0xFFFF) * (1.0f / 65535.0f);
-  }
-}
-
-inline float NoiseLut(float u, float v) {
-  u *= 64.0f; v *= 64.0f;
-  int ui = (int)std::floor(u), vi = (int)std::floor(v);
-  float uf = u - (float)ui, vf = v - (float)vi;
-  int u0 = ui & 63, v0 = vi & 63, u1 = (u0 + 1) & 63, v1 = (v0 + 1) & 63;
-  float a = gNoise[v0 * 64 + u0], b = gNoise[v0 * 64 + u1];
-  float c = gNoise[v1 * 64 + u0], d = gNoise[v1 * 64 + u1];
-  return Mix(Mix(a, b, uf), Mix(c, d, uf), vf);
-}
-inline float Fbm2(float x, float y) {
-  return NoiseLut(x, y) * 0.66f + NoiseLut(x * 2.17f + 19.3f, y * 2.17f + 19.3f) * 0.34f;
-}
-inline float Fbm3(float x, float y) {
-  return NoiseLut(x, y) * 0.54f +
-         NoiseLut(x * 2.13f + 11.7f, y * 2.13f + 11.7f) * 0.29f +
-         NoiseLut(x * 4.31f + 41.2f, y * 4.31f + 41.2f) * 0.17f;
-}
+// The noise table, the filtered fBm and the projected cloud/cirrus fields live
+// in psp_skycloud.hxx: they are the half of the bake that has a sampling
+// problem (see that header), and buildtools/test_psp_skycloud.cxx runs the
+// same code on the host with and without the filter.
 
 // shaders/pole/sky_frag.glsl's atmosphere(), term by term.
 void Atmosphere(float dx, float dy, float dz, const float sun[3], float out[3]) {
@@ -984,18 +958,14 @@ void BuildSkyRows(float timeSec, int y0, int y1) {
         b = out[2] * 0.42f + 0.010f;
       }
 
-      // Cloud deck (same thresholds as the fragment shader).
-      if (h > 0.030f) {
-        float hh = std::fmax(h, 0.075f);
-        float cpx = dx / hh * 0.30f, cpz = dz / hh * 0.30f;
-        float base = Fbm3(cpx * 1.75f + driftx, cpz * 1.75f + driftz);
-        float det = Fbm2(cpx * 6.50f - driftx * 2.4f + 31.0f,
-                         cpz * 6.50f - driftz * 2.4f + 31.0f);
-        float dens = base - 0.32f * (det - 0.5f);
-        float cover = SmoothStep(0.560f, 0.780f, dens) * 0.94f;
-        cover *= 0.80f + 0.20f * SmoothStep(0.40f, 0.66f, det);
-        cover *= SmoothStep(0.035f, 0.26f, h);
-        cover *= 1.0f - SmoothStep(0.62f, 0.99f, h);
+      // Cloud deck (same thresholds as the fragment shader). The texel
+      // footprint is what keeps the deck from aliasing into dots: at this
+      // resolution one texel covers several noise cells near the horizon.
+      float cloudFp = pspsky::LayerFootprint(azim, elev, TWO_PI / (float)kSkyW,
+                                             -PI / (float)kSkyH, 0.075f, 1.0f);
+      float cover = pspsky::CloudCoverage(dx, dy, dz, driftx, driftz,
+                                          cloudFp, nullptr);
+      if (cover > 0.0f) {
         float lift = std::pow(Clamp(cover, 0.0f, 1.0f), 0.55f);
         float cr = Mix(0.40f, 1.42f, lift);
         float cg = Mix(0.106f, 0.775f, lift);
@@ -1011,14 +981,14 @@ void BuildSkyRows(float timeSec, int y0, int y1) {
         r = Mix(r, cr, k);
         g = Mix(g, cg, k);
         b = Mix(b, cb, k);
+      }
 
-        // Cirrus veil.
-        float ch = std::fmax(h, 0.055f);
-        float vpx = dx / ch * 0.30f, vpz = dz / ch * 0.30f;
-        float cn = Fbm2(vpx * 9.0f - timeSec * 0.010f,
-                        vpz * 4.5f + timeSec * 0.004f);
-        float veil = SmoothStep(0.48f, 0.82f, cn);
-        veil *= SmoothStep(0.035f, 0.20f, h) * (1.0f - SmoothStep(0.55f, 0.95f, h));
+      // Cirrus veil: its own (finer) layer and footprint, and independent of
+      // the cumulus coverage, exactly as in the fragment shader.
+      if (h > 0.030f) {
+        float cirrusFp = pspsky::LayerFootprint(azim, elev, TWO_PI / (float)kSkyW,
+                                                -PI / (float)kSkyH, 0.055f, 9.0f);
+        float veil = pspsky::CirrusVeil(dx, dy, dz, timeSec, cirrusFp);
         float toward = std::pow(std::fmax(mu, 0.0f), 2.2f);
         float mixT = Clamp(veil * 0.26f, 0.0f, 0.26f);
         r = Mix(r, Mix(0.145f, 0.78f, 0.24f + 0.76f * toward), mixT);
@@ -1145,8 +1115,13 @@ void Scene4Init() {
     gBakeSun[0] /= l; gBakeSun[1] /= l; gBakeSun[2] /= l;
   }
   gSun[0] = gBakeSun[0]; gSun[1] = gBakeSun[1]; gSun[2] = gBakeSun[2];
+  {
+    float fog[3];
+    pspshade::FogColour(fog);
+    gFogColour = Color8888(fog[0], fog[1], fog[2], 1.0f);
+  }
 
-  BuildNoiseTable();
+  pspsky::BuildNoiseTable();
   BuildSkyIndices();
   BuildSunTexture();
   BuildSkyTexture(0.0f);
@@ -1163,9 +1138,8 @@ void Scene4Init() {
                  0.09f * ((i * 11) % 3 - 1), 0.07f * ((i * 3) % 3 - 1)};
   }
 
-  // ---- ground group: drawn first, writes depth, before the shadows
+  // ---- ground group (gravel + kerbs), then the depth-test-free road group
   AddGroundGeometry();
-  gGroundIdxCount = gSolidIdxCount;
 
   // ---- opaque detail
   for (int i = 0; i < 15; i++) AddPole(gLineA[i], true);
@@ -1320,16 +1294,37 @@ void Scene4Draw() {
   sceGuDisable(GU_BLEND);
   sceGuDisable(GU_TEXTURE_2D);
   sceGuDisable(GU_CULL_FACE);
-  // Dusk haze: the GE's per-vertex linear fog, matching the warm dust the
-  // object shader's hz term converges to.
+  // Dusk haze: the GE's per-vertex linear fog. Its colour is the one the
+  // object shader's own haze converges to, carried through the same display
+  // tail (pspshade::FogColour); the old constant here was a linear value, so
+  // the far field faded to a dark brown instead of the frame's pale dust and
+  // every distant silhouette stayed black. The ramp matches the shader's
+  // 1 - exp(-dist * 0.0018) over the corridor's 0-800 m: at 350 m the desktop
+  // is 45% hazed, which is (350 - 0) / 780 here.
   sceGuEnable(GU_FOG);
-  sceGuFog(120.0f, 850.0f, 0xFF293352);   // ABGR: r=52 g=33 b=29
+  sceGuFog(0.0f, 780.0f, gFogColour);
 
-  // Ground and road first, so the blended shadows land on top of them and
-  // every opaque object that follows still wins the depth test.
+  // Ground first, so the blended shadows land on top of it and every opaque
+  // object that follows still wins the depth test.
   sceGuDrawArray(GU_TRIANGLES,
                  GU_COLOR_8888 | GU_VERTEX_32BITF | GU_INDEX_16BIT,
                  gGroundIdxCount, gSolidIdx, gSolid);
+
+  // Carriageway, shoulders and markings. Coplanar with the gravel by design
+  // (3-5 cm of paint on a 520 m ribbon) and 16-bit depth resolves 5.3 cm at
+  // 35 m, so testing against the ground made the road lose or win per pixel
+  // past that range - the fragmented "floating" asphalt. It is drawn over the
+  // ground that is already there, with testing and writing both off; every
+  // object after this pass still depth-tests against the ground normally.
+  if (gRoadIdxCount > 0) {
+    sceGuDisable(GU_DEPTH_TEST);
+    sceGuDepthMask(GU_TRUE);   // GU_TRUE disables depth writes
+    sceGuDrawArray(GU_TRIANGLES,
+                   GU_COLOR_8888 | GU_VERTEX_32BITF | GU_INDEX_16BIT,
+                   gRoadIdxCount, gSolidIdx + gRoadIdxOffset, gSolid);
+    sceGuDepthMask(GU_FALSE);
+    sceGuEnable(GU_DEPTH_TEST);
+  }
 
   // Shadows: multiply the destination by (1 - alpha).
   sceGuDepthMask(GU_TRUE);
@@ -1341,12 +1336,12 @@ void Scene4Draw() {
   sceGuDisable(GU_BLEND);
   sceGuDepthMask(GU_FALSE);
 
-  // Everything else, from the end of the ground group to the last vertex.
-  int detail = gSolidIdxCount - gGroundIdxCount;
+  // Everything else, from the end of the road group to the last vertex.
+  int detail = gSolidIdxCount - (gRoadIdxOffset + gRoadIdxCount);
   if (detail > 0)
     sceGuDrawArray(GU_TRIANGLES,
                    GU_COLOR_8888 | GU_VERTEX_32BITF | GU_INDEX_16BIT,
-                   detail, gSolidIdx + gGroundIdxCount, gSolid);
+                   detail, gSolidIdx + gRoadIdxOffset + gRoadIdxCount, gSolid);
 
   // Cables.
   if (gLineVerts > 0)

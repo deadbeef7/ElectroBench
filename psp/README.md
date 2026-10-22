@@ -28,7 +28,9 @@ export PSPSDK=$PSPDEV/psp/sdk
 export PATH=$PSPDEV/bin:$PATH
 make -C psp            # -> psp/EBOOT.PBP
 make -C psp check-math # host test: fast trig and packed wave constants
-make -C psp clean
+make -C psp check-sky  # host test: the baked cloud deck's sampling
+make -C psp check-shade # host test: baked shading + fog vs the desktop frame
+make -C psp clean   
 ```
 
 Needs a pspdev toolchain (`psp-gcc`, `mksfo`, `pack-pbp`, `psp-g++`).
@@ -67,33 +69,69 @@ combined fps report is appended to `ms0:/ElectroBench-psp.txt`.
 
 Both scenes are initialised before the first timed frame, so scene 4's geometry
 bake (the largest single piece of CPU work in either scene) is never charged to
-a scene's average. Scene 4's static vertex budget is 25,420 of 60,000 vertices
-and 46,890 indices; the build prints the counts at startup.
+a scene's average. Scene 4's static vertex budget is 25,508 of 60,000 vertices
+and 47,022 indices (the edge lines are now sliced like the rest of the ribbon,
++88 vertices / +132 indices); the build prints the counts at startup.
 
 Scene 4's approximations, all forced by the GE:
 
 * lighting is baked per vertex with the sun the run starts under. `SunDirNow()`
   moves its azimuth by only 0.004 rad/s and clamps its elevation at 0.15, so
   over a 45 s run the error is under a 5650 quantisation step.
+* the baked colour is the one `object_frag.glsl` **displays**, not the radiance
+  it computes: the shader ends with a silhouette lift, `col/(0.35col+0.72)`, a
+  cool/warm split tone and a 1/2.2 gamma, and that tail `psp/src/psp_shadetail.hxx`
+  reproduces. Skipping it was the black-silhouette bug: the curve multiplies a
+  shadowed wall's 0.03 by eight while barely touching the ground, so the port
+  kept the hand-tuned mid-tones and crushed everything dark. `make -C psp
+  check-shade` prints the bake next to the colours the desktop/Vita frame
+  carries (gravel 132,106,85; wet road 163,110,77; darkest wall 100,79,59) and
+  fails if any surface lands below luma 0.22.
 * the wet-surface reflection of the road/ground is a constant warm term rather
   than a per-pixel grazing reflection (there is no view vector to bake with).
-  The far field is the GE's linear fog.
+  It is now a *linear* addition like the shader's `skyRefl * wetF`, so the
+  display tail is what lifts it; the old per-material additive lifts were
+  standing in for that tail and have gone.
+* the GE's fog colour is derived from the same tail (`pspshade::FogColour()`),
+  and its ramp matches the shader's `1 - exp(-dist * 0.0018)` over 0-800 m. The
+  previous constant, `0xFF293352`, was a linear value: the far field faded to a
+  dark brown instead of the frame's pale dust, which is the second half of the
+  black-band-at-the-horizon look.
 * the sky panorama is refreshed a row at a time (one row per frame in scene 4,
   four in scene 2), not in one go: its integral costs ~20 libm calls per texel,
   and a single-frame bake of the whole grid stalled the picture for most of a
   second every time it came round. The 2.9-degree sun disc is a separate
   additive sprite, because a sky grid dense enough to resolve the disc would
   cost a full-screen tessellation every frame.
+* the cloud deck is baked at a **coarser coordinate scale than the shader's**
+  (0.12), because 128x64 cannot hold the deck's own detail: at the shader's
+  scale the noise table's cell is ~0.35 texel, so every covered texel was an
+  independent sample and the sky was speckled with round dots. The deck's
+  octaves are also filtered against the measured texel footprint
+  (`psp/src/psp_skycloud.hxx`), so detail that the panorama could not represent
+  fades into coverage instead of aliasing. `make -C psp check-sky` prints the
+  numbers: at 0.12 the masses average 9 texels with ~1% one-texel specks, where
+  the shader's own scale gives 1.8-texel masses and 26% specks.
 * cables are one-pixel lines: at 480x272 a 3 cm conductor is sub-pixel, and the
   desktop tube tessellation would cost more vertices than the rest of the scene.
+* the carriageway, its shoulders and the markings are their own draw pass, with
+  the depth test off. They lie 3-5 cm above the gravel by design, and with this
+  projection one 16-bit depth step is 5.3 cm at 35 m and 11.8 m at 520 m, so
+  from ~27 m out the road lost or won per pixel against the ground it is painted
+  on - the fragmented, floating-looking asphalt. Drawing the group over the
+  ground that is already in the frame removes the fight; every object after it
+  still depth-tests against the ground normally. The asphalt palette was also
+  pulled down and cooled: at the previous values the carriageway landed within
+  ~4% of the gravel it is set into and had no visible edge at all.
 
 `DATA.PSP` carries a **PRX** (`BUILD_PRX = 1`), not the ELF that earlier builds
 packed. The ELF form is what the console rejected with
 `The game could not be started. (8002013C)` - see note 7.
 
 Not yet done: the on-screen score matches the GL slabs only approximately (the
-GE cannot tone-map per pixel), and performance has only been measured under
-emulation, not on hardware.
+GE tone-maps and shades per vertex, so a highlight on a curved surface is
+interpolated rather than evaluated per pixel), and performance has only been
+measured under emulation, not on hardware.
 
 A scene's run must also leave the display list **finished**. The results-panel
 exit once `break`ed between `sceGuStart` and `sceGuFinish`; `sceGuStart` only

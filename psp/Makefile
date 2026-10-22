@@ -93,11 +93,27 @@ ICON0.PNG: tools/make_icon_psp.py ../buildtools/make_icons.py
 # Host-side checks for the CPU math the VFPU kernel replaced (fast atan2/asin
 # and the packed wave constants). The PSP cannot execute code on this host, so
 # these run with the host compiler against the same headers the port uses.
-.PHONY: check-math check-codegen
+.PHONY: check-math check-sky check-shade check-codegen
 check-math:
 	@mkdir -p ../build
 	g++ -O2 -std=c++17 -I../src -Isrc ../buildtools/test_psp_math.cxx -o ../build/test_psp_math
 	../build/test_psp_math
+
+# The baked sky's cloud deck: bakes the panorama on the host with and without
+# the texel-footprint filter and reports coverage / isolated-dot / variation
+# counts (see buildtools/test_psp_skycloud.cxx). Pass PGM=path to also write
+# the two coverage fields out for inspection.
+check-sky:
+	@mkdir -p ../build
+	g++ -O2 -std=c++17 -Isrc ../buildtools/test_psp_skycloud.cxx -o ../build/test_psp_skycloud
+	../build/test_psp_skycloud $(PGM)
+
+# The baked object shading and the GE fog colour, against the colours the
+# desktop/Vita frame carries (see buildtools/test_psp_shadetail.cxx).
+check-shade:
+	@mkdir -p ../build
+	g++ -O2 -std=c++17 -Isrc ../buildtools/test_psp_shadetail.cxx -o ../build/test_psp_shadetail
+	../build/test_psp_shadetail
 
 check-codegen:
 	sh ../buildtools/check_codegen.sh
