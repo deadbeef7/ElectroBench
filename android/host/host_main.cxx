@@ -17,6 +17,7 @@
 
 #include <GLES3/gl3.h>
 
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -35,6 +36,30 @@ void PoleSceneSetShotTime(float t);
 // size the platform reports back. False means "adopt the real surface", which is
 // how the harness gets a 1366x768 frame out of scene 4's 1280x720 default.
 bool gWindowedMode = false;
+
+#ifdef ELECTROBENCH_VITA
+// Building these same translation units with -DELECTROBENCH_VITA (make
+// host-render) makes them call the Vita port's two hooks. On the console they
+// live in src/vita_main.cxx (the persistent ux0: spinlog) and src/vita_sdl.cxx;
+// on the host there is no spinlog, so both go to stderr, which is where the
+// harness operator is already reading.
+void VitaLog(const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  std::vfprintf(stderr, fmt, ap);
+  va_end(ap);
+  std::fputc('\n', stderr);
+}
+
+void PortShotTrace(const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  std::fprintf(stderr, "[shot] ");
+  std::vfprintf(stderr, fmt, ap);
+  va_end(ap);
+  std::fputc('\n', stderr);
+}
+#endif
 
 // ---------------------------------------------------------------------------
 // --check-shaders: compile and link every program the two scenes load, through
@@ -199,7 +224,12 @@ int main(int argc, char **argv) {
     return 2;
   }
 
+#ifdef ELECTROBENCH_VITA
+  std::printf("host render of the Vita code path (ELECTROBENCH_VITA): scene %d -> %s, "
+              "shot at t=%.1fs\n", scene, out, seconds);
+#else
   std::printf("host GLES3 check: scene %d -> %s, shot at t=%.1fs\n", scene, out, seconds);
+#endif
   std::fflush(stdout);
 
   bool gaveUp = false;

@@ -91,11 +91,10 @@ Scene 4's approximations, all forced by the GE:
   a per-pixel grazing reflection (there is no view vector to bake with). The
   road's is near-neutral: matching the desktop frame's road pixel there made
   the carriageway read as red tarmac at 480x272, where nothing in the frame says
-  "asphalt" except the colour, so `check-shade` asserts a grey (141,129,122)
-  instead of the reference sample.
-  It is now a *linear* addition like the shader's `skyRefl * wetF`, so the
-  display tail is what lifts it; the old per-material additive lifts were
-  standing in for that tail and have gone.
+  "asphalt" except the colour, so `check-shade` asserts a grey (141,129,125)
+  instead of the reference sample. It is now a *linear* addition like the
+  shader's `skyRefl * wetF`, so the display tail is what lifts it; the old
+  per-material additive lifts were standing in for that tail and have gone.
 * the GE's fog colour is derived from the same tail (`pspshade::FogColour()`),
   and its ramp matches the shader's `1 - exp(-dist * 0.0018)` over 0-800 m. The
   previous constant, `0xFF293352`, was a linear value: the far field faded to a

@@ -7,7 +7,7 @@
 #   PREFIX/sdk/build-tools/34.0.0        (aapt2, zipalign, apksigner, d8)
 #   PREFIX/sdk/platforms/android-34      (android.jar, for aapt2 link)
 #
-# Usage:  sh android/tools/fetch_toolchain.sh [PREFIX]
+# Usage:  sh android/fetch_toolchain.sh [PREFIX]
 #         PREFIX defaults to ./build-android/toolchain
 #
 # Then build with:

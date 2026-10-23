@@ -359,22 +359,22 @@ void main() {
     // average, the crest gate stops varying, and the additive term below then
     // paints flat pale plates on the water instead of foam - the pale patches
     // on both sides of the frame on the console, where the grazing-angle mip
-    // selection lands on one level across whole crests. Fading it out by 420 m
+    // selection lands on one level across whole crests. Fading it out by 260 m
     // leaves the far sea to the reflection and the haze, which are continuous.
-    float foamFade = 1.0 - smoothstep(120.0, 420.0, dist);
+    float foamFade = 1.0 - smoothstep(70.0, 260.0, dist);
     foam *= crest * slopeFacing * (0.35 + 0.65 * chaos) * foamFade;
     // Foam brightens the water's own shading rather than replacing it. As a
     // pure additive term at the old gain (0.55 of a pale lavender over a body
     // of ~0.05) it flattened the wave's light inside every crest, which is what
     // made the patches read as cards laid on the water rather than as foam.
-    body *= 1.0 + foam * 1.35;
-    body += vec3(0.55, 0.48, 0.58) * foam * 0.20; // dim warm-gray foam
+    body *= 1.0 + foam * 0.70;
+    body += vec3(0.48, 0.43, 0.42) * foam * 0.08; // dim warm-gray foam
 
     // subsurface glow against the light: THIN CRESTS transmit a dim jade-green
     // where sunlight actually passes through the water. Gated to the sun's
     // azimuth AND to un-shadowed sun — ungated it speckled pale-teal noise
     // across the dark off-path sea (the light-blue artifact).
-    body += vec3(0.05, 0.18, 0.14) * sunAlign * warmGate * shadow * crest * 0.55;
+    body += vec3(0.035, 0.095, 0.075) * sunAlign * warmGate * shadow * crest * 0.30;
 
     vec3 color = mix(body, reflColor, fresnel);
 
@@ -422,9 +422,9 @@ void main() {
     float gateFade = smoothstep(250.0, 1100.0, dist);
     float tightFade = 1.0 - smoothstep(300.0, 1200.0, dist);
     float sparkleGate = mix(0.55 + 0.90 * chaos, 1.0, gateFade);
-    float glint = pow(NdH, 520.0) * 6.0 * tightFade; // pinpoint sparkles
-    float glintMid = pow(NdH, 90.0) * 0.55;          // mid falloff keeps it grainy
-    float glintWide = pow(NdH, 14.0) * 0.22;         // soft sheen around the path
+    float glint = pow(NdH, 360.0) * 2.4 * tightFade; // pinpoint sparkles
+    float glintMid = pow(NdH, 72.0) * 0.32;          // mid falloff keeps it grainy
+    float glintWide = pow(NdH, 12.0) * 0.14;         // soft sheen around the path
     color += vec3(1.0, 0.64, 0.38) * (glint + glintMid + glintWide * pathGate)
              * (0.25 + max(L.y, 0.0) * 1.2) * pathGate * shadow * sparkleGate;
 

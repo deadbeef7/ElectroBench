@@ -70,7 +70,7 @@ inline void Display(float r, float g, float b, float albedoMean, float out[3]) {
   r = Mix(r, r * 0.93f, cool);
   g = Mix(g, g * 0.98f, cool);
   b = Mix(b, b * 1.13f, cool);
-  const float warm = SmoothStep(0.52f, 1.00f, lum) * 0.45f;
+  const float warm = SmoothStep(0.52f, 1.00f, lum) * 0.20f;
   r = Mix(r, r * 1.07f, warm);
   g = Mix(g, g * 1.01f, warm);
   b = Mix(b, b * 0.92f, warm);
@@ -128,7 +128,7 @@ inline void Surface(const float albedo[3], float nx, float ny, float nz,
   const float ndl = nx * sun[0] + ny * sun[1] + nz * sun[2];
   const float diff = Saturate((ndl + wrap) / (1.0f + wrap));
 
-  const float sunR = 1.00f, sunG = 0.66f, sunB = 0.34f;
+  const float sunR = 1.00f, sunG = 0.76f, sunB = 0.56f;
   float r = albedo[0] * (ambR + sunR * diff * 1.15f);
   float g = albedo[1] * (ambG + sunG * diff * 1.15f);
   float b = albedo[2] * (ambB + sunB * diff * 1.15f);
@@ -161,7 +161,7 @@ inline void Surface(const float albedo[3], float nx, float ny, float nz,
   // own road pixel (163,110,77 - the frame is the sun's side, so the carriageway
   // there is lit by the full sunset) made the surface read as red tarmac at
   // 480x272, where the whole frame is already warm and there is no detail to
-  // say "asphalt" with. A grey reflection (142,130,124 after the tail) is what
+  // say "asphalt" with. A grey reflection (141,129,125 after the tail) is what
   // reads as road; buildtools/test_psp_shadetail.cxx asserts neutrality rather
   // than the reference pixel for exactly that reason.
   if (m == kMatRoad) {

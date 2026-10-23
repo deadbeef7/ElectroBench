@@ -69,6 +69,24 @@ ABIS := arm64-v8a armeabi-v7a x86_64
 
 BUILD := $(ROOT)/build-android
 APK := $(ROOT)/ElectroBench-android.apk
+.PHONY: all clean check verify doctor apk host-render host-png host-shaders check-artifacts
+all: $(APK)
+
+# On a fresh checkout, source and tracked APK mtimes may be identical. If the
+# complete Android packaging toolchain is available, invalidate only an APK
+# whose embedded shaders differ from source so `make` actually repackages them.
+ifneq ($(filter all apk,$(MAKECMDGOALS)),)
+ifneq ($(strip $(MAKECMDGOALS)),clean)
+ifneq ($(wildcard $(CXX_arm64-v8a) $(CXX_armeabi-v7a) $(CXX_x86_64) $(AAPT2) $(APKSIGNER) $(ZIPALIGN) $(GLUE)),)
+$(shell python3 $(ROOT)/buildtools/invalidate_stale_package.py $(APK) "assets/")
+endif
+endif
+endif
+ifeq ($(strip $(MAKECMDGOALS)),)
+ifneq ($(wildcard $(CXX_arm64-v8a) $(CXX_armeabi-v7a) $(CXX_x86_64) $(AAPT2) $(APKSIGNER) $(ZIPALIGN) $(GLUE)),)
+$(shell python3 $(ROOT)/buildtools/invalidate_stale_package.py $(APK) "assets/")
+endif
+endif
 KEYSTORE := $(BUILD)/debug.keystore
 STAGE := $(BUILD)/apk
 
@@ -143,8 +161,12 @@ RES := $(foreach d,$(ICON_DENSITIES),$(BUILD)/res/mipmap-$(d)/ic_launcher.png)
 STALE_RES := $(BUILD)/res/mipmap
 SO_FILES := $(foreach abi,$(ABIS),$(BUILD)/$(abi)/libmain.so)
 
-.PHONY: all clean check verify doctor apk host-render host-png host-shaders
+.PHONY: all clean check verify doctor apk host-render host-png host-shaders FORCE
 all: $(APK)
+
+# The project is commonly distributed as a ZIP, which may normalize mtimes.
+# Force APK repacking so the embedded shaders can never silently lag the tree.
+FORCE:
 
 # ------------------------------------------- host OpenGL ES 3 render check
 # The APK cannot be run here: no device, no emulator, no KVM. So the scenes and
@@ -233,7 +255,7 @@ $(KEYSTORE):
 	fi
 
 # -------------------------------------------------------------------------- APK
-$(APK): $(SO_FILES) $(RES) $(SHADERS) $(ROOT)/android/AndroidManifest.xml $(KEYSTORE)
+$(APK): FORCE $(SO_FILES) $(RES) $(SHADERS) $(ROOT)/android/AndroidManifest.xml $(KEYSTORE)
 	@rm -rf $(STAGE)
 	@mkdir -p $(STAGE)/assets
 	cp -R $(ROOT)/shaders $(STAGE)/assets/shaders
@@ -265,6 +287,10 @@ $(APK): $(SO_FILES) $(RES) $(SHADERS) $(ROOT)/android/AndroidManifest.xml $(KEYS
 # drift.
 check:
 	sh $(ROOT)/buildtools/check_shaders.sh
+
+# Content-based check: catches stale shader assets even when checkout mtimes match.
+check-artifacts:
+	python3 $(ROOT)/buildtools/check_artifacts.py
 
 verify: $(APK)
 	@echo "--- manifest (binary manifest read back by aapt2)"

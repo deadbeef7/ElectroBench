@@ -42,7 +42,14 @@ inline std::string resolveAssetPath(const char *path) {
   // app0: mount, so there is no CWD-relative or exe-relative search to do --
   // and no SDL_GetBasePath() to do it with either. The path is still existence
   // checked so a missing shader reports the same way as on desktop.
-  const std::string fromApp = "app0:/" + p;
+  //
+  // The mount prefix is a compile-time constant so `make host-render` can build
+  // the SAME scene translation units for the host with the prefix empty and read
+  // the checkout's shaders/ directly. Nothing on the console overrides it.
+#ifndef ELECTROBENCH_ASSET_PREFIX
+#define ELECTROBENCH_ASSET_PREFIX "app0:/"
+#endif
+  const std::string fromApp = std::string(ELECTROBENCH_ASSET_PREFIX) + p;
   if (assetFileExists(fromApp)) {
     if (assetTraceSelected()) std::printf("  asset %-34s -> %s\n", path, fromApp.c_str());
     return fromApp;

@@ -341,7 +341,7 @@ void main() {
 
     if (abs(m - kMatSteel) < 0.5) wrap = 0.13;
     float diff = clamp((dot(N, L) + wrap) / (1.0 + wrap), 0.0, 1.0);
-    vec3 sunTint = vec3(1.00, 0.66, 0.34);
+    vec3 sunTint = vec3(1.00, 0.76, 0.56);
 
 
     vec3 H = normalize(L + V);
@@ -430,7 +430,7 @@ void main() {
     col = mix(col, col * vec3(0.93, 0.98, 1.13),
               (1.0 - smoothstep(0.02, 0.34, lum)) * 0.50);
     col = mix(col, col * vec3(1.07, 1.01, 0.92),
-              smoothstep(0.52, 1.00, lum) * 0.45);
+              smoothstep(0.52, 1.00, lum) * 0.20);
     col = clamp(mix(vec3(lum), col, 1.12), 0.0, 1.0);
 
 

@@ -7,7 +7,7 @@
 # the code. (tools/ is intentionally untracked from git; it lives locally.)
 #
 # From the repo root:
-#   sh tools/build_deps.sh   # once: builds vitaGL + vitaShaRK into $VITASDK
+#   Install/build vitaGL, vitaShaRK and math-neon into $VITASDK (see README.md)
 #   make                     # -> ./ElectroBench-vita.vpk
 #   make check               # shader validation only
 # ===========================================================================
@@ -31,6 +31,20 @@ VELF := $(BUILD)/ElectroBench-vita.velf
 EBOOT := $(BUILD)/eboot.bin
 SFO := $(BUILD)/param.sfo
 VPK := ElectroBench-vita.vpk
+
+# A checkout can give source files and a tracked VPK identical mtimes. When the
+# Vita tools are installed, compare embedded shader bytes before Make decides
+# the package is up to date; remove only a confirmed-stale package.
+ifneq ($(filter all vpk,$(MAKECMDGOALS)),)
+ifneq ($(wildcard $(VITA_PACK_VPK) $(VITA_MAKE_FSELF) $(VITA_ELF_CREATE) $(CXX)),)
+$(shell python3 buildtools/invalidate_stale_package.py $(VPK) "")
+endif
+endif
+ifeq ($(strip $(MAKECMDGOALS)),)
+ifneq ($(wildcard $(VITA_PACK_VPK) $(VITA_MAKE_FSELF) $(VITA_ELF_CREATE) $(CXX)),)
+$(shell python3 buildtools/invalidate_stale_package.py $(VPK) "")
+endif
+endif
 
 # -Wl,-q keeps the relocation sections vita-elf-create needs. -DELECTROBENCH_VITA
 # switches lib/asset_path.hxx to the app0: branch and marks the port's sources.
@@ -66,7 +80,7 @@ OBJS := $(BUILD)/vita_main.o $(BUILD)/vita_sdl.o $(BUILD)/jobs.o \
 # holding the previous revision of the shaders.
 SHADERS := $(wildcard shaders/*/*.glsl)
 
-.PHONY: all clean check vpk check-codegen
+.PHONY: all clean check vpk check-codegen check-artifacts host-render
 all: $(VPK)
 
 # ------------------------------------------------------------------ compile
@@ -118,9 +132,56 @@ $(BUILD)/icon0.png: buildtools/make_icon_vita.py buildtools/make_icons.py
 	@mkdir -p $(BUILD)
 	python3 buildtools/make_icon_vita.py $@
 
+# ------------------------------------------------- host render, Vita code paths
+# Vita3K cannot hand back a frame in this sandbox (its readback comes out black
+# whatever the VPK contains), so the way to actually LOOK at the port's shaders
+# is to run the same scene translation units on the host's own OpenGL ES 3
+# driver and let the scenes' screenshot path write the frame:
+#
+#   make host-render    # -> build-vita/host/scene2.ppm, scene4.ppm
+#
+# The scenes are compiled with -DELECTROBENCH_VITA, exactly like the VPK, so the
+# frames follow the port's own branches: uEnvCube = 0 (the sea evaluates the sky
+# gradient analytically instead of sampling the cubemap), no environment probe
+# pass, no MSAA, the same shaders/*.glsl bytes that get packed into the archive.
+# ELECTROBENCH_ASSET_PREFIX="" makes resolveAssetPath() read the checkout
+# instead of the console's app0: mount. What this does NOT cover is everything
+# below the GL layer: SceShaccCg's fp16 mediump, vitaGL's GL->GXM translation and
+# the SceCtrl/display glue. Only a console (or Vita3K) exercises those.
+HOST_CXX ?= g++
+HOST_CFLAGS := -std=c++17 -O2 -pthread -DELECTROBENCH_VITA \
+               -DELECTROBENCH_ASSET_PREFIX='""' \
+               -Iandroid/include -Iinclude -Ilib
+HOST_SRCS := android/host/host_main.cxx android/host/host_sdl.cxx \
+             src/jobs.cxx src/scene2.cxx src/scene4.cxx
+HOST_BIN := $(BUILD)/host/host_vita
+HOST_SHOT_SECONDS ?= 3.0
+
+$(HOST_BIN): $(HOST_SRCS) $(SHADERS)
+	@mkdir -p $(dir $@)
+	$(HOST_CXX) $(HOST_CFLAGS) -o $@ $(HOST_SRCS) -lEGL -lGLESv2
+
+host-render: $(HOST_BIN)
+	@for scene in 2 4; do \
+	    echo "--- scene $$scene"; \
+	    if command -v xvfb-run >/dev/null 2>&1; then \
+	        LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s "-screen 0 1366x768x24" \
+	            $(HOST_BIN) $$scene $(BUILD)/host/scene$$scene.ppm $(HOST_SHOT_SECONDS); \
+	    else \
+	        LIBGL_ALWAYS_SOFTWARE=1 \
+	            $(HOST_BIN) $$scene $(BUILD)/host/scene$$scene.ppm $(HOST_SHOT_SECONDS); \
+	    fi; \
+	done
+	@ls -l $(BUILD)/host/*.ppm
+
 # -------------------------------------------------------------------- checks
 check:
 	sh buildtools/check_shaders.sh
+
+# Verify that the tracked VPK/APK actually contain the current shader bytes.
+# This is content-based because checkout timestamps cannot reliably detect stale archives.
+check-artifacts:
+	python3 buildtools/check_artifacts.py
 
 # Asserts the PSP VFPU kernel and this build's NEON codegen are present in the
 # objects (see buildtools/check_codegen.sh). Needs the PSP port built too.

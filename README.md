@@ -61,6 +61,30 @@ vitaSDK's `libSceShaccCg_stub.a`. The script injects a header plus no-op
 definitions, which is the pre-extension code path older vitaGL releases used;
 `shark_compile_shader_extended()` still drives SceShaccCg.
 
+### Looking at the port's shaders without the emulator
+
+Vita3K cannot hand back a frame in a container: its readback comes out black for
+any VPK here, the one from before the shader changes included, so the emulator is
+not a way to *see* what the port draws. Since what is being debugged is the
+shaders, `make host-render` runs the port's own path instead of the emulator's:
+
+```sh
+make host-render        # -> build-vita/host/scene2.ppm, build-vita/host/scene4.ppm
+```
+
+It compiles `src/scene2.cxx` and `src/scene4.cxx` with `-DELECTROBENCH_VITA` —
+the same translation units and the same branch the eboot takes — and renders them
+on the host's OpenGL ES 3 driver (surfaceless EGL, Mesa llvmpipe). The frames
+therefore follow the port's own choices: `uEnvCube = 0` (the sea evaluates the sky
+gradient analytically, no environment probe, no readback), no MSAA, the exact
+`shaders/*.glsl` bytes that get packed into the archive, and the scenes' own
+screenshot path writes them. `build-vita/host/host_vita --check-shaders` links all
+eight programs through the same driver.
+
+What it cannot answer: SceShaccCg's fp16 `mediump` (llvmpipe keeps mediump in
+fp32), vitaGL's GL -> GXM translation and the SceCtrl/SceDisplay glue. Those need
+a console, or an emulator that can show its own output.
+
 ## Install and run
 
 Copy `ElectroBench-vita.vpk` to `ux0:/` and install it with VitaShell (or any
@@ -917,6 +941,26 @@ constants, with the cloud silhouettes deliberately omitted. Consequences:
   scene 2 to the 1 FPS in the report);
 * two fewer texture fetches per sea pixel;
 * nothing left to alias or seam: the reflection is continuous by construction.
+
+**The dark line at the waterline.** That last bullet was only true of the
+reflection *algebra*: `analyticSky()` had two of the three horizon terms of the
+sky stage, not all three. `sky_frag.glsl` draws `skyGradient()` (which includes
+the `0.08 * horizonBoost` low-altitude lift) and then adds the warm dust band
+`vec3(0.16, 0.075, 0.055) * (1 - smoothstep(0, 0.05, h))` under the cloud deck;
+the sea's twin had neither. In the first few degrees above the horizon both are
+a large fraction of the sky's own colour, and the far sea is ~80%
+`skyAtHorizon` after the haze mix — so the water met the sky about 30 luma
+darker than the band it mirrors, a straight hard edge along the waterline
+instead of a continuous one. Both terms are now in `analyticSky()`, copied from
+the sky stage's own numbers.
+
+Measured with `make host-render` on the Vita path, same frame (0 pixels differ
+above the horizon, so the A/B is clean): the row-to-row step at the waterline
+falls from **30.5 to 13.9 luma** (mean over 171 columns; the cube path's own
+seam at the same frame is ~15, because the two tonemaps differ), and the far
+sea (rows 417-460) rises from 62.0 to 67.1 mean luma while the rest of the sea
+and the whole sky are untouched. The desktop/Android path never calls
+`analyticSky()` and its frame is unchanged.
 
 Measured on the host's ES driver, same frame, Vita path before vs after: pixels
 in the sea whose strongest neighbour difference exceeds 70 fall from 3,455 to
