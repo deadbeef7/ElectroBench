@@ -121,14 +121,37 @@ const float PI = 3.14159265359;
 // so crest banks light up where the geometry actually rises. The displacement
 // shader additionally sharpens crests and adds two long swells; that asymmetry
 // is deliberate (sharp banks, smooth lighting).
-float waveHeight(vec2 p, float t) {
+// Phases here reach ~2000 rad (9000 for the detail wavelets below). A GPU's
+// sin()/cos() are only accurate near zero - SceShaccCg's and the mobile
+// drivers' large-argument range reduction is coarse - so every phase is
+// reduced to [0, 2*PI) in highp first. The reduced value is what the hardware
+// sees, so the lighting no longer turns into flat plates on real hardware.
+const float TWO_PI = 6.28318530718;
+float wrapPhase(float x) { return x - TWO_PI * floor(x * 0.15915494309); }
+
+// One wave of the normal field: adds its height to h and its analytic slope
+// (dh/dp) to g.
+void addWave(vec2 p, vec2 dir, float k, float w, float t, float amp,
+             inout float h, inout vec2 g) {
+    float ph = wrapPhase(dot(p, dir) * k + t * w);
+    h += sin(ph) * amp;
+    g += dir * (cos(ph) * amp * k);
+}
+
+// Height and ANALYTIC gradient of the normal field (same six waves, same scale
+// and speed as before, so it still matches sea_vert.glsl). This replaces the
+// three finite-difference evaluations at e = 0.35: differencing nine large
+// phases is what made the gradient a staircase, and it cost three times the
+// sines. The gradient is the exact derivative the differences approximated.
+float waveHG(vec2 p, float t, out vec2 g) {
     float h = 0.0;
-    h += sin(dot(p, vec2(0.98,  0.20)) * 0.170 + t * 1.30) * 1.55;
-    h += sin(dot(p, vec2(-0.64,  0.77)) * 0.240 + t * 1.60) * 1.00;
-    h += sin(dot(p, vec2( 0.36, -0.93)) * 0.380 + t * 2.10) * 0.55;
-    h += sin(dot(p, vec2(-0.91, -0.42)) * 0.540 + t * 2.70) * 0.34;
-    h += sin(dot(p, vec2( 0.59,  0.81)) * 0.860 + t * 3.40) * 0.20;
-    h += sin(dot(p, vec2(-0.20,  0.98)) * 1.450 + t * 4.40) * 0.11;
+    g = vec2(0.0);
+    addWave(p, vec2( 0.98,  0.20), 0.170, 1.30, t, 1.55, h, g);
+    addWave(p, vec2(-0.64,  0.77), 0.240, 1.60, t, 1.00, h, g);
+    addWave(p, vec2( 0.36, -0.93), 0.380, 2.10, t, 0.55, h, g);
+    addWave(p, vec2(-0.91, -0.42), 0.540, 2.70, t, 0.34, h, g);
+    addWave(p, vec2( 0.59,  0.81), 0.860, 3.40, t, 0.20, h, g);
+    addWave(p, vec2(-0.20,  0.98), 1.450, 4.40, t, 0.11, h, g);
     return h;
 }
 
@@ -183,9 +206,9 @@ float cloudShadow(vec3 world, vec3 sd) {
 void detailNormals(vec2 p, float t, float dist, inout vec2 grad) {
     float fade = exp(-dist * 0.004);   // micro-chop is a NEAR-camera feature
     if (fade < 0.02) return;
-    float w1 = sin(dot(p, vec2(0.86, 0.51)) * 1.15 + t * 5.10);
-    float w2 = sin(dot(p, vec2(-0.44, 0.90)) * 2.30 + t * 6.80);
-    float w3 = sin(dot(p, vec2(0.22, -0.97)) * 4.40 + t * 8.60);
+    float w1 = sin(wrapPhase(dot(p, vec2(0.86, 0.51)) * 1.15 + t * 5.10));
+    float w2 = sin(wrapPhase(dot(p, vec2(-0.44, 0.90)) * 2.30 + t * 6.80));
+    float w3 = sin(wrapPhase(dot(p, vec2(0.22, -0.97)) * 4.40 + t * 8.60));
     grad += vec2(0.86, 0.51) * 1.15 * w1 * 0.045;
     grad += vec2(-0.44, 0.90) * 2.30 * w2 * 0.022;
     grad += vec2(0.22, -0.97) * 4.40 * w3 * 0.010;
@@ -231,11 +254,9 @@ void main() {
 
     // ---- analytic wave normal (finite differences of the wave field) ----
     float dist = length(vWorld.xz - uEyePos.xz);
-    float e = 0.35;
-    float hC = waveHeight(vWorld.xz, uTime);
-    float hX = waveHeight(vWorld.xz + vec2(e, 0.0), uTime);
-    float hZ = waveHeight(vWorld.xz + vec2(0.0, e), uTime);
-    vec2 grad = vec2(-(hX - hC) / e, -(hZ - hC) / e);
+    vec2 hg;
+    float hC = waveHG(vWorld.xz, uTime, hg);
+    vec2 grad = -hg;
     detailNormals(vWorld.xz, uTime, dist, grad);
     vec3 N = normalize(vec3(grad.x, 1.0, grad.y));
 
@@ -359,16 +380,16 @@ void main() {
     // average, the crest gate stops varying, and the additive term below then
     // paints flat pale plates on the water instead of foam - the pale patches
     // on both sides of the frame on the console, where the grazing-angle mip
-    // selection lands on one level across whole crests. Fading it out by 260 m
+    // selection lands on one level across whole crests. Fading it out by 420 m
     // leaves the far sea to the reflection and the haze, which are continuous.
-    float foamFade = 1.0 - smoothstep(70.0, 260.0, dist);
+    float foamFade = 1.0 - smoothstep(120.0, 420.0, dist);
     foam *= crest * slopeFacing * (0.35 + 0.65 * chaos) * foamFade;
     // Foam brightens the water's own shading rather than replacing it. As a
     // pure additive term at the old gain (0.55 of a pale lavender over a body
     // of ~0.05) it flattened the wave's light inside every crest, which is what
     // made the patches read as cards laid on the water rather than as foam.
-    body *= 1.0 + foam * 0.70;
-    body += vec3(0.48, 0.43, 0.42) * foam * 0.08; // dim warm-gray foam
+    body *= 1.0 + foam * 1.35;
+    body += vec3(0.55, 0.48, 0.58) * foam * 0.20; // dim warm-gray foam
 
     // subsurface glow against the light: THIN CRESTS transmit a dim jade-green
     // where sunlight actually passes through the water. Gated to the sun's
@@ -422,9 +443,24 @@ void main() {
     float gateFade = smoothstep(250.0, 1100.0, dist);
     float tightFade = 1.0 - smoothstep(300.0, 1200.0, dist);
     float sparkleGate = mix(0.55 + 0.90 * chaos, 1.0, gateFade);
-    float glint = pow(NdH, 360.0) * 2.4 * tightFade; // pinpoint sparkles
-    float glintMid = pow(NdH, 72.0) * 0.32;          // mid falloff keeps it grainy
-    float glintWide = pow(NdH, 12.0) * 0.14;         // soft sheen around the path
+    // Footprint-aware lobes. On the water a pixel covers dist*pixelAngle/sin(view
+    // elevation) metres along the view direction, and the wave slope changes by
+    // ~0.22 per metre (root of the summed squared slope-derivatives of the six
+    // waves), so a pixel far enough out spans a whole range of normals. A lobe
+    // narrower than that range cannot be resolved: it lights isolated one-pixel
+    // rows - the horizontal orange dashes on the sea. Averaging a lobe
+    // pow(NdH, n) over a normal spread of variance s2 gives the same lobe with
+    // exponent n / (1 + n*s2), scaled by 1 / (1 + n*s2): wider and dimmer, so
+    // the energy is kept and the sparkle becomes a smooth sheen. Near the camera
+    // s2 is ~0 and nothing changes.
+    float foot = dist * 0.0012 / max(V.y, 0.04);
+    float s2 = 0.05 * foot * foot;
+    float k520 = 1.0 + 520.0 * s2;
+    float k90  = 1.0 + 90.0 * s2;
+    float k14  = 1.0 + 14.0 * s2;
+    float glint = pow(NdH, 520.0 / k520) * 6.0 / k520 * tightFade; // pinpoint sparkles
+    float glintMid = pow(NdH, 90.0 / k90) * 0.55 / k90;            // mid falloff keeps it grainy
+    float glintWide = pow(NdH, 14.0 / k14) * 0.22 / k14;           // soft sheen around the path
     color += vec3(1.0, 0.64, 0.38) * (glint + glintMid + glintWide * pathGate)
              * (0.25 + max(L.y, 0.0) * 1.2) * pathGate * shadow * sparkleGate;
 
