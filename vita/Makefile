@@ -28,12 +28,12 @@ SFO := $(BUILD)/param.sfo
 VPK := ElectroBench-vita.vpk
 ifneq ($(filter all vpk,$(MAKECMDGOALS)),)
 ifneq ($(wildcard $(VITA_PACK_VPK) $(VITA_MAKE_FSELF) $(VITA_ELF_CREATE) $(CXX)),)
-$(shell python3 buildtools/invalidate_stale_package.py $(VPK) "")
+$(shell python3 ../buildtools/invalidate_stale_package.py $(VPK) "")
 endif
 endif
 ifeq ($(strip $(MAKECMDGOALS)),)
 ifneq ($(wildcard $(VITA_PACK_VPK) $(VITA_MAKE_FSELF) $(VITA_ELF_CREATE) $(CXX)),)
-$(shell python3 buildtools/invalidate_stale_package.py $(VPK) "")
+$(shell python3 ../buildtools/invalidate_stale_package.py $(VPK) "")
 endif
 endif
 

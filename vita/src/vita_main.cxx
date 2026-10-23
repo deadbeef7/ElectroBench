@@ -15,6 +15,7 @@
 int RunOceanScene(bool *gaveUpOut);  // scene 2 (GL 3.3 dusk ocean)
 int RunPoleScene(bool *gaveUpOut);   // scene 4 (GL 3.3 power lines)
 
+void OceanSceneSetScreenshot(const char *path);
 void OceanSceneSetShotTime(float t);
 void PoleSceneSetScreenshot(const char *path);
 void PoleSceneSetShotTime(float t);
