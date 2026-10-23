@@ -45,7 +45,7 @@ LIBS := -lvitaGL -lvitashark -lSceShaccCgExt -lmathneon \
         -lSceGxm_stub -lSceDisplay_stub -lSceCtrl_stub -lSceSysmodule_stub \
         -lSceCommonDialog_stub -lSceAppUtil_stub -lSceAppMgr_stub \
         -lSceLibKernel_stub -lSceKernelDmacMgr_stub -lSceShaccCg_stub \
-        -lScePower_stub -lSceTouch_stub -lSceKernelModulemgr_stub -ltaihen \
+        -lScePower_stub -lSceTouch_stub -lSceKernelModulemgr_stub -ltaihen_stub \
         -lstdc++ -lm -lc
 
 OBJS := $(BUILD)/vita_main.o $(BUILD)/vita_sdl.o $(BUILD)/jobs.o \
@@ -102,6 +102,6 @@ $(VPK): $(EBOOT) $(SFO) $(BUILD)/icon0.png $(SHADERS)
 		$@
 	@echo "VPK: $@ ($$(stat -c%s $@ ) bytes)"
 
-$(BUILD)/icon0.png: buildtools/make_icon_vita.py buildtools/make_icons.py
+$(BUILD)/icon0.png: ../buildtools/make_icon_vita.py ../buildtools/make_icons.py
 	@mkdir -p $(BUILD)
-	python3 buildtools/make_icon_vita.py $@
+	python3 ../buildtools/make_icon_vita.py $@
