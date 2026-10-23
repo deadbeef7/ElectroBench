@@ -729,12 +729,26 @@ void AddGroundGeometry() {
   // The ground is sliced along Z rather than drawn as one quad: the GE's fog
   // is per vertex, and over a single 1.2 km triangle the fog gradient would
   // be interpolated across the whole screen instead of following distance.
+  //
+  // It is also sliced along X, and that is not cosmetic. A 860 m wide quad
+  // spans thousands of pixels past the left and right screen edges from any
+  // point in the corridor, and the GE's rasteriser keeps only a guard band
+  // around the viewport: such a quad is dropped (or, past ~60 m, reduced to a
+  // sliver near its centre) instead of being clipped. That is why the whole
+  // ground was missing while the 5 m carriageway and the objects were not - a
+  // 60 m column spans at most a few screens on either side, which it does
+  // rasterise. Verified in the emulator with 860/200/60 m wide probe quads at
+  // the same depth: the 60 m one drew across the frame, the wide ones did not.
   const float kGroundZ0 = -300.0f, kGroundZ1 = 880.0f, kSlice = 60.0f;
+  const float kColumn = 60.0f, kGroundX = 430.0f;
   for (float z = kGroundZ0; z < kGroundZ1; z += kSlice) {
     float zz = z + kSlice > kGroundZ1 ? kGroundZ1 : z + kSlice;
-    float q[4][3] = {{-430.0f, kGroundY, z}, {430.0f, kGroundY, z},
-                     {430.0f, kGroundY, zz}, {-430.0f, kGroundY, zz}};
-    AddQuad(q, n[0], n[1], n[2], kGravel, kMatGround);
+    for (float x = -kGroundX; x < kGroundX; x += kColumn) {
+      float xx = x + kColumn > kGroundX ? kGroundX : x + kColumn;
+      float q[4][3] = {{x, kGroundY, z}, {xx, kGroundY, z},
+                       {xx, kGroundY, zz}, {x, kGroundY, zz}};
+      AddQuad(q, n[0], n[1], n[2], kGravel, kMatGround);
+    }
   }
   gGroundIdxCount = gSolidIdxCount;
   gRoadIdxOffset = gGroundIdxCount;

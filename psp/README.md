@@ -69,9 +69,10 @@ combined fps report is appended to `ms0:/ElectroBench-psp.txt`.
 
 Both scenes are initialised before the first timed frame, so scene 4's geometry
 bake (the largest single piece of CPU work in either scene) is never charged to
-a scene's average. Scene 4's static vertex budget is 25,508 of 60,000 vertices
-and 47,022 indices (the edge lines are now sliced like the rest of the ribbon,
-+88 vertices / +132 indices); the build prints the counts at startup.
+a scene's average. Scene 4's static vertex budget is 26,628 of 60,000 vertices
+and 48,702 indices (the ground is now a 15-column grid, not 20 full-width
+strips: +1,120 vertices / +1,680 indices, see the red-road note below); the
+build prints the counts at startup.
 
 Scene 4's approximations, all forced by the GE:
 
@@ -121,6 +122,20 @@ Scene 4's approximations, all forced by the GE:
   no clouds in it at all.
 * cables are one-pixel lines: at 480x272 a 3 cm conductor is sub-pixel, and the
   desktop tube tessellation would cost more vertices than the rest of the scene.
+* the ground is one 60 m x 60 m quad grid, and clipping is enabled. Both are
+  required for it to appear at all. A full-width quad (the old 860 m strips)
+  reaches thousands of pixels past either screen edge, and the GE's rasteriser
+  only keeps a guard band around the viewport, so it was dropped instead of
+  clipped - the whole floor was missing and the sky's below-horizon band, a flat
+  orange-red `(222,74,25)`, showed through as a red road, with only the 5 m
+  carriageway, the objects and the pole shadows still drawn. And a quad that
+  crosses the near plane is dropped whole unless `GU_CLIP_PLANES` is enabled:
+  the strip the camera stands in always does, which is why the foreground was
+  missing *within* each strip. Both were measured in the emulator on the same
+  frame: an 860 m wide probe quad at 60-120 m drew one 61-pixel sliver, a 60 m
+  wide one drew across the frame, and a probe straddling the camera was absent
+  until clipping was enabled. `sceGuEnable(GU_CLIP_PLANES)` in `GuInit()` and
+  `ResetDrawState()` is that switch.
 * the carriageway, its shoulders and the markings are their own draw pass, with
   the depth test off. They lie 3-5 cm above the gravel by design, and with this
   projection one 16-bit depth step is 5.3 cm at 35 m and 11.8 m at 520 m, so
@@ -201,7 +216,21 @@ they are recorded here:
    back on the link line after the port's own libraries, and a stray reference
    could still resolve from it.
 
-8. **`BUILD_PRX = 1` is still required, but it is not the 8002013C fix.**
+8. **Clipping is off unless `GU_CLIP_PLANES` is enabled, and wide primitives
+   are dropped.** These two made the whole ground of scene 4 disappear, which
+   reads as a flat red road: the colour under it is the sky's below-horizon
+   bake, `(222,74,25)`, and only the depth-free road pass over it was left.
+   With clipping off, a quad that crosses the near plane is not clipped, it is
+   dropped entire - and the 60 m ground strip the camera stands in always
+   crosses it. With clipping on, a quad whose projected corners are thousands
+   of pixels outside the viewport is still dropped (the GE rasteriser keeps a
+   limit band, not an infinite one): the old full-width 860 m strips were, the
+   5 m carriageway was not. The ground is a 60 m grid in X and Z for that
+   reason. Both were measured with probe quads in the emulator, and
+   `sceGuEnable(GU_CLIP_PLANES)` is now set in `GuInit()` and
+   `ResetDrawState()`.
+
+9. **`BUILD_PRX = 1` is still required, but it is not the 8002013C fix.**
    Without it build.mak packs the stripped ELF and there is no
    `.rodata.sceModuleInfo` at all. With it, this toolchain's `psp-prxgen`
    emits an `ET_SCE_PRX` (`Type: ffa0`) rather than a `~PSP` envelope - that

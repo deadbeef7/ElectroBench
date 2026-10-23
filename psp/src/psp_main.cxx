@@ -183,6 +183,16 @@ void GuInit() {
   sceGuDepthRange(65535, 0);
   sceGuDepthFunc(GU_GEQUAL);
   sceGuEnable(GU_DEPTH_TEST);
+  // View-volume clipping. The GE clips a primitive against the near plane (and
+  // the user clip planes) only while GU_CLIP_PLANES is on; with it off a
+  // triangle that crosses the near plane is dropped whole instead of being
+  // clipped. Scene 4's ground and carriageway are 60 m slices, so the slice the
+  // camera stands in always crosses the 0.35 near plane and its geometry - the
+  // foreground right under the eye - vanished, leaving the sky's below-horizon
+  // band (a flat orange-red) showing through. Verified in the emulator with a
+  // probe quad straddling the camera: absent with clipping off, drawn across
+  // the lower screen with it on.
+  sceGuEnable(GU_CLIP_PLANES);
   sceGuFrontFace(GU_CW);
   sceGuDisable(GU_CULL_FACE);
   sceGuShadeModel(GU_SMOOTH);
@@ -274,6 +284,7 @@ void ResetDrawState() {
   sceGuDisable(GU_ALPHA_TEST);
   sceGuDisable(GU_CULL_FACE);
   sceGuEnable(GU_DEPTH_TEST);
+  sceGuEnable(GU_CLIP_PLANES);
   sceGuDepthMask(GU_FALSE);
   sceGuDepthFunc(GU_GEQUAL);
 }
