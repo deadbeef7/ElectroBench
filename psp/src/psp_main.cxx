@@ -403,15 +403,9 @@ SceneStat RunScene(int scene) {
       stat.fps = t > 0.0 ? (double)frames / t : 0.0;
     }
 
-    // Leave the run only once the frame is complete. A break between
-    // sceGuStart and sceGuFinish leaves the display list open, and the next
-    // scene's list is then enqueued behind a stream the GE never sees the end
-    // of: the console hangs on the results panel instead of starting scene 4.
     if (sceneDone) break;
   }
 
-  // A quit (START) before the run finished leaves the stat empty; main() then
-  // omits that scene from the result file.
   return stat;
 }
 
@@ -420,7 +414,6 @@ SceneStat RunScene(int scene) {
 int main(int argc, char *argv[]) {
   (void)argc;
   (void)argv;
-  scePowerSetClockFrequency(333, 333, 166);
   sceCtrlSetSamplingCycle(0);
   sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
 

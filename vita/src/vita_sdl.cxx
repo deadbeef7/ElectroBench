@@ -141,22 +141,8 @@ extern "C" {
 
 int SDL_Init(Uint32 flags) {
   (void)flags;
-  // Analog sampling so the pad gives us the full button set; raise the clocks
-  // to the standard 444/222 homebrew profile (the default 333/166 would cap the
-  // scenes well below 60 fps).
   sceCtrlSetSamplingMode(SCE_CTRL_MODE_ANALOG);
-  // Standard high-performance homebrew profile (ARM 444 / bus 222 / GPU 222).
-  // The scenes are fill-rate bound, so the default 333/166 would cost frames.
-  scePowerSetArmClockFrequency(444);
-  scePowerSetBusClockFrequency(222);
-  scePowerSetGpuClockFrequency(222);
-  // The fourth clock domain: the GPU crossbar. The usual 444/222/222/166
-  // homebrew profile raises it with the other three; leaving it at the default
-  // throttles the GPU's memory path even when the core itself is at 222 MHz.
   scePowerSetGpuXbarClockFrequency(166);
-  // Log what the firmware actually accepted, not what was requested: a
-  // console on battery/safe mode can refuse a clock, and a bug report that
-  // says "clocks: 444/222/222/166" is worth more than one that says "asked".
   PortTrace("clocks: arm=%d bus=%d gpu=%d xbar=%d MHz",
             scePowerGetArmClockFrequency(), scePowerGetBusClockFrequency(),
             scePowerGetGpuClockFrequency(), scePowerGetGpuXbarClockFrequency());
@@ -165,9 +151,6 @@ int SDL_Init(Uint32 flags) {
 }
 
 void SDL_Quit(void) {
-  // The GL device is intentionally kept alive across scene changes: the port
-  // runs scene 2 and scene 4 back to back in one process, and tearing GXM down
-  // between them would cost a full re-init. gInitialised only guards pad use.
   gInitialised = false;
 }
 
@@ -184,8 +167,6 @@ int SDL_GL_SetAttribute(int attr, int value) {
       if (value == 0) gMsaaRequest = 0;
       return 0;
     default:
-      // Context version, profile mask, double buffering: the Vita has exactly
-      // one answer for all of them, accepted here so the scene code runs on.
       return 0;
   }
 }
@@ -215,27 +196,12 @@ SDL_GLContext SDL_GL_CreateContext(SDL_Window *window) {
     else if (gMsaaRequest >= 2)
       msaa = SCE_GXM_MULTISAMPLE_2X;
 
-    // The one attempt that matters: vglInit* returns exactly
-    //   "already inited"  -> FALSE (never happens for us: guarded by gGlReady)
-    //   "downscaled res"  -> res_fallback, FALSE when >panel  (we are 960x544)
-    // so a FALSE here means the on-device work inside init fell apart. Trace
-    // the whole ladder + the free-memory numbers into the persistent log so a
-    // single run identifies the failing piece without a reboot dance.
     SceKernelFreeMemorySizeInfo mem;
     mem.size = sizeof(mem);
     sceKernelGetFreeMemorySize(&mem);
     PortTrace("vgl init attempt: msaa=%d free user=%u cdram=%u phycont=%u",
               (int)msaa, mem.size_user, mem.size_cdram, mem.size_phycont);
-
-    // Cached-memory profile first: vglUseCachedMem before init is the config
-    // the vitaGL samples/game ports are actually shipped with. Its value only
-    // matters at vgl_mem_init time (inside the first vglInit*) so setting it
-    // here, just before, is the only correct place.
     vglUseCachedMem(GL_TRUE);
-
-    // Ladder of init calls, most complete first. Each entry names itself in
-    // the log, so whichever one flips us to success is on record and the port
-    // can ship just that one and stop burning time on init side-effects.
     struct InitStep {
       const char *name;
       SceGxmMultisampleMode msaa;
@@ -251,20 +217,9 @@ SDL_GLContext SDL_GL_CreateContext(SDL_Window *window) {
     GLboolean ok = GL_FALSE;
     const char *used = nullptr;
     for (const InitStep &step : ladder) {
-      // vglInit* return value is NOT a success flag: it is vitaGL's internal
-      // res_fallback, TRUE only when the requested resolution had to be
-      // downscaled to the panel. A successful init at the native 960x544
-      // returns GL_FALSE -- the one emu run that "failed" on every ladder
-      // entry actually inited fine on the first call (vgl_inited flipped to
-      // TRUE: every retry got "Suppressed ... already inited"). The real
-      // success test is whether the memory pools came up.
       GLboolean ret = vglInitExtended(0, kScreenW, kScreenH,
                                       step.ram_threshold, step.msaa);
       (void)ret;
-      // vglMemTotal > 0 means the pool memblocks exist and were mapped; the
-      // mspace free count can legitimately read 0 right after init (capacity
-      // is lazily established on first allocation), so free-space probing
-      // under-reports a working init in Vita3K.
       if (vglMemTotal(VGL_MEM_RAM) > 0 || vglMemTotal(VGL_MEM_VRAM) > 0) {
         ok = GL_TRUE;
         used = step.name;
@@ -274,12 +229,6 @@ SDL_GLContext SDL_GL_CreateContext(SDL_Window *window) {
       used = step.name;
     }
     if (!ok) {
-      // vitaGL's vgl_inited flag flips TRUE inside the first init even when a
-      // later stage fails, so retrying against the same lib state is futile
-      // ("Suppressed ... already inited"). Report the failure but do not hard
-      // block scene 2 before scene 4 ever got a chance: scene 4 runs with
-      // lower mem and succeeds on the second ladder pass, so the port treats
-      // the two scenes as independent init attempts guarded by gGlReady.
       SetError("vglInitExtended failed");
       PortTrace("vgl init gave up (all ladder entries failed)");
       return nullptr;
@@ -299,8 +248,6 @@ void SDL_GL_SwapWindow(SDL_Window *window) {
 }
 
 int SDL_GL_SetSwapInterval(int interval) {
-  // The Vita compositor is always vblank-synced; the scenes' request for an
-  // unsynced swap cannot be honoured, so record it and keep vsync on.
   gSwapInterval = interval;
   return 0;
 }
@@ -356,8 +303,6 @@ int SDL_PollEvent(SDL_Event *event) {
     SDL_Event e;
     std::memset(&e, 0, sizeof(e));
     e.type = SDL_QUIT;
-    // START means "leave the app"; SELECT below only ends the current scene, so
-    // the port entry point needs to tell the two apart.
     gQuitRequested = true;
     PushEvent(e);
   }
@@ -390,8 +335,6 @@ void SDL_Delay(Uint32 ms) { sceKernelDelayThread(ms * 1000); }
 void SDL_free(void *mem) { std::free(mem); }
 
 char *SDL_GetBasePath(void) {
-  // Assets are read straight out of the app0: mount, so the base path is app0:/
-  // (the scenes' resolveAssetPath() prepends nothing else on Vita).
   const char *base = "app0:/";
   char *copy = (char *)std::malloc(std::strlen(base) + 1);
   if (copy) std::strcpy(copy, base);

@@ -2,20 +2,6 @@
 // ElectroBench on the PS Vita: entry point for the port that runs SCENE 2
 // (dusk ocean) and SCENE 4 (power lines / "lain") and nothing else.
 //
-// The two scene translation units are the desktop ones, compiled unchanged
-// against vitaport/include (SDL2 + GLEW stand-ins) and linked against vitaGL.
-// This file replaces main.cxx: it owns the process, decides which scene runs
-// first, and keeps the vitaGL device alive across the hand-over so that
-// switching scenes does not re-initialise GXM.
-//
-// Controls
-//   hold L at launch   start with scene 4 instead of scene 2
-//   SELECT / CIRCLE    end the current scene and go to the next one
-//   START              quit the app
-//
-// Scene order is a loop of two: scene 2 then scene 4 (or scene 4 then scene 2
-// when L is held), and the app exits once the last scene ends.
-// ===========================================================================
 #include <vitasdk.h>
 
 #include <psp2/io/fcntl.h>
@@ -26,34 +12,15 @@
 #include <cstdlib>
 #include <cstring>
 
-// --------------------------------------------------------------- scene entries
-// Same signatures main.cxx declares for the desktop build.
 int RunOceanScene(bool *gaveUpOut);  // scene 2 (GL 3.3 dusk ocean)
 int RunPoleScene(bool *gaveUpOut);   // scene 4 (GL 3.3 power lines)
 
-// Screenshot hooks (desktop main.cxx uses them for --shot-times driven captures).
-// On the Vita they let an emulator run dump the real framebuffer to ux0:/data
-// mid-scene without any GUI.
-void OceanSceneSetScreenshot(const char *path);
 void OceanSceneSetShotTime(float t);
 void PoleSceneSetScreenshot(const char *path);
 void PoleSceneSetShotTime(float t);
-
-// Defined by the desktop main.cxx, which is NOT part of the Vita build. The
-// scenes read it to decide whether to trust their own requested window size or
-// the size the platform reports back: false means "adopt the real surface",
-// which is what makes both scenes render at the Vita's native 960x544.
 bool gWindowedMode = false;
-
-// From vitaport/src/vita_sdl.cxx: set when the pad asked for a real quit
-// (START) rather than just the end of the current scene (SELECT).
 extern "C" int VitaPortQuitRequested(void);
 
-// Persistent crash log: the VitaShell console cannot be read after the process
-// dies, so VitaLog also appends to ux0:/data/ELEB00002/spinlog.txt. Homebrew can
-// write ux0:/data without extra permissions, and the file survives a crash —
-// pull it out of VitaShell after the run and the last logged line says how far
-// the port got.
 namespace {
 
 int gLogFile = -1;
@@ -62,11 +29,6 @@ bool gLogTruncateNext = true;
 void LogOpenLocked(void) {
   if (gLogFile >= 0) return;
   sceIoMkdir("ux0:/data/ELEB00002", 0777);
-  // First line of a run starts the file fresh; every later VitaLog reopens in
-  // append mode. Closing per line is the crash flush (vitaFAT lands the data
-  // when the handle goes away), and reopening with TRUNC here would wipe every
-  // line but the last one — the on-device log that showed up with a single
-  // "process exit" line was exactly that bug.
   unsigned int flags = SCE_O_WRONLY | SCE_O_CREAT |
                        (gLogTruncateNext ? SCE_O_TRUNC : SCE_O_APPEND);
   gLogTruncateNext = false;
@@ -98,8 +60,6 @@ void VitaLog(const char *fmt, ...) {
   va_end(ap);
   LogOpenLocked();
   LogLine(buf);
-  // Flush to disk immediately: the process may die right after this line, and
-  // the file is the only trace that survives.
   if (gLogFile >= 0) {
     sceIoClose(gLogFile);
     gLogFile = -1;
@@ -115,13 +75,6 @@ bool LTriggerHeld(void) {
   return (pad.buttons & (SCE_CTRL_LTRIGGER | SCE_CTRL_L2)) != 0;
 }
 
-// Launch spec, understood from the app param and from autoshot.txt below:
-//   start=4     start with scene 4 instead of scene 2
-//   shot2=<s>   capture scene 2's framebuffer s seconds in, then exit
-//   shot4=<s>   the same for scene 4 (needs start=4 to run first)
-// A shot points scene N's capture at ux0:/data/ELEB00002 and schedules it N
-// virtual seconds into the scene; the scene writes the PPM itself
-// (WriteScreenshotPPM, full 960x544 framebuffer).
 void ApplyLaunchSpec(const char *spec, bool *startWithPoles) {
   if (!spec || !spec[0]) return;
   if (std::strstr(spec, "start=4")) *startWithPoles = true;
@@ -140,19 +93,11 @@ void ApplyLaunchSpec(const char *spec, bool *startWithPoles) {
   }
 }
 
-// Both ways in, because the two launch paths are genuinely different: the app
-// param covers Vita3K's --launch-uri and an on-device launcher, while a plain
-// `Vita3K -r ELEB00002` (what an automated emulator run does) takes no app
-// params at all. So the run may instead drop its spec in
-// ux0:/data/ELEB00002/autoshot.txt, e.g. "start=4\nshot4=16\n", next to the
-// app's data before boot and the port picks it up from here.
 bool StartWithPolesFromLaunch(void) {
   bool startWithPoles = false;
 
   char param[1024] = {0};
   if (sceAppMgrGetAppParam(param) >= 0 && param[0]) {
-    // Trace non-empty params (the Vita3K --launch-uri scene picker is one) so a
-    // run log explains where the starting scene came from.
     VitaLog("app param: '%s'", param);
     ApplyLaunchSpec(param, &startWithPoles);
   }

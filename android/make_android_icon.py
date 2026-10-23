@@ -1,11 +1,4 @@
 #!/usr/bin/env python3
-"""Android launcher icon (RGBA PNG at a requested density) -- see
-buildtools/make_icons.py.
-
-The launcher picks a bitmap by density, so the Makefile runs this once per
-mipmap directory (48/72/96/144/192) instead of shipping one 256x256 image that
-every device then rescales. The drawing is the shared four-colour mark.
-"""
 import os
 import sys
 

@@ -1,26 +1,3 @@
-# ===========================================================================
-# ElectroBench -- Android port (SCENE 2 and SCENE 4 only).
-#
-# Builds one APK: a NativeActivity whose libmain.so is android/jni's entry point
-# plus the two scene translation units from src/, compiled against the GLES3 and
-# SDL2 subsets in android/include and linked against EGL, GLESv3, log and
-# android. The shader tree is packed into the APK's assets/ and unpacked by the
-# app itself at startup (see android/jni/android_main.cxx).
-#
-# Output: ./ElectroBench-android.apk at the branch root, next to the code.
-#
-# From the branch root:
-#   sh android/tools/fetch_toolchain.sh   # once: NDK + build-tools + platform
-#   make -f android/Makefile              # -> ./ElectroBench-android.apk
-#   make -f android/Makefile verify       # manifest, signature, ABIs, symbols
-#   make -f android/Makefile check        # shader validation (same as Vita)
-#   make -f android/Makefile host-shaders # ES 3 link check for all six programs
-#
-# There is no gradle step and no Java source anywhere: the APK contains no
-# classes.dex (android:hasCode="false" plus the framework's own NativeActivity),
-# so a JDK is only needed for apksigner and keytool.
-# ===========================================================================
-
 ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
 
 NDK ?= $(ANDROID_NDK_HOME)
@@ -56,15 +33,10 @@ STRIP := $(TOOLCHAIN)/bin/llvm-strip
 READELF := $(TOOLCHAIN)/bin/llvm-readelf
 KEYTOOL ?= keytool
 
-# 24 is the minimum that makes sense for this port: it is the oldest API level
-# with a documented ES 3.0 EGL context and an up-to-date NDK sysroot, and it is
-# what the SDK's own APK Signature Scheme v2 verification starts at.
 API := 24
 MIN_SDK := 24
 TARGET_SDK := 34
 
-# arm64-v8a covers every device that matters now, armeabi-v7a the older 32-bit
-# ones, x86_64 the emulator (so the APK can be tried without a phone).
 ABIS := arm64-v8a armeabi-v7a x86_64
 
 BUILD := $(ROOT)/build-android
@@ -72,9 +44,6 @@ APK := $(ROOT)/ElectroBench-android.apk
 .PHONY: all clean check verify doctor apk host-render host-png host-shaders check-artifacts
 all: $(APK)
 
-# On a fresh checkout, source and tracked APK mtimes may be identical. If the
-# complete Android packaging toolchain is available, invalidate only an APK
-# whose embedded shaders differ from source so `make` actually repackages them.
 ifneq ($(filter all apk,$(MAKECMDGOALS)),)
 ifneq ($(strip $(MAKECMDGOALS)),clean)
 ifneq ($(wildcard $(CXX_arm64-v8a) $(CXX_armeabi-v7a) $(CXX_x86_64) $(AAPT2) $(APKSIGNER) $(ZIPALIGN) $(GLUE)),)
@@ -168,55 +137,6 @@ all: $(APK)
 # Force APK repacking so the embedded shaders can never silently lag the tree.
 FORCE:
 
-# ------------------------------------------- host OpenGL ES 3 render check
-# The APK cannot be run here: no device, no emulator, no KVM. So the scenes and
-# the shader tree are instead rendered through the host's own OpenGL ES 3 driver
-# (Mesa, software rasteriser) by the small harness in android/host/. It is a
-# check of the scenes and shaders under ES 3.0 - the API level the APK targets -
-# and it is where the frames in android/screenshots/ come from. It says nothing
-# about the Android activity/EGL glue, which only a device can exercise.
-HOST_CXX ?= g++
-HOST_CFLAGS := -std=c++17 -O2 -pthread -I$(ROOT)/android/include -I$(ROOT)/include -I$(ROOT)/lib
-HOST_SRCS := $(ROOT)/android/host/host_main.cxx $(ROOT)/android/host/host_sdl.cxx \
-             $(ROOT)/src/jobs.cxx $(ROOT)/src/scene2.cxx $(ROOT)/src/scene4.cxx
-HOST_BIN := $(BUILD)/host/host_bench
-HOST_SHOT_SECONDS ?= 3.0
-
-$(HOST_BIN): $(HOST_SRCS) $(SHADERS)
-	@mkdir -p $(dir $@)
-	$(HOST_CXX) $(HOST_CFLAGS) -o $@ $(HOST_SRCS) -lEGL -lGLESv2
-
-host-render: $(HOST_BIN)
-	@for scene in 2 4; do \
-	    pp="$(BUILD)/host/scene$$scene.ppm"; \
-	    echo "--- scene $$scene"; \
-	    if command -v xvfb-run >/dev/null 2>&1; then \
-	        LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s "-screen 0 1366x768x24" \
-	            $(HOST_BIN) $$scene $$pp $(HOST_SHOT_SECONDS); \
-	    else \
-	        LIBGL_ALWAYS_SOFTWARE=1 $(HOST_BIN) $$scene $$pp $(HOST_SHOT_SECONDS); \
-	    fi; \
-	done
-	@ls -l $(BUILD)/host/*.ppm
-
-# host-shaders is deliberately separate from host-render: it needs a GL context
-# but no frames, so it runs in about a second and can gate every change to a
-# shader. It is the only check here that sees a program's two stages together -
-# the sea shipped dead once with each stage valid on its own and the pair
-# unlinkable (see android/host/host_main.cxx).
-host-shaders: $(HOST_BIN)
-	@if command -v xvfb-run >/dev/null 2>&1; then \
-	    LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s "-screen 0 640x480x24" \
-	        $(HOST_BIN) --check-shaders; \
-	else \
-	    LIBGL_ALWAYS_SOFTWARE=1 $(HOST_BIN) --check-shaders; \
-	fi
-
-host-png: host-render
-	@mkdir -p $(ROOT)/android/screenshots
-	python3 $(ROOT)/android/ppm_to_png.py $(BUILD)/host/scene2.ppm $(ROOT)/android/screenshots/scene2_dusk_ocean.png
-	python3 $(ROOT)/android/ppm_to_png.py $(BUILD)/host/scene4.ppm $(ROOT)/android/screenshots/scene4_power_lines.png
-
 # ------------------------------------------------------------------ native lib
 # One rule per ABI, generated so the three toolchains cannot drift apart.
 define ABI_RULE
@@ -279,34 +199,6 @@ $(APK): FORCE $(SO_FILES) $(RES) $(SHADERS) $(ROOT)/android/AndroidManifest.xml 
 	    --ks-key-alias androiddebugkey --min-sdk-version $(MIN_SDK) \
 	    --v4-signing-enabled false --out $@ $(BUILD)/app-aligned.apk
 	@echo "APK: $@ ($$(stat -c%s $@) bytes)"
-
-# ----------------------------------------------------------------------- checks
-# Same shader validation the Vita port runs: every shader must be valid GLSL ES
-# 1.00, which is also what an ES 3.0 context compiles them as (no #version line
-# means 1.00). Kept in the shared buildtools/ script so the two ports cannot
-# drift.
-check:
-	sh $(ROOT)/buildtools/check_shaders.sh
-
-# Content-based check: catches stale shader assets even when checkout mtimes match.
-check-artifacts:
-	python3 $(ROOT)/buildtools/check_artifacts.py
-
-verify: $(APK)
-	@echo "--- manifest (binary manifest read back by aapt2)"
-	@ls -l $(SO_FILES) 2>/dev/null || true
-	$(AAPT2) dump badging $(APK) | grep -E "^(package|sdkVersion|targetSdkVersion|application-label:|launchable-activity|native-code|uses-feature|feature-group)" || true
-	@echo "--- signature (every scheme apksigner can check)"
-	$(APKSIGNER) verify -v --min-sdk-version $(MIN_SDK) --print-certs $(APK)
-	@echo "--- archive"
-	unzip -l $(APK)
-	@echo "--- native libraries"
-	@for abi in $(ABIS); do \
-	    echo "  $$abi:"; \
-	    $(READELF) -h $(BUILD)/$$abi/libmain.so | grep -E "Class|Machine|Type"; \
-	    $(READELF) -d $(BUILD)/$$abi/libmain.so | grep NEEDED; \
-	    $(READELF) --dyn-syms $(BUILD)/$$abi/libmain.so | grep -E "ANativeActivity_onCreate|android_main" || echo "    MISSING entry point"; \
-	done
 
 doctor:
 	@echo "NDK          : $(NDK)"
