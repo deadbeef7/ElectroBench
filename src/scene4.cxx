@@ -1698,7 +1698,7 @@ static void Setup() {
   gPostSettings.bloom = 0.085f;
   gPostSettings.threshold = 1.15f;
   gPostSettings.knee = 0.60f;
-  gPostSettings.aberration = 0.0045f;
+  gPostSettings.aberration = 0.0090f;
   gPostSettings.vignette = 0.20f;
   gPostSettings.grain = 0.020f;
   gPostSettings.flare = 1.0f;

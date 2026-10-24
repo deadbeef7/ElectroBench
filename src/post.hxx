@@ -196,10 +196,10 @@ void main() {
     // (before the tone curve) keeps it a refraction, not a colour shift.
     //
     // The offset is |dir| * r2 * uAberration of the frame width, so at the
-    // corner it is 0.35 * uAberration, so 0.0045 is 1.1 px at 720p -- inside
-    // the 0.1-0.3% of frame width a real fast lens produces, and enough to
-    // soften a hard wire edge without ever resolving into three images. The
-    // 0.55 this started at separated the channels by 19% of the frame.
+    // corner it is 0.35 * uAberration, so 0.009 is 2.2 px at 720p -- the top of
+    // the 0.1-0.3% of frame width a real fast lens produces, enough to soften a
+    // hard wire edge without ever resolving into three images. The 0.55 this
+    // started at separated the channels by 19% of the frame.
     vec2 dir = uv - 0.5;
     float r2 = dot(dir, dir);
     vec2 off = dir * r2 * uAberration;
@@ -266,7 +266,7 @@ void main() {
 struct Settings {
   float exposure = 1.0f;
   float bloom = 0.085f;
-  float aberration = 0.0045f;  // frame-width fraction at the corner; see final pass
+  float aberration = 0.009f;   // frame-width fraction at the corner; see final pass
   float vignette = 0.22f;
   float grain = 0.020f;
   float flare = 1.0f;
