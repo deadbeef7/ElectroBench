@@ -299,6 +299,38 @@ struct SceneStat {
   double fps;
 };
 
+// Sliding-window frame-rate meter for the HUD.
+//
+// The HUD used to show a counter accumulated in one-second buckets. That reads
+// as "the counter runs for a second and then stops": the first bucket is the
+// only one that differs (it contains the scene's first, cold frame), every
+// later bucket holds the same number of frames, and because the figure was an
+// int it printed the same value for the rest of the run. The rate is now
+// measured over the last kFpsWindow frame timestamps, so it is a continuous
+// average that visibly tracks the frame time instead of a per-second step.
+struct FpsMeter {
+  static constexpr int kWindow = 90;
+  double stamp[kWindow];
+  int head = 0;
+  int count = 0;
+
+  void Reset() { head = 0; count = 0; }
+
+  void Sample(double now) {
+    stamp[head] = now;
+    head = (head + 1) % kWindow;
+    if (count < kWindow) count++;
+  }
+
+  double Rate() const {
+    if (count < 2) return 0.0;
+    const double newest = stamp[(head - 1 + kWindow) % kWindow];
+    const double oldest = stamp[(head - count + kWindow) % kWindow];
+    const double span = newest - oldest;
+    return span > 1e-6 ? (double)(count - 1) / span : 0.0;
+  }
+};
+
 // One benchmark run: kBenchMs of scene, then the result panel for kResultsMs.
 // Both scenes are initialised up front, so the hand-over between them does not
 // pay the scene-4 geometry build (the largest single piece of CPU work in
@@ -306,9 +338,8 @@ struct SceneStat {
 SceneStat RunScene(int scene) {
   SceneStat stat{0, 0.0, 0.0};
   const double start = NowSeconds();
-  double lastHud = start;
-  double fps = 0.0;
-  int frames = 0, hudFrames = 0;
+  FpsMeter meter;
+  int frames = 0;
   bool results = false;
   bool sceneDone = false;
   double resultsAt = 0.0;
@@ -366,10 +397,13 @@ SceneStat RunScene(int scene) {
     HudBegin();
     char line[64];
     if (!results) {
-      snprintf(line, sizeof(line), "FPS: %d", (int)(fps + 0.5));
+      // One decimal, and the run's frame count next to it: a counter that has
+      // stopped and one that is holding steady at 30.0 no longer look alike.
+      meter.Sample(now);
+      snprintf(line, sizeof(line), "FPS: %.1f", meter.Rate());
       HudText(line, 8.0f, 6.0f, 2.0f, Warm());
       HudText("ELECTROBENCH PSP", 8.0f, 26.0f, 1.0f, White());
-      snprintf(line, sizeof(line), "SCENE %d  %dS", scene, (int)t);
+      snprintf(line, sizeof(line), "SCENE %d  %.1fS  F:%d", scene, t, frames);
       HudText(line, 8.0f, 40.0f, 1.0f, White());
     } else {
       snprintf(line, sizeof(line), "SCENE %d RESULTS", scene);
@@ -388,12 +422,6 @@ SceneStat RunScene(int scene) {
     sceGuSwapBuffers();
 
     frames++;
-    hudFrames++;
-    if (now - lastHud >= 1.0) {
-      fps = (double)hudFrames / (now - lastHud);
-      hudFrames = 0;
-      lastHud = now;
-    }
     if (!results && t * 1000.0 >= (double)kBenchMs) {
       results = true;
       resultsAt = now;
