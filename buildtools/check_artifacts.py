@@ -16,9 +16,12 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SHADERS = sorted((ROOT / "shaders").glob("*/*.glsl"))
+# The shader tree lives under the Vita port after the restructure; both packages
+# embed it as `shaders/` (the VPK at app0:/shaders, the APK at assets/shaders).
+SHADER_ROOT = ROOT / "vita" / "shaders"
+SHADERS = sorted(SHADER_ROOT.glob("*/*.glsl"))
 ARTIFACTS = (
-    (ROOT / "ElectroBench-vita.vpk", ""),
+    (ROOT / "vita" / "ElectroBench-vita.vpk", ""),
     (ROOT / "ElectroBench-android.apk", "assets/"),
 )
 
@@ -38,7 +41,7 @@ def main() -> int:
             with zipfile.ZipFile(artifact) as archive:
                 names = set(archive.namelist())
                 for shader in SHADERS:
-                    rel = shader.relative_to(ROOT).as_posix()
+                    rel = shader.relative_to(SHADER_ROOT.parent).as_posix()
                     packed = prefix + rel
                     if packed not in names:
                         print(f"FAIL: missing {packed}")

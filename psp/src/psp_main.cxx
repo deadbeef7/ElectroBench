@@ -414,6 +414,10 @@ SceneStat RunScene(int scene) {
 int main(int argc, char *argv[]) {
   (void)argc;
   (void)argv;
+  // 333/333/166: the maximum the hardware allows, and what the report below
+  // prints. Without this call the console stays at its 222 MHz default and the
+  // per-vertex shading runs a third slower than the figures claim.
+  scePowerSetClockFrequency(333, 333, 166);
   sceCtrlSetSamplingCycle(0);
   sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
 

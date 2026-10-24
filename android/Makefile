@@ -78,7 +78,7 @@ ARCH_x86_64 := -march=x86-64
 # vitaGL ones. <SDL2/SDL.h> is the shared subset header both ports implement.
 # android_native_app_glue.h comes from the NDK itself (the glue is part of the
 # NDK, not vendored here), so its directory is on the include path too.
-INCLUDES := -I$(ROOT)/android/include -I$(ROOT)/include -I$(ROOT)/lib \
+INCLUDES := -I$(ROOT)/android/include -I$(ROOT)/vita/include -I$(ROOT)/vita/lib \
             -I$(NDK)/sources/android/native_app_glue
 # -pthread: src/jobs.hxx hands the scenes' startup CPU work to worker threads
 # (pthreads on every target; see that header for why). The flag is on the
@@ -99,22 +99,22 @@ LIBS := -lEGL -lGLESv3 -llog -landroid -lm
 # lodepng symbol.
 PORT_CPP := $(ROOT)/android/jni/android_main.cxx \
             $(ROOT)/android/jni/android_sdl.cxx \
-            $(ROOT)/src/jobs.cxx \
-            $(ROOT)/src/scene2.cxx \
-            $(ROOT)/src/scene4.cxx
+            $(ROOT)/vita/src/jobs.cxx \
+            $(ROOT)/vita/src/scene2.cxx \
+            $(ROOT)/vita/src/scene4.cxx
 PORT_HEADERS := $(ROOT)/android/jni/android_port.hxx \
                 $(ROOT)/android/include/GL/glew.h \
                 $(ROOT)/android/include/SDL2/SDL_opengl.h \
-                $(ROOT)/include/SDL2/SDL.h \
-                $(ROOT)/src/font_atlas.hxx \
-                $(ROOT)/src/jobs.hxx
+                $(ROOT)/vita/include/SDL2/SDL.h \
+                $(ROOT)/vita/src/font_atlas.hxx \
+                $(ROOT)/vita/src/jobs.hxx
 SOURCES := $(PORT_CPP) $(PORT_HEADERS)
 
 # The packed shader tree. Listing the files (not the directory) is deliberate:
 # regenerating a shader rewrites it in place, which leaves the directory's
 # timestamp alone, so a directory prerequisite would repack the previous
 # revision of the shaders.
-SHADERS := $(wildcard $(ROOT)/shaders/*/*.glsl)
+SHADERS := $(wildcard $(ROOT)/vita/shaders/*/*.glsl)
 # One launcher bitmap per density, generated from the shared four-colour mark
 # in buildtools/make_icons.py. The launcher does not downsample a single 256x256
 # file well (and never sharpens it), so mdpi gets a real 48px drawing.
@@ -178,7 +178,7 @@ $(KEYSTORE):
 $(APK): FORCE $(SO_FILES) $(RES) $(SHADERS) $(ROOT)/android/AndroidManifest.xml $(KEYSTORE)
 	@rm -rf $(STAGE)
 	@mkdir -p $(STAGE)/assets
-	cp -R $(ROOT)/shaders $(STAGE)/assets/shaders
+	cp -R $(ROOT)/vita/shaders $(STAGE)/assets/shaders
 	@for abi in $(ABIS); do \
 	    mkdir -p $(STAGE)/lib/$$abi; \
 	    cp $(BUILD)/$$abi/libmain.so $(STAGE)/lib/$$abi/; \

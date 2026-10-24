@@ -16,9 +16,11 @@ cd "$(dirname "$0")/.."
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+# The shader tree belongs to the Vita port after the restructure: vita/shaders
+# is what the VPK packs and what this check validates.
 echo "--- 1. glslangValidator (GLSL ES 1.00)"
 fails=0
-for f in shaders/*/*.glsl; do
+for f in vita/shaders/*/*.glsl; do
   case "$f" in
     *_vert.glsl) stage=vert ;;
     *_frag.glsl) stage=frag ;;
@@ -39,7 +41,7 @@ echo "--- 3. no GLSL 3.30-only syntax left for vitaGL's translator"
 # `layout(location=)` or the 3.30 overloaded texture()/fwidth(). Any of those
 # reaching SceShaccCg is a shader that cannot compile on the device, so treat
 # them as errors here rather than finding out on hardware.
-for f in shaders/*/*.glsl; do
+for f in vita/shaders/*/*.glsl; do
   hits=$(grep -nE '^[[:space:]]*(layout|flat|in|out)[[:space:](]|(^|[^A-Za-z_])texture[[:space:]]*\(|(^|[^A-Za-z_])fwidth[[:space:]]*\(' "$f" || true)
   if [ -n "$hits" ]; then
     echo "FAIL $f still uses 3.30-only syntax:"
