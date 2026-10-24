@@ -8,6 +8,9 @@ out vec4 fragColor;
 uniform vec3  uEyePos;
 uniform vec3  uSunDir;
 uniform float uTime;
+// 1.0: emit the sky as linear radiance for the camera pipeline (see
+// post.hxx). 0.0: the self-contained encodeSky() path.
+uniform float uHdrOut;
 
 
 float vhash(vec2 p) {
@@ -180,6 +183,13 @@ void main() {
 
     sky = mix(sky, cloudCol, clamp(cover, 0.0, 1.0));
 
+    // Linear radiance: the sun disc, its glow and the cloud edges keep their
+    // real ratios here, so the composite's bloom can bleed the disc into the
+    // sky instead of clipping it to a flat white circle first.
+    if (uHdrOut > 0.5) {
+        fragColor = vec4(max(sky, vec3(0.0)), 1.0);
+        return;
+    }
 
     float dith = vhash(dir.xy * 1913.7 + fract(uTime) * 17.0);
     sky += (dith - 0.5) * (1.5 / 255.0);

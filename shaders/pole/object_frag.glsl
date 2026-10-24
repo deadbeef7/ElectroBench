@@ -13,6 +13,12 @@ uniform vec3  uEyePos;
 uniform vec3  uSunDir;
 uniform float uTime;
 uniform float uRoadX;
+// 1.0 when the scene is rendering into the camera pipeline's half-float
+// target: the shader then stops at linear radiance and leaves exposure, the
+// film curve and the display transfer to the composite pass, which every
+// scene shares. 0.0 keeps the old self-contained look (direct-to-window
+// fallback when the HDR target cannot be created).
+uniform float uHdrOut;
 
 
 const float kMatPaint  = 0.0;
@@ -317,6 +323,10 @@ void main() {
         float hz = 1.0 - exp(-distG * 0.0016);
         vec3 g = base * 1.05;
         g = mix(g, hazeColFor(g, L, V), clamp(hz, 0.0, 0.45));
+        if (uHdrOut > 0.5) {
+            fragColor = vec4(max(g, vec3(0.0)), 1.0);
+            return;
+        }
         fragColor = vec4(pow(max(g, vec3(0.0)), vec3(1.0 / 2.2)), 1.0);
         return;
     }
@@ -397,12 +407,16 @@ void main() {
     fog += 0.09 * (1.0 - exp(-dist * 0.020));
     float toSun = max(dot(-V, L), 0.0);
     vec3 hazeCol = hazeColFor(base, L, V);
-    col = mix(col, hazeCol, clamp(fog, 0.0, 0.70));
-
-
-    float silh = clamp(1.0 - dot(base, vec3(0.333)) * 2.6, 0.0, 1.0);
+    col = mix(col, hazeCol, clamp(fog, 0.0, 0.70));    float silh = clamp(1.0 - dot(base, vec3(0.333)) * 2.6, 0.0, 1.0);
     col = mix(col, vec3(0.52, 0.30, 0.14), silh * 0.16);
 
+    // Linear radiance for the camera pipeline. A late sun is far above 1.0 at
+    // the speculars; clamping here is what used to turn every wet highlight
+    // into the same flat white before the grain and the gamma curve ran.
+    if (uHdrOut > 0.5) {
+        fragColor = vec4(max(col, vec3(0.0)), 1.0);
+        return;
+    }
 
     col = clamp(col, 0.0, 4.0);
     col = col / (col * 0.35 + vec3(0.72));

@@ -37,6 +37,15 @@ float shadowFactor() {
 }
 
 
+// Filmic response, the same Narkowicz ACES fit the pool room and the GL 3.3
+// scenes' composite use. The old color/(color+1) curve put mid-grey somewhere
+// else entirely and desaturated highlights the wrong way; one film curve for
+// every pass is what keeps the four scenes looking like one product.
+vec3 acesFilmic(vec3 x) {
+    const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
+    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
+
 float h21(vec2 p) {
     vec3 q = fract(vec3(p.x, p.y, p.x) * 0.1031);
     q += dot(q, q.yzx + 33.33);
@@ -111,7 +120,9 @@ void main() {
                + sheen * fres * 0.30;
 
 
-    color = color / (color + vec3(1.0));
+    // Expose so the concrete keeps its old mid-tone, then let ACES roll the
+    // sunlit patches and the wet sheen off instead of clipping them.
+    color = acesFilmic(color * 0.45);
     color = pow(color, vec3(1.0 / 2.2));
 
 

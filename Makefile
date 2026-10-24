@@ -167,13 +167,18 @@ $(OBJDIR):
 $(OBJDIR)/main.o: src/main.cxx src/font_atlas.hxx | $(OBJDIR)
 	$(CXX) $(CPPFLAGS) $(PKG_CFLAGS) $(GLEW_CFLAGS) $(CXXFLAGS) -c $< -o $@
 
-$(OBJDIR)/scene2.o: src/scene2.cxx src/font_atlas.hxx | $(OBJDIR)
+# The three GL 3.3 scenes all include src/post.hxx (the shared HDR camera
+# pipeline), so it is a prerequisite of each object file. Without it, editing
+# the pipeline's shaders relinks the executable from stale objects and the
+# scenes keep running the previous revision of the composite - which looks
+# exactly like the change having no effect.
+$(OBJDIR)/scene2.o: src/scene2.cxx src/font_atlas.hxx src/post.hxx | $(OBJDIR)
 	$(CXX) $(CPPFLAGS) $(PKG_CFLAGS) $(GLEW_CFLAGS) $(CXXFLAGS) -c $< -o $@
 
-$(OBJDIR)/scene3.o: src/scene3.cxx src/font_atlas.hxx | $(OBJDIR)
+$(OBJDIR)/scene3.o: src/scene3.cxx src/font_atlas.hxx src/post.hxx | $(OBJDIR)
 	$(CXX) $(CPPFLAGS) $(PKG_CFLAGS) $(GLEW_CFLAGS) $(CXXFLAGS) -c $< -o $@
 
-$(OBJDIR)/scene4.o: src/scene4.cxx src/font_atlas.hxx | $(OBJDIR)
+$(OBJDIR)/scene4.o: src/scene4.cxx src/font_atlas.hxx src/post.hxx | $(OBJDIR)
 	$(CXX) $(CPPFLAGS) $(PKG_CFLAGS) $(GLEW_CFLAGS) $(CXXFLAGS) -c $< -o $@
 
 $(BIN): $(OBJS) | $(OBJDIR)

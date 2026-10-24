@@ -29,6 +29,7 @@
 #endif
 
 #include "../lib/asset_path.hxx"
+#include "post.hxx"
 
 extern bool gWindowedMode;
 #include "font_atlas.hxx" 
@@ -1004,6 +1005,12 @@ static SDL_GLContext gContext = nullptr;
 static int gWindowWidth = WIDTH, gWindowHeight = HEIGHT;
 
 static Program gSkyProg, gWaterProg, gTeapotProg, gDropletProg, gSplashProg, gHudProg;
+
+// Pool room: the luminous ceiling panel is the highlight the camera blooms
+// around, and the teapot's glaze, the meniscus and the caustics all reach
+// above 1.0 - the shared HDR composite is what keeps those from clipping.
+static postproc::Pipeline gPost;
+static postproc::Settings gPostSettings;
 static GLuint gTeapotTex = 0, gFontTex = 0;
 static GLuint gEmptyVao = 0;
 
@@ -1158,6 +1165,7 @@ static void DrawSky(const Mat4 &view, const Vec3 &eye, double timeSec) {
   glUniform3f(gSkyProg.loc("uLightDir"), kLightDir[0], kLightDir[1], kLightDir[2]);
   glUniform3f(gSkyProg.loc("uLightTint"), kLightTint[0], kLightTint[1], kLightTint[2]);
   glUniform1f(gSkyProg.loc("uTime"), (float)timeSec);
+  glUniform1f(gSkyProg.loc("uHdrOut"), gPost.ready ? 1.0f : 0.0f);
   glDrawElements(GL_TRIANGLES, gDomeMesh.indexCount, GL_UNSIGNED_INT, nullptr);
   glBindVertexArray(0);
   glEnable(GL_CULL_FACE);
@@ -1181,6 +1189,7 @@ static void DrawWater(const Mat4 &view, const Vec3 &eye, double timeSec) {
   glUniform3f(gWaterProg.loc("uTileA"), kTileA[0], kTileA[1], kTileA[2]);
   glUniform3f(gWaterProg.loc("uTileB"), kTileB[0], kTileB[1], kTileB[2]);
   glUniform1f(gWaterProg.loc("uTime"), (float)timeSec);
+  glUniform1f(gWaterProg.loc("uHdrOut"), gPost.ready ? 1.0f : 0.0f);
   glUniform4fv(gWaterProg.loc("uRings"), MAX_RINGS, &gRings[0].x);
   static GLfloat hullData[kFleetCount * 4];
   static GLfloat splashData[kFleetCount * 4];
@@ -1264,6 +1273,7 @@ static void DrawTeapot(const Mat4 &view, const Vec3 &eye, const TeapotPhysics &p
   glUniform3f(gTeapotProg.loc("uLightTint"), kLightTint[0], kLightTint[1], kLightTint[2]);
   glUniform1f(gTeapotProg.loc("uWetness"), wetness);
   glUniform1f(gTeapotProg.loc("uWaterLine"), kWaterLevel);
+  glUniform1f(gTeapotProg.loc("uHdrOut"), gPost.ready ? 1.0f : 0.0f);
   glUniform3f(gTeapotProg.loc("uWaterBody"), 0.030f, 0.180f, 0.320f);
   glUniform1f(gTeapotProg.loc("uTime"), now);
   glActiveTexture(GL_TEXTURE0);
@@ -1503,7 +1513,7 @@ static void RenderScene() {
   float aspect = (float)gWindowWidth / (float)gWindowHeight;
   Mat4Perspective(gProj, 45.0f, aspect, 0.1f, 2000.0f);
 
-  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  const bool hdr = postproc::Begin(gPost, gWindowWidth, gWindowHeight);
   glViewport(0, 0, gWindowWidth, gWindowHeight);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 
@@ -1513,6 +1523,7 @@ static void RenderScene() {
   DrawCrowns(view, simNow);
   DrawJets(view, eye);
   DrawDroplets(view, eye);
+  if (hdr) postproc::End(gPost, gPostSettings, (float)gSimTime);
   RenderHUD();
 
   if (gScreenshotPath && gNextShot < gShotTimes.size() &&
@@ -1732,6 +1743,26 @@ static void Setup() {
   glEnable(GL_CULL_FACE);
   glCullFace(GL_BACK);
   glClearColor(0.05f, 0.06f, 0.08f, 1.0f);
+
+  // The room exposes for the ceiling panel, which is the brightest thing in
+  // frame; the threshold lets that panel (and the meniscus it glints off) seed
+  // the bloom while the tiled walls stay below it.
+  gPostSettings.exposure = 0.94f;
+  gPostSettings.bloom = 0.055f;
+  gPostSettings.threshold = 1.10f;
+  gPostSettings.knee = 0.55f;
+  gPostSettings.aberration = 0.45f;
+  gPostSettings.vignette = 0.24f;
+  gPostSettings.grain = 0.016f;
+  gPostSettings.flare = 0.8f;
+  if (postproc::Init(gPost, gWindowWidth, gWindowHeight, 4)) {
+    std::printf("Camera: HDR RGBA16F, %dx MSAA, %d-level bloom, ACES composite\n",
+                gPost.samples, postproc::Pipeline::kLevels);
+  } else {
+    std::printf("Camera: HDR target unavailable - drawing with the in-shader "
+                "response curve\n");
+  }
+  std::fflush(stdout);
 }
 
 // ------------------------------------------------------ scene entry point

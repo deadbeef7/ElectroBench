@@ -31,6 +31,11 @@ uniform vec3  uEyePos;
 uniform vec3  uSunDir;
 uniform vec3  uHorizonColor;
 uniform vec3  uWaterColor;
+// 1.0 while the scene renders into the camera pipeline's half-float target:
+// emit linear radiance (the glitter path reaches well past 1.0) and let the
+// shared ACES composite do exposure and the display transfer. 0.0 keeps the
+// old self-contained tonemap for the direct-to-window fallback.
+uniform float uHdrOut;
 
 #define MAX_CLOUDS 7             // must match sky_frag.glsl and tidebench.cxx
 uniform int   uCloudCount;
@@ -315,7 +320,16 @@ void main() {
     color += vec3(1.0, 0.56, 0.24) * (glint + glintMid + glintWide * pathGate)
              * (0.25 + max(L.y, 0.0) * 1.2) * pathGate * shadow * sparkleGate;
 
-    // HDR tone map + gamma
+    if (uHdrOut > 0.5) {
+        // Linear HDR. The glitter path is the reason this matters: its tight
+        // 520-exponent lobe is many times the water's radiance, and clipping
+        // it to 1.0 here is what made the sparkles read as white pixels
+        // instead of as light the lens can flare around.
+        fragColor = vec4(max(color, vec3(0.0)), 1.0);
+        return;
+    }
+
+    // HDR tone map + gamma (fallback path)
     color = color / (color + vec3(1.0));
     color = pow(color, vec3(1.0 / 2.2));
     fragColor = vec4(color, 1.0);

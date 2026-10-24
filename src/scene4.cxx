@@ -31,6 +31,7 @@
 #endif
 
 #include "../lib/asset_path.hxx"
+#include "post.hxx"
 
 extern bool gWindowedMode;
 #include "font_atlas.hxx"
@@ -180,6 +181,14 @@ static Vec3 SunDirNow(double t) {
 
 // ---------------------------------------------------------------- scene state
 static Program gSkyProg, gObjProg, gHudProg;
+
+// Scene 4 is drawn into a half-float MSAA target and finished by the shared
+// camera pipeline: every pass writes linear radiance and one ACES composite
+// puts the frame on screen, with the bloom pyramid carrying the glare the
+// sun, the wet kerb and the galvanised steel actually throw.
+static postproc::Pipeline gPost;
+static postproc::Settings gPostSettings;
+
 static GLuint gFontTex = 0;
 static GLuint gSkyVao = 0, gSkyVbo = 0, gSkyIbo = 0;
 static int gSkyIndexCount = 0;
@@ -1378,6 +1387,7 @@ static void DrawSky(const Mat4 &view, const Vec3 &eye, double timeSec) {
   Vec3 sd = SunDirNow(timeSec);
   glUniform3f(gSkyProg.loc("uSunDir"), sd.x, sd.y, sd.z);
   glUniform1f(gSkyProg.loc("uTime"), (float)timeSec);
+  glUniform1f(gSkyProg.loc("uHdrOut"), gPost.ready ? 1.0f : 0.0f);
   glDrawElements(GL_TRIANGLES, gSkyIndexCount, GL_UNSIGNED_INT, nullptr);
   glBindVertexArray(0);
   glEnable(GL_CULL_FACE);
@@ -1467,6 +1477,7 @@ static void DrawGroundShadows(const Mat4 &view, const Vec3 &eye, double t,
   glUniform3f(gObjProg.loc("uSunDir"), sunDir.x, sunDir.y, sunDir.z);
   glUniform1f(gObjProg.loc("uTime"), (float)t);
   glUniform1f(gObjProg.loc("uRoadX"), kRoadX);
+  glUniform1f(gObjProg.loc("uHdrOut"), gPost.ready ? 1.0f : 0.0f);
   glEnable(GL_BLEND);
   glBlendFunc(GL_ZERO, GL_ONE_MINUS_SRC_ALPHA);
   glDepthMask(GL_FALSE);  
@@ -1493,6 +1504,7 @@ static void DrawGrid(const Mat4 &view, const Vec3 &eye, double timeSec) {
   glUniform3f(gObjProg.loc("uSunDir"), sd.x, sd.y, sd.z);
   glUniform1f(gObjProg.loc("uTime"), (float)timeSec);
   glUniform1f(gObjProg.loc("uRoadX"), kRoadX);
+  glUniform1f(gObjProg.loc("uHdrOut"), gPost.ready ? 1.0f : 0.0f);
   glDrawElements(GL_TRIANGLES, gObjIndexCount, GL_UNSIGNED_INT, nullptr);
   glBindVertexArray(0);
   glEnable(GL_CULL_FACE);
@@ -1535,13 +1547,14 @@ static void RenderScene() {
   float aspect = (float)gWindowWidth / (float)gWindowHeight;
   Mat4Perspective(gProj, 52.0f, aspect, 0.1f, 900.0f);
 
-  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  const bool hdr = postproc::Begin(gPost, gWindowWidth, gWindowHeight);
   glViewport(0, 0, gWindowWidth, gWindowHeight);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
   DrawGrid(view, eye, gSimTime);
   DrawGroundShadows(view, eye, gSimTime, gLineA, gLineB);
   DrawSky(view, eye, gSimTime);
+  if (hdr) postproc::End(gPost, gPostSettings, t);
   RenderHUD();
 
   if (gScreenshotPath && gNextShot < gShotTimes.size() &&
@@ -1676,6 +1689,27 @@ static void Setup() {
   glEnable(GL_CULL_FACE);
   glCullFace(GL_BACK);
   glClearColor(0.60f, 0.30f, 0.10f, 1.0f);
+
+  // Exposure is the one photographic control shared by all three GL 3.3
+  // scenes; scene 4 is a bright low sun, so it sits a little under 1.0. The
+  // threshold at 1.0 means only genuine highlights (sun disc, speculars,
+  // glazed insulators) seed the bloom, not the whole orange sky.
+  gPostSettings.exposure = 0.97f;
+  gPostSettings.bloom = 0.085f;
+  gPostSettings.threshold = 1.15f;
+  gPostSettings.knee = 0.60f;
+  gPostSettings.aberration = 0.55f;
+  gPostSettings.vignette = 0.20f;
+  gPostSettings.grain = 0.020f;
+  gPostSettings.flare = 1.0f;
+  if (postproc::Init(gPost, gWindowWidth, gWindowHeight, 4)) {
+    std::printf("Camera: HDR RGBA16F, %dx MSAA, %d-level bloom, ACES composite\n",
+                gPost.samples, postproc::Pipeline::kLevels);
+  } else {
+    std::printf("Camera: HDR target unavailable - drawing with the in-shader "
+                "response curve\n");
+  }
+  std::fflush(stdout);
 }
 
 int RunPoleScene(bool *gaveUpOut) {

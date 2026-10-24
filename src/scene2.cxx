@@ -23,6 +23,7 @@
 #include <SDL2/SDL_opengl.h>
 
 #include "../lib/asset_path.hxx"
+#include "post.hxx"
 
 extern bool gWindowedMode;
 #include "font_atlas.hxx" // shared HUD font data and atlas layout
@@ -416,6 +417,14 @@ static SDL_GLContext gContext = nullptr;
 static int gWindowWidth = WIDTH, gWindowHeight = HEIGHT;
 
 static Program gSeaProg, gSkyProg, gHudProg;
+
+// The sea's radiance goes into the shared half-float camera target; the ACES
+// composite, the bloom around the sun and its glitter path, and the lens
+// response are all applied once, after both passes have drawn. Before this the
+// sea used color/(color+1) and the sky an ACES blend, so the same sun lit the
+// water and the sky with two different response curves.
+static postproc::Pipeline gPost;
+static postproc::Settings gPostSettings;
 static GLuint gRippleTex = 0, gNoiseTex = 0, gFoamTex = 0, gFontTex = 0;
 static GLuint gEnvCube = 0, gEnvFbo = 0, gEnvDepth = 0;
 
@@ -684,6 +693,26 @@ static void Setup() {
   glEnable(GL_CULL_FACE);
   glCullFace(GL_BACK);
   glClearColor(0.055f, 0.035f, 0.075f, 1.0f); // dusk background (only visible if geometry ever gaps)
+
+  // The dusk ocean exposes for its sky, not its water: the frame is mostly a
+  // bright band over a nearly black sea, so the threshold sits above the sky's
+  // midtones and only the sun, its halo and the glitter path seed the bloom.
+  gPostSettings.exposure = 1.00f;
+  gPostSettings.bloom = 0.095f;
+  gPostSettings.threshold = 1.35f;
+  gPostSettings.knee = 0.75f;
+  gPostSettings.aberration = 0.50f;
+  gPostSettings.vignette = 0.18f;
+  gPostSettings.grain = 0.018f;
+  gPostSettings.flare = 1.0f;
+  if (postproc::Init(gPost, gWindowWidth, gWindowHeight, 4)) {
+    std::printf("Camera: HDR RGBA16F, %dx MSAA, %d-level bloom, ACES composite\n",
+                gPost.samples, postproc::Pipeline::kLevels);
+  } else {
+    std::printf("Camera: HDR target unavailable - drawing with the in-shader "
+                "response curve\n");
+  }
+  std::fflush(stdout);
 }
 
 // -------------------------------------------------------------- render passes
@@ -701,6 +730,7 @@ static void DrawSea(const Mat4 &view, double timeSec, const Vec3 &eye) {
   glUniform3f(gSeaProg.loc("uSunDir"), gSunDir.x, gSunDir.y, gSunDir.z);
   glUniform3f(gSeaProg.loc("uHorizonColor"), 0.10f, 0.052f, 0.062f); // dark maroon haze, melts into the sky band
   glUniform3f(gSeaProg.loc("uWaterColor"), 0.034f, 0.020f, 0.052f); // near-black indigo body like the dusk reference
+  glUniform1f(gSeaProg.loc("uHdrOut"), gPost.ready ? 1.0f : 0.0f);
   glActiveTexture(GL_TEXTURE0);
   glBindTexture(GL_TEXTURE_2D, gRippleTex);
   glUniform1i(gSeaProg.loc("uRippleTex"), 0);
@@ -732,7 +762,10 @@ static void DrawSkyScreen(const Mat4 &view, const Vec3 &eye) {
   BindSkyUniforms(vp);
   glUniform3f(gSkyProg.loc("uCenter"), eye.x, eye.y, eye.z);
   glUniform1f(gSkyProg.loc("uRadius"), 5000.0f);
-  glUniform1f(gSkyProg.loc("uTonemap"), 1.0f); 
+  // Linear: the composite owns the response curve. When the HDR target could
+  // not be created the sky keeps its own encode, because the scene is then
+  // writing straight into the window's 8-bit buffer.
+  glUniform1f(gSkyProg.loc("uTonemap"), gPost.ready ? 0.0f : 1.0f);
   glDrawElements(GL_TRIANGLES, gDomeMesh.indexCount, GL_UNSIGNED_INT, nullptr);
   glBindVertexArray(0);
   glEnable(GL_CULL_FACE);
@@ -813,13 +846,14 @@ static void RenderScene() {
   DrawSkyToEnvMap(envProj);
   DumpEnvFacesOnce();
 
-  // ---- pass 2: main framebuffer ----
-  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  // ---- pass 2: main framebuffer (HDR camera target when available) ----
+  const bool hdr = postproc::Begin(gPost, gWindowWidth, gWindowHeight);
   glViewport(0, 0, gWindowWidth, gWindowHeight);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
   DrawSkyScreen(view, eye);
   DrawSea(view, gSceneTime, eye);
+  if (hdr) postproc::End(gPost, gPostSettings, t);
   RenderHUD();
 
     if (gScreenshotPath && gNextShot < gShotTimes.size() &&

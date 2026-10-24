@@ -11,6 +11,8 @@ uniform float uRadius;
 uniform vec3 uLightDir;
 uniform vec3 uLightTint;
 uniform float uTime;
+// 1.0: linear radiance for the shared camera pipeline (see src/post.hxx).
+uniform float uHdrOut;
 
 out vec4 fragColor;
 
@@ -103,6 +105,10 @@ void main() {
 
 
     col *= 0.74;
+    if (uHdrOut > 0.5) {
+        fragColor = vec4(max(col, vec3(0.0)), 1.0);
+        return;
+    }
     col = clamp((col * (2.51 * col + 0.03)) / (col * (2.43 * col + 0.59) + 0.14), 0.0, 1.0);
     col = pow(col, vec3(1.0 / 2.2));
     fragColor = vec4(col, 1.0);

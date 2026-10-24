@@ -336,6 +336,27 @@ Scene selection flags: `--og-only` runs just the gun scene even on GL 3.3-capabl
 `--scene-only` runs just the ocean scene, `--pool-only` runs just the pool-room scene,
 `--pole-only` runs just the power-line scene.
 
+# The camera (scenes 2, 3 and 4)
+
+The three GL 3.3 scenes render into a shared **half-float, 4x MSAA** target and finish through one
+composite pass (`src/post.hxx`), so every pass is exposed and tone-mapped by the same curve instead of
+each shader carrying its own:
+
+- **linear HDR radiance** — the scene shaders stop at radiance (`uHdrOut = 1.0`); sky, water, metals
+  and glints keep their real ratios past 1.0, so nothing is clipped before grading
+- **bloom** — a soft-knee threshold on the true HDR values, then a 13-tap downsample / tent upsample
+  pyramid (6 levels). The sun, the sea's glitter path, wet kerbs and the pool's ceiling panel bleed
+  light the way a lens does instead of ending at a hard edge
+- **ACES filmic curve** (RRT+ODT fit) and sRGB transfer, applied once to the whole frame
+- **lens response** — lateral chromatic aberration that grows with radius, faint mirrored lens ghosts,
+  cos⁴ vignette, luminance-weighted film grain and one-LSB dither against 8-bit banding
+- **a dusk split tone** (cool shadows, warm highlights) on the finished image, which is where a grade
+  belongs
+
+The pipeline degrades safely: if the driver refuses an RGBA16F target the scenes draw straight to the
+window with their original in-shader response curves, so old GL 3.3 hardware loses the glare, not the
+scene. The OG GL 2.1 scene uses the same ACES fit in its own shaders (it predates the shared target).
+
 # Windows (MSYS2)
 
 On Windows the easiest route is [MSYS2](https://www.msys2.org/), which provides gcc, cmake and prebuilt SDL2/GLEW/GLU packages. The single binary builds and runs unmodified.

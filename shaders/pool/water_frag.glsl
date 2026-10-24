@@ -31,6 +31,10 @@ uniform vec4  uBubbles[MAX_BUBBLES];
 
 
 uniform int   uBubbleCount;
+// 1.0: linear radiance for the shared camera pipeline (see src/post.hxx).
+// 0.0: the shader's own ACES + gamma, used only by the direct-to-window
+// fallback when the HDR target cannot be created.
+uniform float uHdrOut;
 
 out vec4 fragColor;
 
@@ -332,6 +336,10 @@ void main() {
 
 
     col *= 0.92;
+    if (uHdrOut > 0.5) {
+        fragColor = vec4(max(col, vec3(0.0)), 1.0);
+        return;
+    }
     col = clamp((col * (2.51 * col + 0.03)) / (col * (2.43 * col + 0.59) + 0.14), 0.0, 1.0);
     col = pow(col, vec3(1.0 / 1.15));
 

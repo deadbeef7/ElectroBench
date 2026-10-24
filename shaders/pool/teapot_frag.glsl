@@ -8,6 +8,8 @@ in vec2 vUV;
 uniform vec3 uEyePos;
 uniform vec3 uLightDir;
 uniform vec3 uLightTint;
+// 1.0: linear radiance for the shared camera pipeline (see src/post.hxx).
+uniform float uHdrOut;
 uniform sampler2D uBaseColor;
 uniform float uWetness;
 uniform float uWaterLine;
@@ -114,6 +116,10 @@ void main() {
     col += uLightTint * meniscus * wet * 0.10;
 
 
+    if (uHdrOut > 0.5) {
+        fragColor = vec4(max(col, vec3(0.0)), 1.0);
+        return;
+    }
     col = ACESFilm(col);
     col = clamp(col, 0.0, 1.0);
     col = pow(col, vec3(1.0 / 2.2));
