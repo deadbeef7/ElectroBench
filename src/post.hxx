@@ -194,6 +194,12 @@ void main() {
     // slightly different distances, so the error grows with the square of the
     // radius and is zero at the centre. Sampling the HDR buffer per channel
     // (before the tone curve) keeps it a refraction, not a colour shift.
+    //
+    // The offset is |dir| * r2 * uAberration of the frame width, so at the
+    // corner it is 0.35 * uAberration. A real fast lens lands between 0.1% and
+    // 0.3% of the frame, i.e. uAberration 0.003-0.009; the 0.55 this used to
+    // be separated the channels by 19% of the frame and put three visibly
+    // different images on screen instead of fringing the edges.
     vec2 dir = uv - 0.5;
     float r2 = dot(dir, dir);
     vec2 off = dir * r2 * uAberration;
@@ -260,7 +266,7 @@ void main() {
 struct Settings {
   float exposure = 1.0f;
   float bloom = 0.085f;
-  float aberration = 0.55f;   // already scaled by r^2 inside the shader
+  float aberration = 0.0085f;  // frame-width fraction at the corner; see final pass
   float vignette = 0.22f;
   float grain = 0.020f;
   float flare = 1.0f;
