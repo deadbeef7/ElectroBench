@@ -142,7 +142,6 @@ extern "C" {
 int SDL_Init(Uint32 flags) {
   (void)flags;
   sceCtrlSetSamplingMode(SCE_CTRL_MODE_ANALOG);
-  scePowerSetGpuXbarClockFrequency(166);
   PortTrace("clocks: arm=%d bus=%d gpu=%d xbar=%d MHz",
             scePowerGetArmClockFrequency(), scePowerGetBusClockFrequency(),
             scePowerGetGpuClockFrequency(), scePowerGetGpuXbarClockFrequency());
