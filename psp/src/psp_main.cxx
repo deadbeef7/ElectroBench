@@ -271,25 +271,117 @@ void SetSkyMatrix() {
   sceGumUpdateMatrix();
 }
 
-// The benchmark clock has to be the console's own wall clock.
+// ------------------------------------------------------------- benchmark clock
 //
-// sceKernelGetSystemTimeWide() counts microseconds off the kernel's system
-// timer, and that timer is clocked from the bus: with the port no longer
-// pinning the clocks, its seconds ran noticeably slower than the ones on the
-// user's stopwatch (a 45 s scene took well over 45 s of real time and the HUD
-// appeared to creep). The RTC tick counter is the console's real-time clock and
-// keeps real time whatever the CPU and bus are doing, so it is the timebase a
-// benchmark has to measure with. The tick resolution is queried once (1 MHz on
-// the PSP) rather than assumed.
-double NowSeconds() {
-  static double tickRes = 0.0;
-  if (tickRes <= 0.0) {
-    const u32 res = sceRtcGetTickResolution();
-    tickRes = res > 0 ? (double)res : 1000000.0;
-  }
+// The run clock has to satisfy two things at once, and neither clock on the
+// console does both:
+//
+//  * sceKernelGetSystemTimeWide() resolves to a microsecond and is monotonic,
+//    which is what a frame time needs, but it counts ticks of the kernel timer
+//    and that timer is clocked off the bus. With the port no longer pinning the
+//    clocks its seconds are not the seconds on a stopwatch, so it cannot be the
+//    run clock on its own.
+//  * sceRtcGetCurrentTick() is the console's real-time clock: correct rate, but
+//    it is a serial-bus read with coarse granularity on some emulators (whole
+//    seconds), which cannot time a 16 ms frame and makes a per-frame meter
+//    divide by a span of zero.
+//
+// So: measure with the kernel timer (fine, monotonic) and correct its rate
+// against the RTC (correct, coarse). The ratio is measured once at startup and
+// refined every few seconds during the run; when the RTC is too coarse to
+// resolve the interval the ratio stays 1, which is the right answer for an
+// emulator running on a sane host clock.
+//
+// Both halves are needed for the numbers in the HUD: before this, the frame
+// meter and the scene clock read the same source, so one wrong clock produced a
+// HUD that disagreed with the emulator about the frame rate and about how many
+// seconds had passed.
+namespace {
+
+double gRtcRes = 1000000.0;   // ticks per second, as reported (1 MHz on PSP)
+bool gRtcFine = false;        // false when the RTC only moves in whole seconds
+bool gClockReady = false;
+
+double gRate = 1.0;           // kernel seconds -> wall seconds
+bool gRateMeasured = false;
+
+double gUptime = 0.0;         // wall seconds since ClockInit()
+u64 gKernPrev = 0;
+u64 gCalKern = 0;
+u64 gCalRtc = 0;
+
+inline u64 RtcTick() {
   u64 tick = 0;
-  if (sceRtcGetCurrentTick(&tick) == 0) return (double)tick / tickRes;
-  return (double)sceKernelGetSystemTimeWide() * 1e-6;
+  return sceRtcGetCurrentTick(&tick) == 0 ? tick : 0;
+}
+
+// Ratio of RTC progress to kernel-timer progress over the current calibration
+// window. < 0 means "not measurable yet".
+double MeasuredRate(u64 kernUs) {
+  if (!gRtcFine) return -1.0;
+  const double kernSpan = (double)(kernUs - gCalKern) * 1e-6;
+  if (kernSpan < 0.20) return -1.0;
+  const double rtcSpan = (double)(RtcTick() - gCalRtc) / gRtcRes;
+  if (rtcSpan <= 0.0) return -1.0;
+  const double rate = rtcSpan / kernSpan;
+  return (rate > 0.2 && rate < 5.0) ? rate : -1.0;
+}
+
+}  // namespace
+
+// Called once, before the first frame. Costs about 200 ms of boot time.
+void ClockInit() {
+  const u32 res = sceRtcGetTickResolution();
+  gRtcRes = res > 0 ? (double)res : 1000000.0;
+
+  // Is the RTC fine-grained? Two reads a few milliseconds apart: an emulator
+  // that exposes it in whole seconds returns the same tick twice, and any rate
+  // measured from that would be noise, so the kernel timer is trusted as-is.
+  const u64 rtc0 = RtcTick();
+  sceKernelDelayThread(8000);
+  const u64 rtc1 = RtcTick();
+  gRtcFine = rtc1 > rtc0 && (double)(rtc1 - rtc0) / gRtcRes < 0.5;
+
+  gKernPrev = sceKernelGetSystemTimeWide();
+  gCalKern = gKernPrev;
+  gCalRtc = rtc1;
+
+  // One short calibration window before the first frame so the whole run is
+  // measured at the right rate instead of the first seconds being off.
+  sceKernelDelayThread(200000);
+  const u64 kernNow = sceKernelGetSystemTimeWide();
+  const double rate = MeasuredRate(kernNow);
+  if (rate > 0.0) {
+    gRate = rate;
+    gRateMeasured = true;
+  }
+  gCalKern = kernNow;
+  gCalRtc = RtcTick();
+  gKernPrev = kernNow;
+  gUptime = 0.0;
+  gClockReady = true;
+}
+
+double NowSeconds() {
+  if (!gClockReady) ClockInit();
+  const u64 kern = sceKernelGetSystemTimeWide();
+  if (kern > gKernPrev) {
+    gUptime += (double)(kern - gKernPrev) * 1e-6 * gRate;
+    gKernPrev = kern;
+  }
+  // Re-measure the rate every 4 s of kernel time; a coarse RTC averages out
+  // over that window and a slow one is corrected within the first few seconds.
+  const double sinceCal = (double)(kern - gCalKern) * 1e-6;
+  if (sinceCal >= 4.0) {
+    const double rate = MeasuredRate(kern);
+    if (rate > 0.0) {
+      gRate = gRateMeasured ? gRate * 0.5 + rate * 0.5 : rate;
+      gRateMeasured = true;
+    }
+    gCalKern = kern;
+    gCalRtc = RtcTick();
+  }
+  return gUptime;
 }
 
 // Every scene sets up the state it needs, but a pass that leaves something on
@@ -481,6 +573,7 @@ int main(int argc, char *argv[]) {
   sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
 
   SetupCallbacks();
+  ClockInit();
   GuInit();
   BuildFontTexture();
   // Both scenes are built before the first timed frame; Scene4Init's geometry
