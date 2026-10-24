@@ -42,8 +42,15 @@ constexpr int kSkyW = 256, kSkyH = 128;
 constexpr int kSparkW = 128, kSparkH = 128;
 constexpr int kChaosW = 128;
 // Rows of the sky panorama rebuilt per frame. kSkyH / kSkyRowsPerFrame frames
-// make one full pass (32 at the default), so no single frame carries the bake.
-constexpr int kSkyRowsPerFrame = 4;
+// make one full pass (128 at the default), so no single frame carries the bake.
+//
+// It used to be 4. The panorama only changes because the nine clouds drift at
+// 0.0025 rad/s, which moves a 256-column sky by one texel every ten seconds, so
+// a full pass every ~two seconds was rebuilding the same image thirty times
+// over - and every texel of it costs an acos, an exp lookup and the nine-cloud
+// loop. One row per frame keeps the cost off the frame budget without the
+// band-to-band cloud positions drifting far enough apart to see.
+constexpr int kSkyRowsPerFrame = 1;
 constexpr int kSkyGridX = 14, kSkyGridY = 9;
 constexpr int kSkyGridVerts = (kSkyGridX + 1) * (kSkyGridY + 1);
 
@@ -64,11 +71,20 @@ const float kCloudDrift[kClouds] = {-0.0025f, 0.0032f, -0.0018f, 0.0022f, -0.002
 // keeps ~5k vertices of shading inside the frame budget.
 float gSin[4097];
 float gExp[513];     // exp(-8..0)
+float gGamma[1025];  // x^(1/2.2), the panorama's display transfer
 float gChaos[kChaosW * kChaosW];
 
 void BuildMathTables() {
   for (int i = 0; i <= 4096; i++) gSin[i] = std::sin(TWO_PI * (float)i / 4096.0f);
   for (int i = 0; i <= 512; i++) gExp[i] = std::exp(-8.0f * (float)i / 512.0f);
+  // The panorama's gamma used three std::pow() calls per texel. std::pow is a
+  // double-precision libm entry point, and the Allegrex has no double FPU, so
+  // every one of them is a soft-float routine: 1,024 texels a frame times
+  // three of those was tens of milliseconds of the frame budget for a curve
+  // that only ever has to feed a 5-bit channel. One table, linear
+  // interpolation, no visible difference.
+  for (int i = 0; i <= 1024; i++)
+    gGamma[i] = std::pow((float)i * (1.0f / 1024.0f), 1.0f / 2.2f);
   unsigned int s = 0x9E3779B9u;
   for (int i = 0; i < kChaosW * kChaosW; i++) {
     s ^= s << 13; s ^= s >> 17; s ^= s << 5;
@@ -93,6 +109,14 @@ inline float FastSin(float x) {
 }
 
 inline float FastCos(float x) { return FastSin(x + PI * 0.5f); }
+
+inline float FastGamma(float x) {
+  x = (x < 0.0f ? 0.0f : (x > 1.0f ? 1.0f : x)) * 1024.0f;
+  int i = (int)x;
+  if (i > 1023) i = 1023;
+  float f = x - (float)i;
+  return gGamma[i] + (gGamma[i + 1] - gGamma[i]) * f;
+}
 
 inline float FastExpNeg(float x) { // x >= 0 -> exp(-x)
   if (x >= 8.0f) return 0.0f;
@@ -289,7 +313,7 @@ void BuildSkyRows(float t, int y0, int y1) {
       }
 
       r = r / (r + 1.0f); g = g / (g + 1.0f); b = b / (b + 1.0f);
-      r = std::pow(r, 1.0f / 2.2f); g = std::pow(g, 1.0f / 2.2f); b = std::pow(b, 1.0f / 2.2f);
+      r = FastGamma(r); g = FastGamma(g); b = FastGamma(b);
       gSkyTex[y * kSkyW + x] = Pack5551(r, g, b);
     }
   }

@@ -271,7 +271,26 @@ void SetSkyMatrix() {
   sceGumUpdateMatrix();
 }
 
-double NowSeconds() { return (double)sceKernelGetSystemTimeWide() * 1e-6; }
+// The benchmark clock has to be the console's own wall clock.
+//
+// sceKernelGetSystemTimeWide() counts microseconds off the kernel's system
+// timer, and that timer is clocked from the bus: with the port no longer
+// pinning the clocks, its seconds ran noticeably slower than the ones on the
+// user's stopwatch (a 45 s scene took well over 45 s of real time and the HUD
+// appeared to creep). The RTC tick counter is the console's real-time clock and
+// keeps real time whatever the CPU and bus are doing, so it is the timebase a
+// benchmark has to measure with. The tick resolution is queried once (1 MHz on
+// the PSP) rather than assumed.
+double NowSeconds() {
+  static double tickRes = 0.0;
+  if (tickRes <= 0.0) {
+    const u32 res = sceRtcGetTickResolution();
+    tickRes = res > 0 ? (double)res : 1000000.0;
+  }
+  u64 tick = 0;
+  if (sceRtcGetCurrentTick(&tick) == 0) return (double)tick / tickRes;
+  return (double)sceKernelGetSystemTimeWide() * 1e-6;
+}
 
 // Every scene sets up the state it needs, but a pass that leaves something on
 // (the sea leaves its additive passes with depth writes off, the HUD leaves
@@ -297,6 +316,8 @@ struct SceneStat {
   int frames;
   double seconds;
   double fps;
+  double worstFrameMs;  // slowest single frame inside the timed run
+  int slowFrames;       // frames that took more than 100 ms
 };
 
 // Sliding-window frame-rate meter for the HUD.
@@ -336,8 +357,9 @@ struct FpsMeter {
 // pay the scene-4 geometry build (the largest single piece of CPU work in
 // either scene) inside the second scene's timing.
 SceneStat RunScene(int scene) {
-  SceneStat stat{0, 0.0, 0.0};
+  SceneStat stat{0, 0.0, 0.0, 0.0, 0};
   const double start = NowSeconds();
+  double lastFrameAt = start;
   FpsMeter meter;
   int frames = 0;
   bool results = false;
@@ -397,20 +419,33 @@ SceneStat RunScene(int scene) {
     HudBegin();
     char line[64];
     if (!results) {
-      // One decimal, and the run's frame count next to it: a counter that has
-      // stopped and one that is holding steady at 30.0 no longer look alike.
+      // The frame time is measured here, before the HUD is built, so the
+      // figures on screen describe the frame that is about to be presented.
+      const double frameMs = (now - lastFrameAt) * 1000.0;
+      lastFrameAt = now;
+      if (frameMs > stat.worstFrameMs) stat.worstFrameMs = frameMs;
+      if (frameMs > 100.0) stat.slowFrames++;
       meter.Sample(now);
-      snprintf(line, sizeof(line), "FPS: %.1f", meter.Rate());
+      // Tenths are formatted with integer arithmetic: the PSP's printf has to
+      // synthesise float conversions in software, which is both slow in a
+      // per-frame path and one more thing that can print the wrong number.
+      const int rate10 = (int)(meter.Rate() * 10.0 + 0.5);
+      const int t10 = (int)(t * 10.0 + 0.5);
+      snprintf(line, sizeof(line), "FPS: %d.%d", rate10 / 10, rate10 % 10);
       HudText(line, 8.0f, 6.0f, 2.0f, Warm());
       HudText("ELECTROBENCH PSP", 8.0f, 26.0f, 1.0f, White());
-      snprintf(line, sizeof(line), "SCENE %d  %.1fS  F:%d", scene, t, frames);
+      snprintf(line, sizeof(line), "SCENE %d %d.%dS F:%d", scene, t10 / 10,
+               t10 % 10, frames);
       HudText(line, 8.0f, 40.0f, 1.0f, White());
     } else {
+      const int avg10 = (int)(stat.fps * 10.0 + 0.5);
+      const int sec10 = (int)(stat.seconds * 10.0 + 0.5);
       snprintf(line, sizeof(line), "SCENE %d RESULTS", scene);
       HudText(line, 60.0f, 96.0f, 2.0f, Warm());
-      snprintf(line, sizeof(line), "AVG FPS: %.1f", stat.fps);
+      snprintf(line, sizeof(line), "AVG FPS: %d.%d", avg10 / 10, avg10 % 10);
       HudText(line, 60.0f, 132.0f, 2.0f, White());
-      snprintf(line, sizeof(line), "FRAMES: %d", stat.frames);
+      snprintf(line, sizeof(line), "FRAMES: %d IN %d.%dS", stat.frames,
+               sec10 / 10, sec10 % 10);
       HudText(line, 60.0f, 152.0f, 1.0f, White());
       if (now - resultsAt > (double)kResultsMs * 0.001) sceneDone = true;
     }
@@ -473,10 +508,21 @@ int main(int argc, char *argv[]) {
     if (!gRunning) break;
     const int scene = order[i];
     SceneStat st = RunScene(scene);
-    if (st.frames > 0)
+    if (st.frames > 0) {
+      const int avg10 = (int)(st.fps * 10.0 + 0.5);
+      const int sec10 = (int)(st.seconds * 10.0 + 0.5);
+      const int worst10 = (int)(st.worstFrameMs * 10.0 + 0.5);
+      // The worst single frame and the number of frames over 100 ms are what
+      // turn "it stutters every few seconds" into a number: a satisfied run
+      // shows a worst frame close to the average, a hitching one shows a spike
+      // several times larger with only a handful of slow frames.
       used += snprintf(report + used, sizeof(report) - (size_t)used,
-                       "%s\nframes: %d\navg fps: %.1f\nrun: %.1f s\n\n",
-                       SceneName(scene), st.frames, st.fps, st.seconds);
+                       "%s\nframes: %d\navg fps: %d.%d\nrun: %d.%d s\n"
+                       "worst frame: %d.%d ms\nframes > 100 ms: %d\n\n",
+                       SceneName(scene), st.frames, avg10 / 10, avg10 % 10,
+                       sec10 / 10, sec10 % 10, worst10 / 10, worst10 % 10,
+                       st.slowFrames);
+    }
     if (!gRunning) break;
     if (used > (int)sizeof(report) - 128) break;
   }
