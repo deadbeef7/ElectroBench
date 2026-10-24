@@ -455,8 +455,18 @@ int main(int argc, char *argv[]) {
 
   char report[512];
   int used = 0;
+  // Report the clocks the console is actually running at. This used to be the
+  // literal "333/333/166 MHz" the port set for itself; the firmware decides
+  // those values on its own (and the maximum is not guaranteed on every
+  // model), so printing a constant would describe a clock that may never have
+  // been set - which is exactly how a report ends up disagreeing with the
+  // frame rate printed next to it.
+  // The PSP exposes the CPU and bus clocks (the GE runs off the bus); there is
+  // no separate GPU clock to read.
   used += snprintf(report + used, sizeof(report) - (size_t)used,
-                   "ElectroBench PSP\nclock: 333/333/166 MHz\n");
+                   "ElectroBench PSP\nclock: %d/%d MHz (cpu/bus)\n",
+                   scePowerGetCpuClockFrequency(),
+                   scePowerGetBusClockFrequency());
 
   const int order[2] = {2, 4};
   for (int i = 0; i < 2; i++) {
