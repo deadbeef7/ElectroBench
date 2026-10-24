@@ -54,7 +54,9 @@ The power-line corridor — an orange dusk under a real atmosphere (Rayleigh sky
 
 **In motion - but very slow** — the auto-dolly walking the corridor (four positions down the run): the cable web sweeping overhead pole after pole, slack coils swinging past, guy wires pulling into their anchor blocks, and the telecom bundles peeling off toward the eaves:
 
-![Scene 4 in motion: concrete poles, guy wires and catenary spans over the dolly camera](docs/screenshots/lain_lines.gif)
+![Scene 4 in motion: concrete poles, guy wires and catenary spans over the dolly camera](docs/screenshots/lain_lines.gif
+
+PS : With the new release, the screenshots have changed (a glitch in scene 4 is added on purpose to make it feel like Lain)
 
 # How to build ?
 
