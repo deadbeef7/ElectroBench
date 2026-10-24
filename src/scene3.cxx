@@ -755,8 +755,6 @@ static double gSimTime = 0.0;
 static const float kPullbackPerPot = 0.55f;  
 static const float kPullbackMax = 9.5f;    
 static const double kReturnSeconds = 3.0;  
-static const double kResplashHold = 3.2;   
-static const float kResplashSpeed = 8.5f;    
 
 static float gCamPullback = 0.0f; 
 static int gPhase = 0;           
@@ -774,39 +772,45 @@ static bool FleetAllDown() {
   return true;
 }
 
-static void ResplashAll() {
+// Lift the fleet out of the water and drop it again on the same staggered
+// schedule it first arrived on.
+//
+// This used to re-splash the pots where they sat: the crowns and rings fired,
+// but the pots themselves never left the surface, so the loop read as "they keep
+// splashing" rather than "they fall again". The pots are now deactivated (and
+// therefore not drawn at all) until their own spawnAt, which is what makes them
+// disappear, fall back in from kFleetDrop and splash on impact.
+static void RedropFleet(double t0) {
   for (int i = 0; i < kFleetCount; i++) {
     TeapotPhysics &p = gPots[i];
-    if (!p.active) continue;
-    SpawnSplash(i, p.pos.x, p.pos.z, kResplashSpeed, kFleetScale[i]);
-    SpawnRing(i, p.pos.x, p.pos.z, 0.55f);
-    p.splashTime = gSimTime;  
-    p.nextBoil = gSimTime + 0.25;
+    p.active = false;
+    p.inWater = false;
+    p.splashed = false;
+    p.settled = false;
+    p.spawnAt = t0 + kFleetDelay[i];
+    p.splashTime = -1.0;
+    gCrowns[i] = CrownSplash{};
+    gJets[i] = JetColumn{};
   }
 }
 
 static void UpdateChoreography(double simNow, double dt) {
   float target = 0.0f;
 
-  if (gPhase == 0) {
+  // Phases 0 and 2 are the same beat -- the fleet is falling in -- and differ
+  // only in where gPhaseT was reset; phase 1 is the camera easing back before
+  // the fleet is lifted again.
+  if (gPhase == 0 || gPhase == 2) {
     target = std::fmin((float)FleetSpawned() * kPullbackPerPot, kPullbackMax);
     if (FleetAllDown()) {
       gPhase = 1;
       gPhaseT = simNow;
     }
-  } else if (gPhase == 1) {
-    target = 0.0f;
-    if (simNow - gPhaseT >= kReturnSeconds && gCamPullback <= 0.30f) {
-      ResplashAll();
-      gPhase = 2;
-      gPhaseT = simNow;
-    }
   } else {
     target = 0.0f;
-    if (simNow - gPhaseT >= kResplashHold) {
-      ResetFleet(simNow);
-      gCamPullback = 0.0f;
-      gPhase = 0;
+    if (simNow - gPhaseT >= kReturnSeconds && gCamPullback <= 0.30f) {
+      RedropFleet(simNow);
+      gPhase = 2;
       gPhaseT = simNow;
     }
   }
