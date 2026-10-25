@@ -95,6 +95,11 @@ uniform vec3  uWaterColor;
 // reflection that reads as broken instead of as water. The other ports keep
 // the cube (mipmapped, 16F) and are bit-identical to before.
 uniform float uEnvCube;
+
+// 1 = linear radiance for the shared HDR camera (post.hxx), 0 = apply this
+// shader's own response curve and write LDR (the desktop-compatible fallback
+// used when the camera target could not be allocated).
+uniform float uHdrOut;
 // sky_frag.glsl's palette, verbatim, so the analytic reflection cannot drift
 // from the sky actually drawn above the water.
 uniform vec3  uSkyZenith;
@@ -428,7 +433,16 @@ void main() {
     color += vec3(1.0, 0.64, 0.38) * (glint + glintMid + glintWide * pathGate)
              * (0.25 + max(L.y, 0.0) * 1.2) * pathGate * shadow * sparkleGate;
 
-    // HDR tone map + gamma
+    if (uHdrOut > 0.5) {
+        // Linear HDR. The glitter path is the reason this matters: its tight
+        // 360-exponent lobe is many times the water's radiance, and clipping
+        // it to 1.0 here is what made the sparkles read as white pixels
+        // instead of as light the lens can flare around.
+        gl_FragColor = vec4(max(color, vec3(0.0)), 1.0);
+        return;
+    }
+
+    // Tone map + gamma (fallback path)
     color = color / (color + vec3(1.0));
     color = pow(color, vec3(1.0 / 2.2));
     gl_FragColor = vec4(color, 1.0);

@@ -35,6 +35,25 @@
 extern bool gWindowedMode;
 #include "font_atlas.hxx"
 #include "jobs.hxx" // startup CPU work on the spare cores (see Setup)
+#include "post.hxx" // shared HDR camera (see its header for what it replaces)
+
+// Diagnostics for the camera set-up. On the Vita stderr is the SceShell
+// console, which a homebrew run never shows, so the same lines go to the
+// persistent ux0:/data/ELEB00002/spinlog.txt owned by src/vita_main.cxx.
+#ifdef ELECTROBENCH_VITA
+void VitaLog(const char *fmt, ...);
+#define SCENE4_LOG(...) VitaLog(__VA_ARGS__)
+#else
+#define SCENE4_LOG(...) ((void)0)
+#endif
+
+// ------------------------------------------------------------- HDR camera
+// Shared with scene 2 and the Android build (post.hxx). Every pass below asks
+// gPost.ready whether to write linear radiance or its own LDR curve, and the
+// frame ends in one ACES composite instead of three separate tone curves.
+static postproc::Pipeline gPost;
+static postproc::Settings gPostSettings;
+
 // --------------------------------------------------------------- math block
 struct Vec3 {
   float x, y, z;
@@ -1377,6 +1396,8 @@ static void DrawSky(const Mat4 &view, const Vec3 &eye, double timeSec) {
   Vec3 sd = SunDirNow(timeSec);
   glUniform3f(gSkyProg.loc("uSunDir"), sd.x, sd.y, sd.z);
   glUniform1f(gSkyProg.loc("uTime"), (float)timeSec);
+  // 1 = linear radiance for the HDR camera, 0 = the shader's own film curve.
+  glUniform1f(gSkyProg.loc("uHdrOut"), gPost.ready ? 1.0f : 0.0f);
   glDrawElements(GL_TRIANGLES, gSkyIndexCount, GL_UNSIGNED_INT, nullptr);
   glBindVertexArray(0);
   glEnable(GL_CULL_FACE);
@@ -1466,6 +1487,7 @@ static void DrawGroundShadows(const Mat4 &view, const Vec3 &eye, double t,
   glUniform3f(gObjProg.loc("uSunDir"), sunDir.x, sunDir.y, sunDir.z);
   glUniform1f(gObjProg.loc("uTime"), (float)t);
   glUniform1f(gObjProg.loc("uRoadX"), kRoadX);
+  glUniform1f(gObjProg.loc("uHdrOut"), gPost.ready ? 1.0f : 0.0f);
   glEnable(GL_BLEND);
   glBlendFunc(GL_ZERO, GL_ONE_MINUS_SRC_ALPHA);
   glDepthMask(GL_FALSE);  
@@ -1492,6 +1514,7 @@ static void DrawGrid(const Mat4 &view, const Vec3 &eye, double timeSec) {
   glUniform3f(gObjProg.loc("uSunDir"), sd.x, sd.y, sd.z);
   glUniform1f(gObjProg.loc("uTime"), (float)timeSec);
   glUniform1f(gObjProg.loc("uRoadX"), kRoadX);
+  glUniform1f(gObjProg.loc("uHdrOut"), gPost.ready ? 1.0f : 0.0f);
   glDrawElements(GL_TRIANGLES, gObjIndexCount, GL_UNSIGNED_INT, nullptr);
   glBindVertexArray(0);
   glEnable(GL_CULL_FACE);
@@ -1534,13 +1557,15 @@ static void RenderScene() {
   float aspect = (float)gWindowWidth / (float)gWindowHeight;
   Mat4Perspective(gProj, 52.0f, aspect, 0.1f, 900.0f);
 
-  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  // ---- the HDR camera target (default framebuffer if unavailable) ----
+  const bool hdr = postproc::Begin(gPost, gWindowWidth, gWindowHeight);
   glViewport(0, 0, gWindowWidth, gWindowHeight);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
   DrawGrid(view, eye, gSimTime);
   DrawGroundShadows(view, eye, gSimTime, gLineA, gLineB);
   DrawSky(view, eye, gSimTime);
+  if (hdr) postproc::End(gPost, gPostSettings, t);
   RenderHUD();
 
   if (gScreenshotPath && gNextShot < gShotTimes.size() &&
@@ -1711,6 +1736,25 @@ static void Setup() {
   glEnable(GL_CULL_FACE);
   glCullFace(GL_BACK);
   glClearColor(0.60f, 0.30f, 0.10f, 1.0f);
+
+  // Camera settings, identical to the desktop scene: a late sun is far above
+  // 1.0 at the wet-road speculars and the insulator glints, so the threshold
+  // sits at 1.15 -- only genuine highlights seed the bloom, not the whole
+  // orange sky.
+  gPostSettings.exposure = 0.97f;
+  gPostSettings.bloom = 0.085f;
+  gPostSettings.threshold = 1.15f;
+  gPostSettings.knee = 0.60f;
+  gPostSettings.aberration = 0.0090f;
+  gPostSettings.vignette = 0.20f;
+  gPostSettings.grain = 0.020f;
+  gPostSettings.flare = 1.0f;
+  if (postproc::Init(gPost, gWindowWidth, gWindowHeight)) {
+    SCENE4_LOG("scene4: camera HDR RGBA16F, %d-level bloom, ACES composite",
+               postproc::kLevels);
+  } else {
+    SCENE4_LOG("scene4: HDR target unavailable - in-shader response curve");
+  }
 }
 
 int RunPoleScene(bool *gaveUpOut) {

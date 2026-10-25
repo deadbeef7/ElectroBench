@@ -27,6 +27,11 @@ varying highp vec3 vDir;
 uniform highp vec3 uSunDir;
 uniform float uTime;
 
+// 1 = linear radiance for the shared HDR camera (post.hxx), 0 = apply this
+// shader's own film curve and write LDR (the fallback used when the camera
+// target could not be allocated).
+uniform float uHdrOut;
+
 
 float vhash(vec2 p) {
     vec3 q = fract(vec3(p.x, p.y, p.x) * 0.1031);
@@ -208,6 +213,13 @@ void main() {
 
     sky = mix(sky, cloudCol, clamp(cover, 0.0, 1.0));
 
+    // Linear radiance: the sun disc, its glow and the cloud edges keep their
+    // real ratios here, so the composite's bloom can bleed the disc into the
+    // sky instead of clipping it to a flat white circle first.
+    if (uHdrOut > 0.5) {
+        gl_FragColor = vec4(max(sky, vec3(0.0)), 1.0);
+        return;
+    }
 
     float dith = vhash(dir.xy * 1913.7 + fract(uTime) * 17.0);
     sky += (dith - 0.5) * (1.5 / 255.0);

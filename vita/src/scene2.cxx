@@ -27,6 +27,7 @@
 extern bool gWindowedMode;
 #include "font_atlas.hxx" // shared HUD font data and atlas layout
 #include "jobs.hxx"      // startup CPU work on the spare cores (see Setup)
+#include "post.hxx"      // shared HDR camera (see its header for what it replaces)
 
 
 #define NAME "ElectroBench - Scene 2"
@@ -778,6 +779,11 @@ static void RenderText(float x, float y, const char *text, float scale = 2.0f) {
 }
 
 // ------------------------------------------------------------------- setup
+// HDR camera shared with scene 4 and the Android build (post.hxx). Every pass
+// below asks gPost.ready whether to write linear radiance or its own LDR curve.
+static postproc::Pipeline gPost;
+static postproc::Settings gPostSettings;
+
 static void Setup() {
   BuildSeaMesh();
   BuildDomeMesh();
@@ -847,6 +853,31 @@ static void Setup() {
   glEnable(GL_CULL_FACE);
   glCullFace(GL_BACK);
   glClearColor(0.055f, 0.035f, 0.075f, 1.0f); // dusk background (only visible if geometry ever gaps)
+
+  // Camera settings from the desktop scene: threshold 1.35 keeps the bloom on
+  // the sun, the glitter path and the cloud edges instead of the whole dusk
+  // sky, and knee/aberration/vignette/grain are the same values. Exposure is
+  // the one number that does not carry over: this port's sea and sky radiance
+  // were authored for the shader-side pow(c, 1/2.2) they used before, which
+  // lifted the shadows more than the ACES curve does, so 1.0 renders the dusk
+  // visibly darker here than the identical frame on the desktop. 1.35 puts the
+  // port's mean and highlight distribution back where the old path had them
+  // (measured against the same 480x272 frame: p95 208/209, p99 246/247 versus
+  // the desktop), without clipping a single pixel.
+  gPostSettings.exposure = 1.35f;
+  gPostSettings.bloom = 0.095f;
+  gPostSettings.threshold = 1.35f;
+  gPostSettings.knee = 0.75f;
+  gPostSettings.aberration = 0.0090f;
+  gPostSettings.vignette = 0.18f;
+  gPostSettings.grain = 0.018f;
+  gPostSettings.flare = 1.0f;
+  if (postproc::Init(gPost, gWindowWidth, gWindowHeight)) {
+    SCENE2_LOG("scene2: camera HDR RGBA16F, %d-level bloom, ACES composite",
+               postproc::kLevels);
+  } else {
+    SCENE2_LOG("scene2: HDR target unavailable - in-shader response curve");
+  }
 }
 
 // -------------------------------------------------------------- render passes
@@ -860,6 +891,9 @@ static void DrawSea(const Mat4 &view, double timeSec, const Vec3 &eye) {
   glDepthMask(GL_TRUE);
   glUniformMatrix4fv(gSeaProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
   glUniform1f(gSeaProg.loc("uTime"), (float)timeSec);
+  // 1 = linear radiance for the HDR camera, 0 = the shader's own film curve
+  // (the fallback used when the target could not be allocated).
+  glUniform1f(gSeaProg.loc("uHdrOut"), gPost.ready ? 1.0f : 0.0f);
   glUniform3f(gSeaProg.loc("uEyePos"), eye.x, eye.y, eye.z);
   glUniform3f(gSeaProg.loc("uSunDir"), gSunDir.x, gSunDir.y, gSunDir.z);
   glUniform3f(gSeaProg.loc("uHorizonColor"), 0.10f, 0.052f, 0.062f); // dark maroon haze, melts into the sky band
@@ -910,7 +944,10 @@ static void DrawSkyScreen(const Mat4 &view, const Vec3 &eye) {
   BindSkyUniforms(vp);
   glUniform3f(gSkyProg.loc("uCenter"), eye.x, eye.y, eye.z);
   glUniform1f(gSkyProg.loc("uRadius"), 5000.0f);
-  glUniform1f(gSkyProg.loc("uTonemap"), 1.0f); 
+  // The sky shader's own path was already the better-behaved one (it keeps the
+  // sun's halo above 1.0 until uTonemap), so the HDR camera just asks for the
+  // same linear radiance the environment probe already uses.
+  glUniform1f(gSkyProg.loc("uTonemap"), gPost.ready ? 0.0f : 1.0f);
   glDrawElements(GL_TRIANGLES, gDomeMesh.indexCount, GL_UNSIGNED_INT, nullptr);
   glBindVertexArray(0);
   glEnable(GL_CULL_FACE);
@@ -991,13 +1028,14 @@ static void RenderScene() {
   UpdateEnvMap(envProj);
   DumpEnvFacesOnce();
 
-  // ---- pass 2: main framebuffer ----
-  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  // ---- pass 2: the HDR camera target (default framebuffer if unavailable) ----
+  const bool hdr = postproc::Begin(gPost, gWindowWidth, gWindowHeight);
   glViewport(0, 0, gWindowWidth, gWindowHeight);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
   DrawSkyScreen(view, eye);
   DrawSea(view, gSceneTime, eye);
+  if (hdr) postproc::End(gPost, gPostSettings, t);
   RenderHUD();
 
     if (gScreenshotPath && gNextShot < gShotTimes.size() &&

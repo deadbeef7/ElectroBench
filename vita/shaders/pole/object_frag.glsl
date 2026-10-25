@@ -22,6 +22,11 @@ uniform vec3  uSunDir;
 uniform float uTime;
 uniform float uRoadX;
 
+// 1 = linear radiance for the shared HDR camera (post.hxx), 0 = apply this
+// shader's own film curve and write LDR (the fallback used when the camera
+// target could not be allocated).
+uniform float uHdrOut;
+
 
 const float kMatPaint  = 0.0;
 const float kMatWood   = 1.0;
@@ -325,6 +330,10 @@ void main() {
         float hz = 1.0 - exp(-distG * 0.0016);
         vec3 g = base * 1.05;
         g = mix(g, hazeColFor(g, L, V), clamp(hz, 0.0, 0.45));
+        if (uHdrOut > 0.5) {
+            gl_FragColor = vec4(max(g, vec3(0.0)), 1.0);
+            return;
+        }
         gl_FragColor = vec4(pow(max(g, vec3(0.0)), vec3(1.0 / 2.2)), 1.0);
         return;
     }
@@ -421,6 +430,14 @@ void main() {
     float silh = clamp(1.0 - dot(base, vec3(0.333)) * 2.6, 0.0, 1.0);
     col = mix(col, vec3(0.52, 0.30, 0.14), silh * 0.16);
 
+
+    // Linear radiance for the camera pipeline. A late sun is far above 1.0 at
+    // the speculars; clamping here is what used to turn every wet highlight
+    // into the same flat white before the grain and the gamma curve ran.
+    if (uHdrOut > 0.5) {
+        gl_FragColor = vec4(max(col, vec3(0.0)), 1.0);
+        return;
+    }
 
     col = clamp(col, 0.0, 4.0);
     col = col / (col * 0.35 + vec3(0.72));
