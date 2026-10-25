@@ -465,25 +465,48 @@ static bool gDumpEnvDone = false;
 static GLuint gHudVao = 0, gHudVbo = 0;
 static int gHudQuadCount = 0;
 
+// The auto camera is an out-and-back move, not an endless orbit: one lap
+// dollies straight forward along the reference view, turns left in place, then
+// eases both back to the pose the shot is framed from. Every lap therefore
+// begins and ends on the same reference framing instead of chasing its own
+// tail around the scene.
+static float Smooth01(float x) {
+  if (x < 0.0f) x = 0.0f;
+  if (x > 1.0f) x = 1.0f;
+  return x * x * (3.0f - 2.0f * x);
+}
+
 static void UpdateAutoCamera(float t) {
-  float a = t * 0.16f;                                  
-  float radius = 42.0f + std::sin(t * 0.042f) * 10.0f;   
+  const float kCycle = 26.0f;                            // lap: forward, turn, restore
+  const float kForward = 24.0f;                          // units pushed towards the sun
+  const float kTurnLeft = 0.38f;                         // ~22 deg of yaw
+  const float kEyeX = 42.0f, kEyeY = 7.5f, kEyeZ = 0.0f; // the reference pose
 
-  Vec3 eye;
-  eye.x = std::cos(a) * radius;
-  eye.z = std::sin(a) * radius * 0.7f;
-  eye.y = 7.5f + std::sin(t * 0.086f) * 2.2f;            // bob: 2x faster
-  gCamPos = eye;
+  float ph = (float)std::fmod((double)t, (double)kCycle);
+  if (ph < 0.0f) ph += kCycle;
 
-  // face the sun, swaying so the framing breathes during the run.
-  // Tamed sway (±0.18 rad) keeps the glitter path in the middle of the frame
-  // with dark off-path sea on both sides — the reference composition.
-  // All sway frequencies doubled so the whole motion reads quicker.
+  float forward = 0.0f, left = 0.0f;
+  if (ph < 9.0f) {
+    forward = Smooth01(ph / 9.0f);                    // 0-9s: move forward
+  } else if (ph < 16.0f) {
+    forward = 1.0f;
+    left = Smooth01((ph - 9.0f) / 7.0f);              // 9-16s: turn left, in place
+  } else {
+    float back = Smooth01((ph - 16.0f) / (kCycle - 16.0f));
+    forward = 1.0f - back;                            // 16-26s: restore both
+    left = 1.0f - back;
+  }
+
   float yawSun = std::atan2(gSunDir.x, gSunDir.z);
-  float yaw = yawSun + 0.14f * std::sin(t * 0.026f) + 0.04f * std::sin(t * 0.082f);
-  float pitch = 0.030f + 0.022f * std::sin(t * 0.034f); // horizon high in frame:
-                                                        // sky ~25%, sea ~75% like
-                                                        // the reference shot
+  // A rising yaw swings the view towards screen-left, so the sun -- dead centre
+  // in the reference shot -- drifts right exactly as a left-hand turn would.
+  float yaw = yawSun + left * kTurnLeft;
+  const float pitch = 0.030f; // horizon high in frame: sky ~25%, sea ~75%
+
+  gCamPos.x = kEyeX + std::sin(yawSun) * kForward * forward;
+  gCamPos.y = kEyeY;
+  gCamPos.z = kEyeZ + std::cos(yawSun) * kForward * forward;
+
   Vec3 fwd = {std::sin(yaw) * std::cos(pitch), std::sin(pitch),
               std::cos(yaw) * std::cos(pitch)};
   gCamYaw = std::atan2(fwd.x, fwd.z);
