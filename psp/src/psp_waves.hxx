@@ -24,9 +24,7 @@
 // PPSSPP's VFPU math notes; this is the one detail that silently mirrors the
 // wave shape if it is wrong, hence the explicit name.)
 //
-// The portable PackedScalar() computes exactly what the asm does, lane for
-// lane; tools/test_psp_math.cxx compares it with the direct Reference() sum so
-// the lane packing itself is verified rather than trusted.
+// The portable PackedScalar() computes exactly what the asm does.
 #pragma once
 
 #include <cmath>
@@ -40,12 +38,8 @@ namespace pspwaves {
 constexpr float kPi = 3.14159265358979f;
 constexpr float kHalfPi = 1.57079632679490f;
 constexpr float kTwoPi = 6.28318530717959f;
-// VFPU angle units per radian: sin_vfpu(x) == sin(pi/2 * x).
 constexpr float kScaledPerRadian = 2.0f / kPi;
 constexpr int kLanes = 8;
-
-// Must stay identical to kWaves in psp_scene2.cxx and to waveHeight() in
-// shaders/ps14/sea_frag.glsl.
 struct Wave {
   float dx, dz, k, w, amp;
 };
@@ -64,9 +58,6 @@ struct Field {
   float gx;
   float gz;
 };
-
-// Direct evaluation, no packing. The reference the other two are checked
-// against.
 inline Field Reference(float x, float z, float t) {
   float h = 0.0f, sx = 0.0f, sz = 0.0f;
   for (int i = 0; i < 6; i++) {
@@ -79,10 +70,6 @@ inline Field Reference(float x, float z, float t) {
   }
   return {h, -sx, -sz};
 }
-
-// The lane layout the asm consumes. Lanes 6 and 7 are zero: their amp and
-// gradient coefficients are zero, so sin/cos of whatever phase they carry
-// contributes nothing.
 struct Packed {
   alignas(16) float kdx[kLanes];
   alignas(16) float kdz[kLanes];
@@ -92,11 +79,7 @@ struct Packed {
   alignas(16) float coefZ[kLanes];
 };
 
-// Written out rather than built by a constructor: the PSP link has no
-// __cxa_guard_acquire (a function-local static here failed to link), and a
-// constexpr table needs neither a guard nor a startup initialiser. The values
-// are dx*k, dz*k, w, amp, dx*amp*k, dz*amp*k for the six waves, then two zero
-// lanes; tools/test_psp_math.cxx checks them against kWaves.
+
 inline constexpr Packed kPacked = {
     {0.1666f, -0.1536f, 0.1368f, -0.4914f, 0.5074f, -0.29f, 0.0f, 0.0f},
     {0.034f, 0.1848f, -0.3534f, -0.2268f, 0.6966f, 1.421f, 0.0f, 0.0f},
@@ -116,7 +99,6 @@ inline float WrapScaled(float radians) {
   return s;
 }
 
-// Portable twin of the asm kernel: same packing, same order of operations.
 inline Field PackedScalar(float x, float z, float t) {
   const Packed &c = Constants();
   float ph[kLanes];
@@ -125,7 +107,6 @@ inline Field PackedScalar(float x, float z, float t) {
   }
   float h = 0.0f, gx = 0.0f, gz = 0.0f;
   for (int i = 0; i < kLanes; i++) {
-    // ph is in VFPU units, so the portable sine multiplies back by pi/2.
     const float rad = ph[i] * kHalfPi;
     h += std::sin(rad) * c.amp[i];
     gx += std::cos(rad) * c.coefX[i];
