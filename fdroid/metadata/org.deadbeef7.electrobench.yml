@@ -1,0 +1,39 @@
+# F-Droid build recipe for ElectroBench (Android).
+#
+# This file is a versioned copy: the one F-Droid actually builds from lives in
+# fdroiddata as metadata/org.deadbeef7.electrobench.yml. See android/README.md
+# for the release checklist (version bump, tag, screenshot refresh).
+#
+# The app is NDK + make only (no Gradle, no Java), so this is a "manual" build:
+# fdroidserver runs the `build:` commands and then collects the single APK the
+# `output:` glob matches. Nothing is downloaded during the build; the NDK and
+# SDK come from F-Droid's build server, selected by `ndk:` below.
+Categories:
+  - Graphics
+  - Development
+License: GPL-3.0-only
+AuthorName: deadbeef7
+SourceCode: https://github.com/deadbeef7/ElectroBench
+IssueTracker: https://github.com/deadbeef7/ElectroBench/issues
+RepoType: git
+Repo: https://github.com/deadbeef7/ElectroBench
+
+Builds:
+  - versionName: '1.0'
+    versionCode: 1
+    # Full hash of the release commit - the commit that carries this file, its
+    # Makefile `unsigned` target and the fastlane listing. Replace with
+    # `git rev-parse HEAD` of that commit before opening the fdroiddata MR.
+    commit: SET-ME-TO-THE-RELEASE-COMMIT
+    # NDK r26d. F-Droid installs this revision into its SDK and exports
+    # ANDROID_NDK / ANDROID_NDK_HOME, which the Makefile reads ($($$NDK$$) is
+    # passed explicitly so the recipe does not depend on that variable name).
+    ndk: 26.3.11579264
+    build:
+      - make -C android unsigned SDK=$$SDK$$ NDK=$$NDK$$
+    output: build-android/ElectroBench-*-unsigned.apk
+
+AutoUpdateMode: Version
+UpdateCheckMode: Tags
+CurrentVersion: '1.0'
+CurrentVersionCode: 1

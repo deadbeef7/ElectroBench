@@ -1,17 +1,21 @@
 ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
 
-NDK ?= $(ANDROID_NDK_HOME)
-SDK ?= $(ANDROID_SDK_ROOT)
+# Both spellings: local toolchain scripts set ANDROID_NDK_HOME/ANDROID_SDK_ROOT,
+# F-Droid's build server exports ANDROID_NDK/ANDROID_HOME. NDK=/SDK= still wins.
+NDK ?= $(or $(ANDROID_NDK_HOME),$(ANDROID_NDK))
+SDK ?= $(or $(ANDROID_SDK_ROOT),$(ANDROID_HOME))
 ifeq ($(strip $(NDK)),)
 $(warning ANDROID_NDK_HOME is not set: run 'sh android/fetch_toolchain.sh', or pass NDK=/path/to/ndk)
 endif
 ifeq ($(strip $(SDK)),)
 $(warning ANDROID_SDK_ROOT is not set: run 'sh android/fetch_toolchain.sh', or pass SDK=/path/to/sdk)
 endif
-BUILD_TOOLS ?= $(shell if [ -d "$(SDK)/build-tools/34.0.0" ]; then \
-	  echo "$(SDK)/build-tools/34.0.0"; \
-	else ls -d "$(SDK)"/build-tools/* 2>/dev/null | tail -1; fi)
-PLATFORM_JAR ?= $(SDK)/platforms/android-34/android.jar
+# Newest NUMERIC build-tools: a plain sort puts "android-14" after "34.0.0".
+BUILD_TOOLS ?= $(or $(wildcard $(SDK)/build-tools/34.0.0),\
+	 $(lastword $(shell ls -d $(SDK)/build-tools/[0-9]* 2>/dev/null | sort -V)),\
+	 $(lastword $(sort $(wildcard $(SDK)/build-tools/*))))
+PLATFORM_JAR ?= $(or $(wildcard $(SDK)/platforms/android-34/android.jar),\
+	 $(lastword $(shell ls -d $(SDK)/platforms/android-*/android.jar 2>/dev/null | sort -V)))
 
 # The NDK ships one prebuilt per host; the name is what decides which one.
 HOST_TAG ?= $(shell uname -s | tr '[:upper:]' '[:lower:]')-x86_64
@@ -29,11 +33,15 @@ API := 24
 MIN_SDK := 24
 TARGET_SDK := 34
 
+# Bump together with the fastlane changelog and the F-Droid recipe's Builds entry.
+VERSION_CODE ?= 1
+VERSION_NAME ?= 1.0
+
 ABIS := arm64-v8a armeabi-v7a x86_64
 
 BUILD := $(ROOT)/build-android
 APK := $(ROOT)/ElectroBench-android.apk
-.PHONY: all clean check verify doctor apk host-render host-png host-shaders check-artifacts
+.PHONY: all clean check verify doctor apk unsigned host-render host-png host-shaders check-artifacts
 all: $(APK)
 
 ifneq ($(filter all apk,$(MAKECMDGOALS)),)
@@ -95,8 +103,11 @@ ICON_SIZE_xxxhdpi := 192
 RES := $(foreach d,$(ICON_DENSITIES),$(BUILD)/res/mipmap-$(d)/ic_launcher.png)
 STALE_RES := $(BUILD)/res/mipmap
 SO_FILES := $(foreach abi,$(ABIS),$(BUILD)/$(abi)/libmain.so)
+# A store build (F-Droid) takes the unsigned APK and signs it with its own key.
+ALIGNED := $(BUILD)/app-aligned.apk
+UNSIGNED := $(BUILD)/ElectroBench-$(VERSION_NAME)-unsigned.apk
 
-.PHONY: all clean check verify doctor apk host-render host-png host-shaders FORCE
+.PHONY: all clean check verify doctor apk unsigned host-render host-png host-shaders FORCE
 all: $(APK)
 
 # The project is commonly distributed as a ZIP, which may normalize mtimes.
@@ -133,7 +144,9 @@ $(KEYSTORE):
 	fi
 
 # -------------------------------------------------------------------------- APK
-$(APK): FORCE $(SO_FILES) $(RES) $(SHADERS) $(ROOT)/android/AndroidManifest.xml $(KEYSTORE)
+# Staging, aapt2 and zipalign in one rule; signing is separate so the store path
+# can stop before it.
+$(ALIGNED): FORCE $(SO_FILES) $(RES) $(SHADERS) $(ROOT)/android/AndroidManifest.xml
 	@rm -rf $(STAGE)
 	@mkdir -p $(STAGE)/assets
 	cp -R $(ROOT)/vita/shaders $(STAGE)/assets/shaders
@@ -145,12 +158,20 @@ $(APK): FORCE $(SO_FILES) $(RES) $(SHADERS) $(ROOT)/android/AndroidManifest.xml 
 	$(AAPT2) link -o $(BUILD)/app-unsigned.apk -I $(PLATFORM_JAR) \
 	    --manifest $(ROOT)/android/AndroidManifest.xml -A $(STAGE)/assets \
 	    --min-sdk-version $(MIN_SDK) --target-sdk-version $(TARGET_SDK) \
-	    --version-code 1 --version-name 1.0 $(BUILD)/res.zip
+	    --version-code $(VERSION_CODE) --version-name $(VERSION_NAME) $(BUILD)/res.zip
 	cd $(STAGE) && zip -q -0 -r -X $(BUILD)/app-unsigned.apk lib
-	$(ZIPALIGN) -p -f 4 $(BUILD)/app-unsigned.apk $(BUILD)/app-aligned.apk
+	$(ZIPALIGN) -p -f 4 $(BUILD)/app-unsigned.apk $@
+	@echo "aligned APK: $@ ($$(stat -c%s $@) bytes)"
+
+unsigned: $(UNSIGNED)
+$(UNSIGNED): $(ALIGNED)
+	@cp $< $@
+	@echo "unsigned APK: $@ ($$(stat -c%s $@) bytes)"
+
+$(APK): $(ALIGNED) $(KEYSTORE)
 	$(APKSIGNER) sign --ks $(KEYSTORE) --ks-pass pass:android --key-pass pass:android \
 	    --ks-key-alias androiddebugkey --min-sdk-version $(MIN_SDK) \
-	    --v4-signing-enabled false --out $@ $(BUILD)/app-aligned.apk
+	    --v4-signing-enabled false --out $@ $(ALIGNED)
 	@echo "APK: $@ ($$(stat -c%s $@) bytes)"
 
 doctor:

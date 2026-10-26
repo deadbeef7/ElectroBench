@@ -1,0 +1,25 @@
+ElectroBench is a small, self-contained GPU benchmark: two scenes from the
+ElectroBench desktop demo, rendered with the same shaders through the device's
+own OpenGL ES 3 pipeline. Nothing is downloaded and nothing is drawn with a
+pre-baked video or a sprite sheet — every pixel is shaded on the GPU at run
+time.
+
+Scene 2 — dusk ocean
+A calm sea at sunset: a scrolling wave normal map, a sky gradient lit by a
+low sun, screen-space sun glare, HDR bloom and tonemapping, and a camera that
+dollies forward, turns left, and settles back into place.
+
+Scene 4 — power lines
+A utility pole and its power lines against a dusk sky, with long shadows,
+anti-aliased thin geometry, HDR highlights on the wires, and an animated
+automatic camera.
+
+Each scene runs for 45 seconds and prints an average frame rate plus a score
+when it ends, so two phones can be compared on identical content. The scenes
+are 16:9 and run full screen in landscape.
+
+The app requests no permissions: no network, no ads, no analytics, no
+tracking, no hidden downloads. It is the renderer and nothing else.
+
+Controls: tap the screen to end the current scene early and move on; BACK
+quits.
