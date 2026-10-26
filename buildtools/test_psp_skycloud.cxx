@@ -1,22 +1,3 @@
-// Host-side check for the PSP port's baked cloud deck.
-//
-// The PSP cannot be executed on this build machine and the sky is a CPU bake,
-// so the cloud field is measured here instead of on the console: for every
-// texel of the 128x64 panorama this evaluates pspsky::CloudCoverage with the
-// measured texel footprint and again with no filtering (footprint 0, the
-// previous behaviour), then reports
-//
-//   * coverage mean          -- the deck must not be filtered away,
-//   * isolated dots          -- covered texels whose four neighbours are clear,
-//                               which is what "the clouds look like dots" is,
-//   * total variation        -- per-texel change, i.e. how mottled the deck is.
-//
-// It also writes both fields as P5 PGMs (arg 1 and arg 1 + ".raw.pgm").
-//
-// Build and run:
-//   g++ -O2 -std=c++17 -Ipsp/src buildtools/test_psp_skycloud.cxx -o build/test_psp_skycloud
-//   ./build/test_psp_skycloud /tmp/sky_clouds.pgm
-// (make -C psp check-sky does both.)
 #include <cmath>
 #include <cstdio>
 #include <vector>
@@ -146,9 +127,6 @@ int main(int argc, char **argv) {
               kSkyW, kSkyH);
   std::printf("  %6s %8s %8s %6s %8s %9s\n", "scale", "coverage", "covered",
               "dots", "variation", "area");
-
-  // 1.0 is the shader's own coordinate scale; the smaller values are the
-  // panorama-fitting candidates (see psp_skycloud.hxx).
   const float kScales[] = {1.0f, 0.6f, 0.34f, 0.22f, 0.16f, 0.12f, 0.09f, 0.07f};
   int failures = 0;
   for (float s : kScales) {
