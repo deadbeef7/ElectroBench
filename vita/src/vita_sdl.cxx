@@ -1,16 +1,6 @@
 // ===========================================================================
 // SDL2 subset implementation for the ElectroBench PS Vita port (see
-// vitaport/include/SDL2/SDL.h for what this is and why it is not SDL).
-//
-//   window + GL context  -> vitaGL (vglInitExtended / vglSwapBuffers)
-//   input                -> SceCtrl pad, edge detected
-//   clock                -> sceKernelGetSystemTimeWide (microseconds, monotonic)
-//
-// The Vita has a single 960x544 panel, so the window is created once and every
-// size query answers with the panel size: the scenes then size their viewport,
-// projection and HUD from that, which is what makes the port run at native
-// resolution instead of rendering 1280x720 into a downscaled surface.
-// ===========================================================================
+// include/SDL2/SDL.h for what this is and why it is not SDL).
 #include <SDL2/SDL.h>
 
 #include <vitaGL.h>
@@ -26,10 +16,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-
-// Trace hook mirroring vita_main.cxx's vitaFAT-flushed log: the shim's init
-// diagnostics must also survive a hard exit, so they land in the same
-// ux0:/data/ELEB00002/spinlog.txt (first user appends every later line).
 void VitaLog(const char *fmt, ...);
 static void PortTrace(const char *fmt, ...) {
   char buf[384];
@@ -39,10 +25,6 @@ static void PortTrace(const char *fmt, ...) {
   va_end(ap);
   VitaLog("%s", buf);
 }
-
-// Shot-trigger trace for the scenes (scene*.cxx calls this under
-// ELECTROBENCH_VITA); same persistent log, separate symbol so the desktop
-// build never sees it.
 void PortShotTrace(const char *fmt, ...) {
   char buf[384];
   va_list ap;
@@ -51,11 +33,6 @@ void PortShotTrace(const char *fmt, ...) {
   va_end(ap);
   VitaLog("%s", buf);
 }
-
-// vitaGL bridge (see vitaport/tools/build_deps.sh): our libvitaGL is built with
-// LOG_ERRORS=1 but with vgl_log redirected to this symbol, so every internal
-// diagnostic (GXM/sceGxmVsh init, shader patcher, per-pool allocs) lands in the
-// same persistent spinlog instead of the volatile VitaShell console.
 extern "C" void PRX_PRINTF_PROXY(const char *fmt, ...) {
   char buf[384];
   va_list ap;
@@ -87,9 +64,6 @@ bool gInitialised = false;
 bool gGlReady = false;
 char gError[256] = {0};
 
-// Frame logging: every 30 swaps one line lands in the persistent ux0:/data log
-// (file opened on demand here, mirroring vita_main.cxx), so after a hard exit
-// the on-device log says the exact frame count the loop reached.
 int gFramesSinceLog = 0;
 unsigned long gFrameTotal = 0;
 
@@ -106,10 +80,6 @@ void PortLogFrame(void) {
   sceIoWrite(f, line, std::strlen(line));
   sceIoClose(f);
 }
-
-// Pad state for edge detection. gPrevValid stays false until the first poll so
-// that a button held from launch (e.g. L, which picks the starting scene) is not
-// reported as a fresh press by the first frame.
 unsigned int gPrevButtons = 0;
 bool gPrevValid = false;
 bool gQuitRequested = false;
@@ -319,8 +289,6 @@ int SDL_PollEvent(SDL_Event *event) {
 }
 
 const char *SDL_GetError(void) { return gError; }
-
-// Port-specific: 1 once the user asked to quit the whole app (START).
 int VitaPortQuitRequested(void) { return gQuitRequested ? 1 : 0; }
 
 Uint64 SDL_GetPerformanceCounter(void) {
