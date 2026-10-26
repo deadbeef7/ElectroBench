@@ -1,32 +1,3 @@
-// Host-side check for the PSP port's baked object shading.
-//
-// The GE has no fragment stage, so psp_scene4.cxx bakes every surface's colour
-// per vertex (pspshade::Surface). That bake is the port's whole look, and the
-// previous revision got it wrong in a way only the frame showed: it wrote the
-// shader's *radiance* into the vertex colour instead of the colour the shader
-// displays, so every dark material lost the shader's tone curve and came out
-// black. On a 480x272 screen that turned the corridor into black silhouettes
-// against an orange sky.
-//
-// This compares the bake against the colours the same scene actually carries in
-// the desktop/Vita frame (build-vita/host/scene4.ppm, i.e. the shared GLSL path
-// at the same camera and sun), measured from that frame:
-//
-//   gravel, foreground   (132, 106, 85)
-//   dark wall / p1        (100,  79, 59)   -- the darkest surface in the frame
-//   distant houses       (141, 120, 99)   -- what haze converges toward
-//
-// and it prints the GE fog colour the port derives from the same tail. The
-// fog colour has to sit near the haze the objects converge to; a dark one is
-// what made the far field read as a black band.
-//
-// The carriageway is checked for being asphalt (near-neutral, mid-grey) rather
-// than against a reference pixel: the one the desktop frame offers, (163,110,77),
-// is the sun's side of the shot and turned the road red on the console.
-//
-// Build and run:
-//   g++ -O2 -std=c++17 -Ipsp/src buildtools/test_psp_shadetail.cxx -o build/test_psp_shadetail
-// (make -C psp check-shade does that.)
 #include <cmath>
 #include <cstdio>
 
