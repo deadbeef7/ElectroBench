@@ -1,19 +1,6 @@
 // ===========================================================================
-// SDL2 subset for the ElectroBench PS Vita port.
-//
-// The desktop scenes use SDL for exactly four things: a window + GL context, a
-// polled event loop, a high-resolution timer, and error strings. The Vita has
-// one screen, no window manager and no alternate GL contexts, so this header
-// declares that subset and vitaport/src/vita_sdl.cxx implements it on top of
-// vitaGL and SceCtrl.
-//
-// This is deliberately NOT SDL. There is one window, it is always the native
-// 960x544 panel, its flags are accepted and ignored, GL attributes are recorded
-// only for the ones that map onto SceGxm (depth bits, MSAA), and input is the
-// Vita's pad, with
-//     START  -> SDL_QUIT          (leave the app / current scene)
-//     SELECT -> SDLK_ESCAPE       (the desktop "quit scene" key, also X/CIRCLE-free)
-// ===========================================================================
+// Fake SDL since SDL2 on the vita sucks imo
+
 #pragma once
 
 #include <stdint.h>
@@ -36,9 +23,6 @@ typedef void *SDL_GLContext;
 #define SDL_WINDOW_RESIZABLE 0x00000020u
 #define SDL_WINDOW_FULLSCREEN_DESKTOP (SDL_WINDOW_FULLSCREEN | 0x00001000u)
 
-// GL attributes: the scenes request a 3.3 core context, a depth buffer and
-// (scene 4 only) 4x MSAA. Only depth + MSAA change anything on the Vita; the
-// version request is what the Vita port answers with "yes, you may render".
 enum {
   SDL_GL_CONTEXT_MAJOR_VERSION = 1,
   SDL_GL_CONTEXT_MINOR_VERSION,
@@ -58,8 +42,6 @@ enum {
 #define SDL_KEYDOWN 0x300
 #define SDL_KEYUP 0x301
 #define SDL_WINDOWEVENT_RESIZED 1
-
-// SDL2's keycode for Escape; beware the scenes' ProcessKeys() only checks for it.
 #define SDLK_ESCAPE 27
 
 typedef int32_t SDL_Keycode;
