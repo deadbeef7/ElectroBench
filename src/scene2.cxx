@@ -1041,7 +1041,7 @@ int RunOceanScene(bool *gaveUpOut) {
     if (gaveUpOut) *gaveUpOut = true;
     return 1;
   }
-  std::printf("Display: %s %dx%d | capture with Win+PrtScr, or --screenshot FILE\n",
+  std::printf("Display: %s %dx%d | capture with Win+PrtScr, or --screenshot FILE (outputs a ppm file)\n",
               gWindowedMode ? "windowed" : "borderless fullscreen",
               gWindowWidth, gWindowHeight);
   std::fflush(stdout);
