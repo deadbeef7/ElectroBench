@@ -3,30 +3,7 @@
 // The GE has no shaders, so the sky is a 128x64 equirect panorama baked on the
 // CPU from shaders/pole/sky_frag.glsl's atmosphere() integral and its cloud
 // deck, one row per frame (psp_scene4.cxx owns the pacing and the packing).
-// This header is the cloud half of that bake, split out because it is the part
-// with a sampling problem worth testing on the host.
-//
-// WHY THE OCTAVES ARE FILTERED. The deck is projected as dx/h (the horizontal
-// distance at which a ray of elevation h crosses the cloud layer), so one
-// panorama texel covers *many* noise cells near the horizon: at 128x64 the base
-// octave moves ~4.6 LUT cells per texel at the bottom of the deck and the
-// detail octave ~10x that. Evaluating an unfiltered fBm per texel therefore
-// samples a sub-texel noise field once and paints the result across a
-// 3.75 x 2.8 degree patch -- which is exactly what the scattered round "dots"
-// in the sky were. Each octave now fades out once its features fall below a
-// texel (OctaveWeight), and each one is filtered toward its own mean (0.5)
-// rather than toward zero, so coverage, not brightness, is what changes.
-//
-// The footprint is measured, not assumed: LayerFootprint evaluates the layer's
-// coordinates at the texel and at its right and lower neighbours, so the same
-// code is correct at any panorama resolution.
-//
-// pspsky::BuildNoiseTable() must run before any sampling; the table is a
-// function-local static so the header needs no separate definition.
-//
-// Host check: buildtools/test_psp_skycloud.cxx (make -C psp check-sky) bakes
-// the same field, reports the dot/coherence metrics with and without the
-// filter, and writes the coverage out as a PGM.
+// This header is the cloud half of that bake.
 #pragma once
 
 #include <cmath>
@@ -72,20 +49,12 @@ inline float NoiseLut(float u, float v) {
   return Mix(Mix(a, b, uf), Mix(c, d, uf), vf);
 }
 
-// 1 while an octave's features span more than a texel, 0 once they are
-// sub-texel. The noise table is kNoiseN cells across one coordinate unit and
-// bilinear between them, so an octave multiplied by `freq` has features of
-// 1/(freq*kNoiseN) input units - the table's own cell size is the finest detail
-// that exists. `footprint` is the texel size in those same input units.
 inline float OctaveWeight(float freq, float footprint) {
   if (footprint <= 0.0f) return 1.0f;   // no footprint known: leave it alone
   float texelsPerFeature =
       1.0f / (freq * (float)kNoiseN * footprint);
   return SmoothStep(0.55f, 1.35f, texelsPerFeature);
 }
-
-// Octaves that are filtered out contribute their mean, not zero, so the deck
-// keeps its coverage and only loses sub-texel detail.
 inline float Fbm2(float x, float y, float footprint) {
   float n1 = NoiseLut(x, y);
   float n2 = NoiseLut(x * 2.17f + 19.3f, y * 2.17f + 19.3f);
@@ -101,11 +70,6 @@ inline float Fbm3(float x, float y, float footprint) {
          0.29f * (0.5f + (n2 - 0.5f) * OctaveWeight(2.13f, footprint)) +
          0.17f * (0.5f + (n3 - 0.5f) * OctaveWeight(4.31f, footprint));
 }
-
-// ------------------------------------------------------- layer projection
-// A direction projected onto a horizontal layer at height `floorH` (the same
-// dx/h the fragment shader uses, clamped so rays at the horizon stay finite),
-// scaled by `scale`. Cloud picks 0.30 * 1.0, cirrus 0.30 * 9.0.
 inline void LayerCoords(float dx, float dy, float dz, float floorH, float scale,
                         float *u, float *v) {
   float h = dy > floorH ? dy : floorH;
@@ -119,10 +83,6 @@ inline void DirFromAngles(float azim, float elev, float *dx, float *dy, float *d
   *dy = std::sin(elev);
   *dz = ce * std::sin(azim);
 }
-
-// Texel size in this layer's own coordinate units: the largest of the changes
-// to the right and to the next row. Conservative (an upper bound) by design --
-// under-filtering is what put the dots there.
 inline float LayerFootprint(float azim, float elev, float dazim, float delev,
                             float floorH, float scale) {
   float ax, ay, az, bx, by, bz, cx, cy, cz;
@@ -140,22 +100,6 @@ inline float LayerFootprint(float azim, float elev, float dazim, float delev,
   return du > dv ? du : dv;
 }
 
-// ------------------------------------------------------------- the deck
-// Coverage of the cumulus deck, 0..1, with the same thresholds as
-// sky_frag.glsl's cloudSample(). `*detOut` is the detail octave, which the
-// colour pass uses for the puff lit/eroded mix.
-// `coordScale` shrinks the projected coordinates so the deck's masses span
-// several panorama texels. It is not a look knob: the 128x64 bake covers about
-// 0.8 texels per degree, and the shader's deck carries detail down to the noise
-// table's own cell (1/64 of a coordinate unit, ~0.35 texel here at the shader's
-// own scale), which is sub-texel by construction. Evaluating it unscaled is
-// what scattered the deck into lone covered texels - the dots - and filtering
-// alone cannot recover it: at scale 1.0 every octave is below the texel size,
-// so the deck collapses to a flat field instead of a filtered one. The value
-// is measured by buildtools/test_psp_skycloud.cxx (make -C psp check-sky): at
-// 0.12 the deck's masses average 9 texels with ~1% one-texel specks, against
-// 2 texels and 26% at the shader's own scale. The footprint is scaled with the
-// coordinates so the octave filter still sees the right texel size.
 constexpr float kCloudCoordScale = 0.12f;
 
 inline float CloudCoverage(float dx, float dy, float dz, float driftx,
@@ -177,23 +121,12 @@ inline float CloudCoverage(float dx, float dy, float dz, float driftx,
   if (detOut) *detOut = det;
 
   float dens = base - 0.32f * (det - 0.5f);
-  // The thresholds are lower than sky_frag.glsl's (0.560/0.780) because the
-  // octave filter above pulls every octave toward its mean, which compresses
-  // this field toward 0.5: at the shader's own thresholds the deck survived as
-  // three texels of pale speckle in a 128x64 panorama, i.e. no clouds at all in
-  // the camera's view. Measured by buildtools/test_psp_skycloud.cxx: at
-  // 0.470/0.660 the deck covers ~6% of the panorama, matching the shader's own
-  // coverage at its scale, with the same ~1% one-texel specks.
   float cover = SmoothStep(0.470f, 0.660f, dens) * 0.94f;
   cover *= 0.80f + 0.20f * SmoothStep(0.40f, 0.66f, det);
   cover *= SmoothStep(0.035f, 0.26f, h);
   cover *= 1.0f - SmoothStep(0.62f, 0.99f, h);
   return cover;
 }
-
-// The cirrus veil: a second, much finer layer (9x across, 4.5x up, lower
-// height floor), so it needs its own footprint. The caller passes the footprint
-// of LayerFootprint(..., 0.055, 9.0), which upper-bounds both axes.
 inline float CirrusVeil(float dx, float dy, float dz, float timeSec,
                         float footprint) {
   float h = dy;
