@@ -38,18 +38,6 @@ extern bool gWindowedMode;
 static const int kSeaResolution = 384;   // vertices per side of the ocean grid (2.25x the
                                          // vertex count of 256 — pushed for realism)
 static const float kSeaSize = 4096.0f;   // world size of the ocean patch: reaches past the
-                                         // visible horizon in every direction the camera can look
-// 768 is the desktop/Android fidelity choice. The two ports populate the cube
-// differently: vitaGL raises GL_INVALID_ENUM for any glFramebufferTexture2D
-// textarget other than GL_TEXTURE_2D, so the Vita cannot render into a cube face
-// at all and instead renders each face into a 2D target and copies it into the
-// The environment probe is desktop/Android only now. The Vita's sea evaluates
-// the sky gradient analytically instead (sea_frag.glsl's uEnvCube), so it keeps
-// a 1x1 cube purely to leave sampler unit 1 bound to a complete texture. That
-// removes the port's whole readback path - six glReadPixels round trips plus a
-// free/reallocate of the cube per refresh - which is what pinned scene 2 to
-// ~1 FPS, and it removes the base-level cube sampling that mirrored the sun and
-// the clouds onto the water as flat, hard-edged sheets.
 #ifndef ELECTROBENCH_VITA
 static const int kEnvMapSize = 768;      // cubemap face resolution — higher fidelity reflections
 #endif
@@ -61,11 +49,6 @@ static const float kCloudAzim[MAX_CLOUDS] = {0.18f, 0.88f, 1.75f, 2.65f, 3.75f, 
 static const float kCloudElev[MAX_CLOUDS] = {0.190f, 0.300f, 0.250f, 0.380f, 0.220f, 0.330f, 0.160f, 0.420f, 0.465f};
 static const float kCloudRad[MAX_CLOUDS]  = {0.048f, 0.037f, 0.030f, 0.043f, 0.027f, 0.036f, 0.050f, 0.026f, 0.030f};
 static const float kCloudStretch[MAX_CLOUDS] = {3.3f, 2.4f, 2.1f, 2.8f, 2.2f, 2.3f, 3.6f, 4.6f, 4.2f};
-
-
-// The sky's palette, used by the dome below and by the sea's analytic
-// reflection (uSky* uniforms): one set of numbers, so the water cannot mirror a
-// different sky than the one drawn above it.
 static const float kSkyZenith[3]  = {0.012f, 0.016f, 0.048f}; // deep blue-black overhead
 static const float kSkyMid[3]     = {0.028f, 0.022f, 0.048f}; // dark slatemauve mid sky
 static const float kSkyHorizon[3] = {0.115f, 0.055f, 0.062f}; // warm maroon horizon band
@@ -132,9 +115,6 @@ static void Mat4LookAt(Mat4 &m, const Vec3 &eye, const Vec3 &center, const Vec3 
   Vec3 s = Vec3Normalize(Vec3Cross(f, up));     // right
   Vec3 u = Vec3Cross(s, f);                     // corrected up basis
   Mat4Identity(m);
-
-  // Column-major OpenGL look-at matrix:
-  // columns are right, up, -forward, translation.
   m[0] = s.x;   m[4] = s.y;   m[8]  = s.z;
   m[1] = u.x;   m[5] = u.y;   m[9]  = u.z;
   m[2] = -f.x;  m[6] = -f.y;  m[10] = -f.z;
@@ -162,10 +142,6 @@ static double NowSeconds() {
 }
 
 // ------------------------------------------------------------ shader plumbing
-// Shader failures on the Vita used to reach stderr only, which is the SceShell
-// console: invisible on a normal homebrew run. "Scene 2 runs but shows nothing"
-// then had no error attached to it. src/vita_main.cxx owns the persistent
-// ux0:/data/ELEB00002/spinlog.txt log, so route the same diagnostics there.
 #ifdef ELECTROBENCH_VITA
 void VitaLog(const char *fmt, ...);
 #define SCENE2_LOG(...) VitaLog(__VA_ARGS__)
@@ -205,9 +181,6 @@ static GLuint CompileShader(GLenum type, const char *src, const char *name) {
 }
 
 #ifdef ELECTROBENCH_VITA
-// Only the Vita fallback path needs to ask whether a program linked (it swaps in
-// the minimal shader when the device compiler rejects one). On the other
-// targets an unused static function is a -Wunused-function warning.
 static bool ProgramIsLinked(const Program &p) {
   if (!p.handle) return false;
   GLint ok = GL_FALSE;
@@ -292,15 +265,6 @@ static float TileableFbm(float u, float v, int octaves, float baseFreq, int seed
 
 static float xf_mod(float x, float m) { float t = x / m; return (t - std::floor(t)) * m; }
 static float yf_mod(float y, float m) { float t = y / m; return (t - std::floor(t)) * m; }
-
-// Tileable ripple gradient texture: two phase-shifted RG noise channels.
-// ---------------------------------------------------------------------------
-// Procedural texture data and its upload are two separate steps, because the
-// fills are the only sizeable CPU work in this scene's setup and they can run
-// on worker threads (src/jobs.hxx) while the GL thread compiles the programs.
-// The fills touch nothing but their own buffer; the uploads touch nothing but
-// GL. Setup is the only caller and it never runs one without the other.
-// ---------------------------------------------------------------------------
 static void FillRippleData(std::vector<unsigned char> *out) {
   std::vector<unsigned char> &px = *out;
   px.resize((size_t)kRippleSize * kRippleSize * 2);
@@ -562,8 +526,6 @@ static void UpdateAutoCamera(float t) {
   }
 
   float yawSun = std::atan2(gSunDir.x, gSunDir.z);
-  // A rising yaw swings the view towards screen-left, so the sun -- dead centre
-  // in the reference shot -- drifts right exactly as a left-hand turn would.
   float yaw = yawSun + left * kTurnLeft;
   const float pitch = 0.030f; // horizon high in frame: sky ~25%, sea ~75%
 
@@ -589,15 +551,8 @@ static Vec3 OrbitCamPos() {
   return pos;
 }
 
-// --------------------------------------------------------------- env cubemap
-// On the Vita the sea does not sample the cubemap at all (sea_frag.glsl's
-// uEnvCube = 0), so we only need a 1x1 placeholder face per side to keep
-// sampler unit 1 bound to a complete texture. On desktop/Android the cube is a
-// real 768² RGBA16F mipmapped FBO attachment driven by DrawSkyToEnvMap below.
 static void CreateEnvResources() {
 #ifdef ELECTROBENCH_VITA
-  // 1x1 RGBA black placeholder, one per cube face — enough to keep sampler 1
-  // bound so DrawSea's glBindTexture(GL_TEXTURE_CUBE_MAP, gEnvCube) is valid.
   glGenTextures(1, &gEnvCube);
   glBindTexture(GL_TEXTURE_CUBE_MAP, gEnvCube);
   const unsigned char black[4] = {0, 0, 0, 255};
@@ -695,13 +650,6 @@ static void DrawSkyToEnvMap(const Mat4 &proj) {
 // No probe pass on the Vita: the 1x1 placeholder cube never needs redrawing.
 static void DrawSkyToEnvMap(const Mat4 &proj) { (void)proj; }
 #endif
-
-// The probe is a camera-independent capture of the sky dome. Desktop/Android
-// refresh it every frame (the cube is a real FBO attachment there). The Vita's
-// sea does not sample the cube at all (sea_frag.glsl's uEnvCube), so there is
-// nothing to refresh — and skipping it removes the six glReadPixels round trips
-// through guest memory plus the free/reallocate of the whole cube per refresh
-// that pinned scene 2 to ~1 FPS.
 static void UpdateEnvMap(const Mat4 &envProj) {
 #ifndef ELECTROBENCH_VITA
   DrawSkyToEnvMap(envProj);
@@ -711,10 +659,6 @@ static void UpdateEnvMap(const Mat4 &envProj) {
 
 static void DumpEnvFacesOnce() {
 #ifdef ELECTROBENCH_VITA
-  // This dump reads each cube face back one at a time, which needs the very
-  // attachment vitaGL refuses, and it writes to /tmp, which the Vita does not have.
-  // WriteScreenshotPPM (what --screenshot/--shot-times use) is the port's own
-  // capture path and works on both, so there is nothing to compile here.
 #else
   if (!gDumpEnv || gDumpEnvDone) return;
   gDumpEnvDone = true;
@@ -802,8 +746,6 @@ static void RenderText(float x, float y, const char *text, float scale = 2.0f) {
 }
 
 // ------------------------------------------------------------------- setup
-// HDR camera shared with scene 4 and the Android build (post.hxx). Every pass
-// below asks gPost.ready whether to write linear radiance or its own LDR curve.
 static postproc::Pipeline gPost;
 static postproc::Settings gPostSettings;
 
@@ -822,13 +764,6 @@ static void Setup() {
   glEnableVertexAttribArray(1);
   glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void *)(2 * sizeof(float)));
   glBindVertexArray(0);
-
-  // The three procedural textures are filled by workers while this thread
-  // compiles the programs below. Both halves are independent - the fills touch
-  // only their own std::vector, and the compile is GL-thread work that cannot
-  // be split - so on a four-core Vita this is the one place in the port where
-  // three cores are busy at once. The uploads happen after WaitAll(), never
-  // before: a worker must not be racing the GL queue.
   std::vector<unsigned char> ripplePx, noisePx, foamPx;
   jobs::Start(3, [&](int which) {
     if (which == 0) {
@@ -845,10 +780,6 @@ static void Setup() {
   gSkyProg = LinkProgram(resolveAssetPath("shaders/ps14/sky_vert.glsl").c_str(), resolveAssetPath("shaders/ps14/sky_frag.glsl").c_str());
   gHudProg = LinkProgram(resolveAssetPath("shaders/ps14/hud_vert.glsl").c_str(), resolveAssetPath("shaders/ps14/hud_frag.glsl").c_str());
 #ifdef ELECTROBENCH_VITA
-  // A rejected program must not cost the whole frame. The device compiler is
-  // the only one that matters here and it cannot be run from the build host,
-  // so if the full scene-2 shader is refused, swap in the minimal one: the
-  // scene still renders (and the log above names what failed).
   if (!ProgramIsLinked(gSkyProg)) {
     SCENE2_LOG("scene2: sky program rejected - using fallback");
     gSkyProg = LinkProgram(resolveAssetPath("shaders/ps14/sky_vert.glsl").c_str(),
@@ -864,8 +795,6 @@ static void Setup() {
              (int)ProgramIsLinked(gSkyProg), (int)ProgramIsLinked(gSeaProg),
              (int)ProgramIsLinked(gHudProg));
 #endif
-  // Workers finished (or this call ran whatever they had not started); their
-  // buffers are complete, so the GL thread can upload them now.
   jobs::WaitAll();
   gRippleTex = UploadRippleTexture(ripplePx);
   gNoiseTex = UploadNoiseTexture(noisePx);
@@ -876,17 +805,6 @@ static void Setup() {
   glEnable(GL_CULL_FACE);
   glCullFace(GL_BACK);
   glClearColor(0.055f, 0.035f, 0.075f, 1.0f); // dusk background (only visible if geometry ever gaps)
-
-  // Camera settings from the desktop scene: threshold 1.35 keeps the bloom on
-  // the sun, the glitter path and the cloud edges instead of the whole dusk
-  // sky, and knee/aberration/vignette/grain are the same values. Exposure is
-  // the one number that does not carry over: this port's sea and sky radiance
-  // were authored for the shader-side pow(c, 1/2.2) they used before, which
-  // lifted the shadows more than the ACES curve does, so 1.0 renders the dusk
-  // visibly darker here than the identical frame on the desktop. 1.35 puts the
-  // port's mean and highlight distribution back where the old path had them
-  // (measured against the same 480x272 frame: p95 208/209, p99 246/247 versus
-  // the desktop), without clipping a single pixel.
   gPostSettings.exposure = 1.35f;
   gPostSettings.bloom = 0.095f;
   gPostSettings.threshold = 1.35f;
@@ -914,20 +832,11 @@ static void DrawSea(const Mat4 &view, double timeSec, const Vec3 &eye) {
   glDepthMask(GL_TRUE);
   glUniformMatrix4fv(gSeaProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
   glUniform1f(gSeaProg.loc("uTime"), (float)timeSec);
-  // 1 = linear radiance for the HDR camera, 0 = the shader's own film curve
-  // (the fallback used when the target could not be allocated).
   glUniform1f(gSeaProg.loc("uHdrOut"), gPost.ready ? 1.0f : 0.0f);
   glUniform3f(gSeaProg.loc("uEyePos"), eye.x, eye.y, eye.z);
   glUniform3f(gSeaProg.loc("uSunDir"), gSunDir.x, gSunDir.y, gSunDir.z);
   glUniform3f(gSeaProg.loc("uHorizonColor"), 0.10f, 0.052f, 0.062f); // dark maroon haze, melts into the sky band
-  glUniform3f(gSeaProg.loc("uWaterColor"), 0.034f, 0.020f, 0.052f); // near-black indigo body like the dusk reference
-  // 1 = mirror the environment cubemap, 0 = evaluate the same sky gradient
-  // analytically in the shader. The Vita takes 0: its cube is filled by a
-  // readback+upload per face and cannot carry a mip chain, and sampling it at
-  // base level put flat, hard-edged copies of the sun and the clouds on the
-  // water (the patches that stay still while the camera orbits). The analytic
-  // path has no texels to alias, costs no readback, and drops two texture
-  // fetches per pixel; the sea's glitter lobe still draws the sun path.
+  glUniform3f(gSeaProg.loc("uWaterColor"), 0.034f, 0.020f, 0.052f);
 #ifdef ELECTROBENCH_VITA
   glUniform1f(gSeaProg.loc("uEnvCube"), 0.0f);
 #else
@@ -967,9 +876,6 @@ static void DrawSkyScreen(const Mat4 &view, const Vec3 &eye) {
   BindSkyUniforms(vp);
   glUniform3f(gSkyProg.loc("uCenter"), eye.x, eye.y, eye.z);
   glUniform1f(gSkyProg.loc("uRadius"), 5000.0f);
-  // The sky shader's own path was already the better-behaved one (it keeps the
-  // sun's halo above 1.0 until uTonemap), so the HDR camera just asks for the
-  // same linear radiance the environment probe already uses.
   glUniform1f(gSkyProg.loc("uTonemap"), gPost.ready ? 0.0f : 1.0f);
   glDrawElements(GL_TRIANGLES, gDomeMesh.indexCount, GL_UNSIGNED_INT, nullptr);
   glBindVertexArray(0);
@@ -1087,8 +993,6 @@ static void RenderScene() {
   double dt = now - gFpsTimer;
   if (dt >= 1.0) {
     gFps = (int)std::lround(gFrameAccum / dt);
-    // One line per second in the port's log: on hardware this is the cheapest
-    // way to tell "drawing, but the panel is black" from "not drawing at all".
     SCENE2_LOG("scene2: t=%.1f fps=%d frames=%lld",
                now - gStartTime, gFps, (long long)gFrame);
     double inst = gFrameAccum / dt;
@@ -1174,14 +1078,6 @@ static void WriteScreenshotPPM(const char *path) {
   std::vector<unsigned char> rgb((size_t)w * h * 3);
   glFinish();
   glPixelStorei(GL_PACK_ALIGNMENT, 1);
-  // GL_RGBA/GL_UNSIGNED_BYTE is the one readback vitaGL answers with a plain
-  // CPU copy of the display surface (its fast_store path). GL_RGB is routed
-  // through sceGxmTransferCopy instead, which Vita3K only stubs out: that
-  // variant hands back an untouched (black) destination buffer. The alpha byte
-  // is dropped below, so the PPM matches the GL_RGB form byte for byte.
-  //
-  // FRONT is the last frame the display queue already presented, so the copy
-  // cannot race GXM draws still in flight for the current back buffer.
   glReadBuffer(GL_FRONT);
   glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
   glReadBuffer(GL_BACK);
