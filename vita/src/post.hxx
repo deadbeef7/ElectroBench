@@ -16,26 +16,6 @@
 // for every pass -- plus the rest of a camera: exposure, lateral chromatic
 // aberration, lens ghosts, cos^4 vignette, film grain and dither.
 //
-// Usage, per frame:
-//     bool hdr = postproc::Begin(gPost, w, h);
-//     ... draw the scene (shaders output linear radiance when uHdrOut = 1) ...
-//     postproc::End(gPost, settings, t);   // -> default framebuffer, LDR
-//     ... draw the HUD (stays LDR, on top of the finished frame) ...
-//
-// Differences from the desktop pipeline, all forced by the hardware:
-//   * no MSAA. vitaGL has no glRenderbufferStorageMultisample, and the scenes
-//     never asked for samples either, so the target is single-sample. The
-//     desktop resolve/blit path is simply absent;
-//   * GLSL ES 1.00: no gl_VertexID, so the fullscreen pass is an oversized
-//     triangle from a VBO; texture2D instead of texture(); no mat3 constants,
-//     so the ACES matrices are written as explicit dot products;
-//   * five bloom levels instead of six (480x272 down to 30x17 on the Vita's
-//     panel): past level two the pixels saved stop paying for the extra pass;
-//   * Begin() binds the HDR target when it is available and the default
-//     framebuffer otherwise, so a driver that refuses the render target
-//     degrades to the old direct-to-window path instead of a black screen.
-//     The scenes ask gPost.ready before they switch their shaders to linear.
-// =============================================================================
 #pragma once
 
 #include <GL/glew.h>
@@ -57,9 +37,7 @@ static const char *kFullscreenVert =
     "}\n";
 
 // 13-tap downsample (Jimenez, "Next Generation Post Processing in Call of
-// Duty: Advanced Warfare"). The 13 taps, not a naive 2x2 box, are what keeps
-// the bloom from crawling and flickering while the camera moves: a 2x2 box
-// aliases the source, this kernel is a proper low-pass.
+// Duty: Advanced Warfare").
 static const char *kDownFrag =
     "#version 100\n"
     "precision highp float;\n"
@@ -105,8 +83,7 @@ static const char *kDownFrag =
     "    gl_FragColor = vec4(col, 1.0);\n"
     "}\n";
 
-// 9-tap tent upsample, accumulated with additive blending into the next
-// (larger) pyramid level: the wide soft falloff of real glare.
+// 9-tap tent upsample
 static const char *kUpFrag =
     "#version 100\n"
     "precision highp float;\n"
@@ -140,11 +117,7 @@ static const char *kFinalFrag =
     "uniform float uVignette;\n"
     "uniform float uGrain;\n"
     "uniform float uFlare;\n"
-    // ACES filmic RRT+ODT fit (Stephen Hill), written as dot products instead
-    // of mat3 constants: every pass shares this curve, which is the point --
-    // the old per-shader curves each put 0.18 at a different screen value.
-    // The three dots of each row are kAcesIn's rows; the fit is applied in
-    // linear sRGB and returns display-referred linear.
+    // ACES filmic RRT+ODT fit (Stephen Hill)
     "vec3 RrtOdt(vec3 v) {\n"
     "    vec3 a = v * (v + 0.0245786) - 0.000090537;\n"
     "    vec3 b = v * (0.983729 * v + 0.4329510) + 0.238081;\n"
@@ -263,9 +236,6 @@ struct Pipeline {
 
   GLuint vao = 0;
   GLuint vbo = 0;
-
-  // Uniform locations, resolved once at Init: the ports pay for every one of
-  // these lookups in guest CPU time, and they are per-frame constants.
   GLint downSrc = -1, downTexel = -1, downPrefilter = -1;
   GLint downThreshold = -1, downKnee = -1;
   GLint upSrc = -1, upTexel = -1;
@@ -292,9 +262,6 @@ static inline GLuint CompileStage(GLenum type, const char *src, const char *labe
   return sh;
 }
 
-// Attribute 0 is bound to aPos explicitly: the scenes' meshes rely on the
-// linker's declaration order, but this program is compiled at runtime and a
-// silently different location would draw nothing at all.
 static inline GLuint BuildProgram(const char *frag, const char *label) {
   GLuint vs = CompileStage(GL_VERTEX_SHADER, kFullscreenVert, "fullscreen vert");
   GLuint fs = CompileStage(GL_FRAGMENT_SHADER, frag, label);
@@ -335,9 +302,6 @@ inline void DestroyTargets(Pipeline &p) {
   }
 }
 
-// Half-float texture: GL_HALF_FLOAT with an RGBA16F internal format is the one
-// combination vitaGL stores as a pass-through F16 surface (it is also exactly
-// what ES 3.0 expects), so no CPU-side conversion runs at allocation.
 static inline void AllocHalfFloat(int w, int h) {
   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, w, h, 0, GL_RGBA, GL_HALF_FLOAT,
                nullptr);
@@ -346,10 +310,6 @@ static inline void AllocHalfFloat(int w, int h) {
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 }
-
-// Builds the HDR target and the bloom pyramid for the given size. Returns
-// false (and leaves the pipeline disabled) when the driver cannot provide a
-// complete half-float target; the caller then renders straight to the window.
 inline bool AllocateTargets(Pipeline &p, int w, int h) {
   DestroyTargets(p);
   p.width = w > 0 ? w : 1;
@@ -358,9 +318,6 @@ inline bool AllocateTargets(Pipeline &p, int w, int h) {
   glGenTextures(1, &p.colorTex);
   glBindTexture(GL_TEXTURE_2D, p.colorTex);
   AllocHalfFloat(p.width, p.height);
-
-  // The scene draws into this texture directly (no MSAA resolve), so the
-  // target carries its own depth buffer.
   glGenRenderbuffers(1, &p.depthRb);
   glBindRenderbuffer(GL_RENDERBUFFER, p.depthRb);
   glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, p.width,
@@ -376,9 +333,6 @@ inline bool AllocateTargets(Pipeline &p, int w, int h) {
     std::fprintf(stderr, "post: HDR render target is incomplete\n");
     return false;
   }
-
-  // Bloom pyramid: half resolution upwards. Five levels reach 30x17 on the
-  // Vita's panel, which is plenty of width for the glare tail.
   int bw = p.width / 2 > 0 ? p.width / 2 : 1;
   int bh = p.height / 2 > 0 ? p.height / 2 : 1;
   for (int i = 0; i < kLevels; i++) {
@@ -432,10 +386,6 @@ inline bool Init(Pipeline &p, int w, int h) {
   p.finVignette = glGetUniformLocation(p.progFinal, "uVignette");
   p.finGrain = glGetUniformLocation(p.progFinal, "uGrain");
   p.finFlare = glGetUniformLocation(p.progFinal, "uFlare");
-
-  // One oversized triangle, three vertices: (-1,-1) (3,-1) (-1,3). Its
-  // interpolated vUv is exactly 0..1 over the covered area, so the fullscreen
-  // pass needs no vertex buffer per draw -- just this one, uploaded once.
   static const float kTri[6] = {-1.0f, -1.0f, 3.0f, -1.0f, -1.0f, 3.0f};
   glGenVertexArrays(1, &p.vao);
   glGenBuffers(1, &p.vbo);
@@ -467,9 +417,6 @@ inline void Destroy(Pipeline &p) {
   p.ready = false;
   p.width = p.height = 0;
 }
-
-// Binds the target the frame should be drawn into. Always binds something, so
-// the caller can render normally and only has to ask End() to finish.
 inline bool Begin(Pipeline &p, int w, int h) {
   if (!p.ready) return false;
   if (w != p.width || h != p.height) {
@@ -482,9 +429,6 @@ inline bool Begin(Pipeline &p, int w, int h) {
   glBindFramebuffer(GL_FRAMEBUFFER, p.fbo);
   return true;
 }
-
-// Blooms and composites into the default framebuffer, then restores the state
-// the HUD and the next frame expect.
 inline void End(Pipeline &p, const Settings &s, float timeSeconds) {
   if (!p.ready) return;
 
