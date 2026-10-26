@@ -18,8 +18,6 @@ constexpr float kPi = 3.14159265358979f;
 constexpr float kHalfPi = 1.57079632679490f;
 constexpr float kTwoPi = 6.28318530717959f;
 
-// atan2 in all four quadrants, with the usual branch-free octant fold.
-// Error: < 1.6e-3 rad over the full circle (measured by the host test).
 inline float Atan2(float y, float x) {
   const float ax = std::fabs(x), ay = std::fabs(y);
   const bool steep = ay > ax;
@@ -37,9 +35,6 @@ inline float Asin(float x) {
 }
 
 inline float Acos(float x) { return kHalfPi - Asin(x); }
-
-// pow(x, n) for the two integer exponents in the shader's fresnel and glitter
-// gates. Explicit multiplies keep -ffast-math from emitting a powf call.
 inline float Pow5(float x) {
   const float x2 = x * x;
   return x2 * x2 * x;
