@@ -2,7 +2,7 @@
 # ElectroBench -- PlayStation Vita port (SCENE 2 and SCENE 4 only).
 #
 # From the repo root:
-#   Install/build vitaGL, vitaShaRK and math-neon into $VITASDK (see README.md)
+#   vdpm install vitaGL
 #   make                     # -> ./ElectroBench-vita.vpk
 #   make check               # shader validation only
 # ===========================================================================
