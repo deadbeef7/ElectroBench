@@ -1,1 +1,1 @@
-HDR ocean and neon power-line scenes that benchmark a phone's GPU
+A benchmark that tests GPU performance on android (ported from a PC version) : HDR ocean and neon power-line scenes that benchmark a phone's GPU
