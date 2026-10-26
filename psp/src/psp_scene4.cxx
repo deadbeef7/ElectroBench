@@ -1,30 +1,9 @@
-// ElectroBench — PlayStation Portable port, SCENE 4 (power lines / "lain").
-//
-// Same rebuild-not-translate approach as psp_scene2.cxx: the GE has no
-// shaders, so scene 4 becomes a fixed-function scene. What maps where:
-//
-//   * geometry (poles, arms, insulators, transformers, houses, walls, trees,
-//     pylons, road) -> one indexed static vertex array, built once at startup
-//   * cables -> GU_LINES: at 480x272 a 3 cm cable is sub-pixel, and the tube
-//     tessellation the desktop scene uses (4 sides x 10-14 samples per span)
-//     would cost more vertices than the whole rest of the scene
-//   * lighting -> baked per vertex at startup with the object_frag.brdf terms
-//     (ambient sky/ground mix, wrap diffuse, a sun-facing highlight), because
-//     the sun only drifts 0.18 rad over the 45 s run
-//   * depth haze -> the GE's own linear fog, which unlike a baked per-vertex
-//     haze keeps working while the camera drives along the corridor
-//   * sky -> a 128x64 equirect panorama generated on the CPU from the
-//     atmosphere() integral in shaders/pole/sky_frag.glsl, drawn as a
-//     ray-cast grid; the 2.9-degree sun disc is a separate additive sprite,
-//     because a grid that could resolve the disc would cost a full-screen
-//     tessellation for every frame
-//
-// The camera, road layout, pole positions and palette are the same numbers as
-// src/scene4.cxx, so the two scenes frame the same shot.
+// ElectroBench — PlayStation Portable port, SCENE 4 ("lain").
+
 #include "psp_scene4.hxx"
 
-#include "psp_shadetail.hxx"   // material shading + display tail (host-tested)
-#include "psp_skycloud.hxx"     // the baked sky's cloud deck (host-tested)
+#include "psp_shadetail.hxx"  
+#include "psp_skycloud.hxx"     
 
 #include <pspgu.h>
 #include <pspkernel.h>
@@ -53,9 +32,6 @@ constexpr int kScreenH = 272;
 constexpr float kFovY = 52.0f;        // src/scene4.cxx's projection
 
 // ---------------------------------------------------------------- buffers
-// The whole scene lands in one indexed array so the frame is two draw calls
-// (opaque ground group, opaque detail group) plus the line pass. Index 16-bit
-// is enough for 60k vertices and halves the index traffic the GE fetches.
 struct SolidVertex { unsigned int color; float x, y, z; };
 struct LineVertex { unsigned int color; float x, y, z; };
 
@@ -67,23 +43,16 @@ SolidVertex gSolid[kMaxSolidVerts] __attribute__((aligned(16)));
 unsigned short gSolidIdx[kMaxSolidIndices] __attribute__((aligned(16)));
 int gSolidVerts = 0;
 int gSolidIdxCount = 0;
-int gGroundIdxCount = 0;   // index count of the ground part of the array
-// The carriageway is drawn as its own pass, after the ground and with depth
-// testing off; see Scene4Draw().
+int gGroundIdxCount = 0;   
 int gRoadIdxOffset = 0, gRoadIdxCount = 0;
 
 LineVertex gLine[kMaxLineVerts] __attribute__((aligned(16)));
 int gLineVerts = 0;
-
-// Ground shadows live in their own small array: they are blended onto the
-// ground after it is drawn and must not write depth.
 SolidVertex gShadow[4000] __attribute__((aligned(16)));
 unsigned short gShadowIdx[6000] __attribute__((aligned(16)));
 int gShadowVerts = 0, gShadowIdxCount = 0;
 
 // --------------------------------------------------------------- materials
-// The material list and the shading itself live in psp_shadetail.hxx, which
-// carries object_frag.glsl's light sum *and* its display tail; see Shade().
 using pspshade::Material;
 using pspshade::kMatPaint;
 using pspshade::kMatWood;
@@ -115,8 +84,7 @@ const float kSteelArm[3] = {0.265f, 0.272f, 0.282f};
 const float kSteelPlate[3] = {0.560f, 0.545f, 0.505f};
 const float kGravel[3] = {0.330f, 0.272f, 0.205f};
 
-// Small one-off palette entries from src/scene4.cxx, named instead of written
-// as compound literals at the call sites.
+// Small one-off palette entries from src/scene4.cxx
 const float kPlinthDirt[3] = {0.300f, 0.240f, 0.180f};
 const float kPlateInk[3] = {0.075f, 0.070f, 0.065f};
 const float kAnchorBlock[3] = {0.230f, 0.222f, 0.208f};
@@ -164,17 +132,6 @@ inline unsigned short Pack5551(float r, float g, float b) {
 }
 
 // ------------------------------------------------------------------ shading
-// object_frag.glsl's shading, baked. The sun is the one the scene starts with:
-// SunDirNow() only swings its azimuth by 0.004 rad/s and clamps its elevation
-// at 0.15, so across one 45 s run the difference is under the 5-bit
-// quantisation of a 5650 target.
-//
-// pspshade::Surface() returns the colour the fragment shader would have
-// *displayed* -- its light sum followed by the silhouette lift, the tonemap,
-// the split tone and the gamma -- because the GE writes this value straight to
-// the framebuffer. Baking the radiance instead is what turned every shadowed
-// wall on the console into a black silhouette while the sky, which is baked
-// through its own tonemap, stayed correct.
 float gBakeSun[3] = {0.0f, 0.0f, 0.0f};
 
 unsigned int Shade(float nx, float ny, float nz, const float c[3], Material m) {
@@ -197,10 +154,6 @@ inline void AddIdx(int a, int b, int c) {
   gSolidIdx[gSolidIdxCount++] = (unsigned short)b;
   gSolidIdx[gSolidIdxCount++] = (unsigned short)c;
 }
-
-// Quad in the order the caller gives it; winding does not matter because the
-// port runs with culling disabled (the GE's winding for the flipped-Y PSP
-// viewport is the opposite of GL's).
 void AddQuad(const float p[4][3], float nx, float ny, float nz,
              const float c[3], Material m) {
   if (gSolidVerts + 4 > kMaxSolidVerts ||
@@ -248,9 +201,6 @@ inline V3 VNorm(V3 a) {
   return VScale(a, 1.0f / l);
 }
 
-// Side wall of a (possibly tapered) tube. Caps are not emitted: every cylinder
-// in this scene is seen from the side or above its open top, and the caps cost
-// as much as a third of the pole geometry. `segs` sides means `segs` quads.
 void AddCylinder(V3 base, V3 top, float rBase, float rTop, int segs,
                  const float c[3], Material m) {
   if (gSolidVerts + (segs + 1) * 2 > kMaxSolidVerts ||
@@ -289,7 +239,6 @@ V3 WirePoint(V3 a, V3 b, float sag, float t) {
   float len = VLen(delta);
   if (len < 1e-3f) return a;
   V3 dir = VScale(delta, 1.0f / len);
-  // Same perpendicular choice as Vec3PerpTo() in src/scene4.cxx.
   V3 ref = (std::fabs(dir.y) < 0.9f) ? V3{0.0f, 1.0f, 0.0f} : V3{1.0f, 0.0f, 0.0f};
   V3 side = VNorm(VCross(dir, ref));
   V3 up = VNorm(VCross(side, dir));
@@ -302,8 +251,6 @@ V3 WirePoint(V3 a, V3 b, float sag, float t) {
   return VAdd(VAdd(mid, VScale(dir, x)), VScale(up, -y - tail));
 }
 
-// A cable as a polyline. 4-7 samples per span is all a 1-pixel line needs; the
-// sag curve is C1 so the polyline reads as a curve.
 void AddWire(V3 a, V3 b, float sag, int samples, const float c[3]) {
   unsigned int col = Shade(0.0f, 1.0f, 0.0f, c, kMatCable);
   V3 prev = WirePoint(a, b, sag, 0.0f);
@@ -428,8 +375,6 @@ void AddPole(const PoleSpec &p, bool concrete) {
               kCeramic, kMatCeramic);
   AddCylinder(VAdd(top, {0.0f, 0.18f, 0.0f}), VAdd(top, {0.0f, 0.24f, 0.0f}),
               0.058f, 0.038f, 6, kCeramic, kMatCeramic);
-
-  // Step bolts up the road face, then the number plate.
   int bolt = 0;
   for (float h = 3.15f; h <= 5.16f; h += 0.50f, bolt++) {
     float s = (bolt & 1) ? -side : side;
@@ -446,8 +391,6 @@ void AddPole(const PoleSpec &p, bool concrete) {
     AddBox(pa.x + pr + 0.058f, 2.62f, pa.z, 0.006f, 0.020f, 0.050f,
            kPlateInk, kMatMetal);
   }
-
-  // Earth wire clipped down the shaft: a polyline, not a tube.
   {
     const float eside = -side;
     V3 prev = PoleAxisAt(p, 0.32f);
@@ -632,9 +575,6 @@ void AddHouse(float x, float z, float w, float d, float h, float face) {
                            roof[2] + 0.10f};
     AddQuad(under, 0.0f, -1.0f, 0.0f, eave, kMatRoof);
   }
-
-  // Windows: three bays, alternating warm/lit. A frame box with the glass
-  // inset is enough at this viewing distance.
   const float frame[3] = {0.320f, 0.300f, 0.270f};
   const float glass[3] = {0.060f, 0.075f, 0.095f};
   const float litCol[3] = {0.960f, 0.710f, 0.400f};
@@ -721,24 +661,8 @@ void AddTreeline() {
 }
 
 // --------------------------------------------------------------- the ground
-// Order matters: gravel and kerbs first (they are the depth-writing ground
-// pass), then the carriageway, its shoulders and the markings, which are a
-// separate depth-test-free pass (see Scene4Draw()).
 void AddGroundGeometry() {
   const float n[3] = {0.0f, 1.0f, 0.0f};
-  // The ground is sliced along Z rather than drawn as one quad: the GE's fog
-  // is per vertex, and over a single 1.2 km triangle the fog gradient would
-  // be interpolated across the whole screen instead of following distance.
-  //
-  // It is also sliced along X, and that is not cosmetic. A 860 m wide quad
-  // spans thousands of pixels past the left and right screen edges from any
-  // point in the corridor, and the GE's rasteriser keeps only a guard band
-  // around the viewport: such a quad is dropped (or, past ~60 m, reduced to a
-  // sliver near its centre) instead of being clipped. That is why the whole
-  // ground was missing while the 5 m carriageway and the objects were not - a
-  // 60 m column spans at most a few screens on either side, which it does
-  // rasterise. Verified in the emulator with 860/200/60 m wide probe quads at
-  // the same depth: the 60 m one drew across the frame, the wide ones did not.
   const float kGroundZ0 = -300.0f, kGroundZ1 = 880.0f, kSlice = 60.0f;
   const float kColumn = 60.0f, kGroundX = 430.0f;
   for (float z = kGroundZ0; z < kGroundZ1; z += kSlice) {
@@ -753,13 +677,6 @@ void AddGroundGeometry() {
   gGroundIdxCount = gSolidIdxCount;
   gRoadIdxOffset = gGroundIdxCount;
   const float z0 = -200.0f, z1 = 520.0f;
-
-  // Carriageway, kerbs, shoulders and markings. Everything here sits 3-19 cm
-  // above the gravel, which 16-bit depth cannot separate past ~27 m at this
-  // projection (one depth step is 5.3 cm at 35 m and 11.8 m at 520 m), so this
-  // group is drawn with the depth test off instead of fighting the ground per
-  // pixel. The kerbs belong to it for the same reason: their bottom faces are
-  // on the ground plane.
   const float road[3] = {0.115f, 0.120f, 0.132f};
   {
     const float edge[3] = {0.235f, 0.215f, 0.190f};
@@ -767,8 +684,6 @@ void AddGroundGeometry() {
     for (int e = 0; e < 2; e++) {
       float sgn = e ? 1.0f : -1.0f;
       float xc = (e ? kRoadX + kRoadHalf : kRoadX - kRoadHalf) + sgn * 0.16f;
-      // Sliced along Z for the same reason as the ground: a single 720 m box
-      // would give the kerb a fog gradient unrelated to its distance.
       for (float z = z0; z < z1; z += kSlice) {
         float zz = z + kSlice > z1 ? z1 : z + kSlice;
         AddBox(xc, kKerbTopY * 0.5f, (z + zz) * 0.5f, 0.16f,
@@ -796,9 +711,6 @@ void AddGroundGeometry() {
                        {kRoadX - 0.09f, kPaintY, z + 3.0f}};
       AddQuad(d, n[0], n[1], n[2], paint, kMatLine);
     }
-    // Edge lines are sliced like everything else on this ribbon: one 720 m quad
-    // has its fog interpolated between two vertices, which is the very artefact
-    // the sliced ground exists to avoid.
     for (int e = 0; e < 2; e++) {
       float xl = e ? kRoadX + kRoadHalf - 0.40f : kRoadX - kRoadHalf + 0.26f;
       for (float z = z0; z < z1; z += kSlice) {
@@ -810,17 +722,10 @@ void AddGroundGeometry() {
     }
   }
   gRoadIdxCount = gSolidIdxCount - gRoadIdxOffset;
-  // Build fingerprint in the log: the baked carriageway colour is what tells a
-  // running EBOOT apart from an older one (the red-tarmac revision baked
-  // 0x516CA3, the asphalt one 0x7A818D), and printf already goes to the
-  // emulator's console for the vertex counts above.
   printf("scene4: carriageway colour %06X\n",
          Shade(0.0f, 1.0f, 0.0f, road, kMatRoad) & 0xFFFFFFu);
 }
 
-// Ground shadows: five fading strips per pole, projected away from the sun so
-// the corridor reads as lit from the horizon. Built once; the sun's azimuth
-// drift over a run is small enough that the strips do not visibly detach.
 void AddGroundShadows() {
   float sun[3] = {gBakeSun[0], 0.0f, gBakeSun[2]};
   float l = std::sqrt(sun[0] * sun[0] + sun[2] * sun[2]);
@@ -864,15 +769,10 @@ void AddGroundShadows() {
   }
 }
 
-// ----------------------------------------------------------------- camera
-// Declared before the sky code: the panorama is built from the live sun
-// direction and the grid from the live camera.
 float gEye[3] = {0.0f, 0.0f, 4.0f};
 float gYaw = 0.0f, gPitch = 0.0f;
 float gSun[3] = {-0.30f, 0.20f, 0.93f};
 float gSceneTime = 0.0f;
-// The GE fog colour (ABGR, as sceGuFog expects), derived from the shading in
-// Scene4Init(): one colour for the whole scene, see Scene4Draw().
 unsigned int gFogColour = 0xFF000000u;
 int gSkyRow = 0;   // next panorama row to rebuild
 
@@ -890,12 +790,6 @@ SkyVertex gSkyGrid[kSkyGridVerts] __attribute__((aligned(16)));
 unsigned short gSkyIdx[kSkyGridX * kSkyGridY * 6] __attribute__((aligned(16)));
 SunVertex gSunQuad[6] __attribute__((aligned(16)));
 
-// The noise table, the filtered fBm and the projected cloud/cirrus fields live
-// in psp_skycloud.hxx: they are the half of the bake that has a sampling
-// problem (see that header), and buildtools/test_psp_skycloud.cxx runs the
-// same code on the host with and without the filter.
-
-// shaders/pole/sky_frag.glsl's atmosphere(), term by term.
 void Atmosphere(float dx, float dy, float dz, const float sun[3], float out[3]) {
   const float kBetaR[3] = {0.058f, 0.135f, 0.331f};
   const float kBetaM = 0.0092f;
@@ -934,12 +828,6 @@ inline float EncodeSky(float x) {
   return std::pow(enc, 1.0f / 2.2f);
 }
 
-// Only rows [y0, y1) are baked, so the panorama can be refreshed a row at a
-// time. The integral is ~20 libm calls per texel and the sun moves 0.004 rad/s;
-// baking all 8192 texels in one frame stalled the picture for the better part
-// of a second every ten seconds, which read as the scene freezing and picking
-// up again. One row per frame spreads that over ~3 s of drift that is under a
-// texel wide.
 void BuildSkyRows(float timeSec, int y0, int y1) {
   const float *sun = gSun;
   const float driftx = timeSec * 0.0060f;
@@ -977,10 +865,6 @@ void BuildSkyRows(float timeSec, int y0, int y1) {
         g = out[1] * 0.42f + 0.018f;
         b = out[2] * 0.42f + 0.010f;
       }
-
-      // Cloud deck (same thresholds as the fragment shader). The texel
-      // footprint is what keeps the deck from aliasing into dots: at this
-      // resolution one texel covers several noise cells near the horizon.
       float cloudFp = pspsky::LayerFootprint(azim, elev, TWO_PI / (float)kSkyW,
                                              -PI / (float)kSkyH, 0.075f, 1.0f);
       float cover = pspsky::CloudCoverage(dx, dy, dz, driftx, driftz,
@@ -1002,9 +886,6 @@ void BuildSkyRows(float timeSec, int y0, int y1) {
         g = Mix(g, cg, k);
         b = Mix(b, cb, k);
       }
-
-      // Cirrus veil: its own (finer) layer and footprint, and independent of
-      // the cumulus coverage, exactly as in the fragment shader.
       if (h > 0.030f) {
         float cirrusFp = pspsky::LayerFootprint(azim, elev, TWO_PI / (float)kSkyW,
                                                 -PI / (float)kSkyH, 0.055f, 9.0f);
@@ -1019,8 +900,6 @@ void BuildSkyRows(float timeSec, int y0, int y1) {
       gSkyTex[y * kSkyW + x] = Pack5551(EncodeSky(r), EncodeSky(g), EncodeSky(b));
     }
   }
-  // The GE samples the panorama straight out of RAM: publish only the band
-  // that changed.
   sceKernelDcacheWritebackRange(&gSkyTex[y0 * kSkyW],
                                 (y1 - y0) * kSkyW * (int)sizeof(unsigned short));
 }
@@ -1059,8 +938,6 @@ void BuildSkyIndices() {
     }
 }
 
-// Base (yaw 0) camera basis; the matrix builder in psp_main.cxx uses the same
-// formulas, so sky and geometry agree about where "forward" is.
 void CameraBasis(float yaw, float pitch, float right[3], float up[3], float fwd[3]) {
   float cy = std::cos(yaw), sy = std::sin(yaw);
   float cp = std::cos(pitch), sp = std::sin(pitch);
@@ -1092,9 +969,6 @@ void BuildSkyGrid() {
     }
   }
 
-  // Sun sprite: project the unit sun direction through the same basis and
-  // place a clip-space quad there. The atmosphere's halo is in the panorama;
-  // this carries the disc and its limb, which a 32x18 grid cannot resolve.
   float sunDot = gSun[0] * fwd[0] + gSun[1] * fwd[1] + gSun[2] * fwd[2];
   float sx = 0.0f, sy = 0.0f, halfW = 0.0f, halfH = 0.0f;
   bool visible = sunDot > 0.05f;
@@ -1103,7 +977,6 @@ void BuildSkyGrid() {
     sx = (gSun[0] * right[0] + gSun[1] * right[1] + gSun[2] * right[2]) /
          (denom * aspect);
     sy = (gSun[0] * up[0] + gSun[1] * up[1] + gSun[2] * up[2]) / denom;
-    // ~3.0 degrees of half-angle including the halo.
     halfH = std::tan(3.0f * PI / 180.0f) / tanHalf;
     halfW = halfH / aspect;
     visible = (sx > -1.4f && sx < 1.4f && sy > -1.4f && sy < 1.4f);
@@ -1127,7 +1000,6 @@ void BuildSkyGrid() {
 
 // --------------------------------------------------------------------- API
 void Scene4Init() {
-  // Bake with the sun the scene starts under.
   gBakeSun[0] = -0.30f; gBakeSun[1] = 0.20f; gBakeSun[2] = 0.93f;
   {
     float l = std::sqrt(gBakeSun[0] * gBakeSun[0] + gBakeSun[1] * gBakeSun[1] +
@@ -1146,8 +1018,6 @@ void Scene4Init() {
   BuildSunTexture();
   BuildSkyTexture(0.0f);
   gSkyRow = 0;
-
-  // Pole layout (matches src/scene4.cxx's BuildSceneGeometry).
   for (int i = 0; i < 15; i++) {
     gLineA[i] = {-3.4f, 2.0f + 12.4f * i, 8.6f + 0.35f * ((i * 5) % 3),
                  i == 1 || i == 6 || i == 11, i == 3 || i == 9,
@@ -1157,8 +1027,6 @@ void Scene4Init() {
     gLineB[i] = {8.6f, 6.0f + 15.5f * i, 7.6f, false, i == 1,
                  0.09f * ((i * 11) % 3 - 1), 0.07f * ((i * 3) % 3 - 1)};
   }
-
-  // ---- ground group (gravel + kerbs), then the depth-test-free road group
   AddGroundGeometry();
 
   // ---- opaque detail
@@ -1178,7 +1046,6 @@ void Scene4Init() {
     for (float off : {-0.55f, 0.55f})
       AddWire(Arm2InsulatorTop(p, off), Arm2InsulatorTop(q, off), sag * 0.74f,
               5, kCable);
-    // Telecom binder pairs, a representative 8 of the desktop scene's 16.
     for (int k = 0; k < 8; k++) {
       float u0 = std::fmod((float)k * 0.37f, 1.0f);
       float u1 = std::fmod((float)k * 0.61f + 0.23f, 1.0f);
@@ -1187,7 +1054,6 @@ void Scene4Init() {
               0.18f + 0.62f * std::fmod((float)k * 0.29f, 1.0f), 4, kCableOld);
     }
   }
-  // Line B conductors, and the spans that cross to line A.
   for (int i = 0; i + 1 < 6; i++) {
     const PoleSpec &p = gLineB[i];
     const PoleSpec &q = gLineB[i + 1];
@@ -1224,12 +1090,7 @@ void Scene4Init() {
   AddTreeline();
 
   AddGroundShadows();
-
-  // The GE DMAs the arrays straight out of RAM: one flush after the build.
   sceKernelDcacheWritebackAll();
-
-  // Geometry counts are logged (PSP printf goes to the emulator/debug console)
-  // so an over-budget build is visible without a screenshot.
   printf("scene4: %d/%d solid verts, %d/%d indices, %d line verts\n",
          gSolidVerts, kMaxSolidVerts, gSolidIdxCount, kMaxSolidIndices,
          gLineVerts);
@@ -1291,8 +1152,6 @@ void Scene4DrawSky() {
 
   // The sun: additive, over the panorama, still depth-test free.
   sceGuEnable(GU_BLEND);
-  // GU has no GU_ONE factor; the fixed factor is the additive-white idiom
-  // used by psp_scene2.cxx.
   sceGuBlendFunc(GU_ADD, GU_SRC_ALPHA, GU_FIX, 0, 0xFFFFFFFF);
   sceGuTexMode(GU_PSM_8888, 0, 0, GU_FALSE);
   sceGuTexImage(0, kSunSize, kSunSize, kSunSize, (void *)gSunTex);
@@ -1314,28 +1173,11 @@ void Scene4Draw() {
   sceGuDisable(GU_BLEND);
   sceGuDisable(GU_TEXTURE_2D);
   sceGuDisable(GU_CULL_FACE);
-  // Dusk haze: the GE's per-vertex linear fog. Its colour is the one the
-  // object shader's own haze converges to, carried through the same display
-  // tail (pspshade::FogColour); the old constant here was a linear value, so
-  // the far field faded to a dark brown instead of the frame's pale dust and
-  // every distant silhouette stayed black. The ramp matches the shader's
-  // 1 - exp(-dist * 0.0018) over the corridor's 0-800 m: at 350 m the desktop
-  // is 45% hazed, which is (350 - 0) / 780 here.
   sceGuEnable(GU_FOG);
   sceGuFog(0.0f, 780.0f, gFogColour);
-
-  // Ground first, so the blended shadows land on top of it and every opaque
-  // object that follows still wins the depth test.
   sceGuDrawArray(GU_TRIANGLES,
                  GU_COLOR_8888 | GU_VERTEX_32BITF | GU_INDEX_16BIT,
                  gGroundIdxCount, gSolidIdx, gSolid);
-
-  // Carriageway, shoulders and markings. Coplanar with the gravel by design
-  // (3-5 cm of paint on a 520 m ribbon) and 16-bit depth resolves 5.3 cm at
-  // 35 m, so testing against the ground made the road lose or win per pixel
-  // past that range - the fragmented "floating" asphalt. It is drawn over the
-  // ground that is already there, with testing and writing both off; every
-  // object after this pass still depth-tests against the ground normally.
   if (gRoadIdxCount > 0) {
     sceGuDisable(GU_DEPTH_TEST);
     sceGuDepthMask(GU_TRUE);   // GU_TRUE disables depth writes
@@ -1345,8 +1187,6 @@ void Scene4Draw() {
     sceGuDepthMask(GU_FALSE);
     sceGuEnable(GU_DEPTH_TEST);
   }
-
-  // Shadows: multiply the destination by (1 - alpha).
   sceGuDepthMask(GU_TRUE);
   sceGuEnable(GU_BLEND);
   sceGuBlendFunc(GU_ADD, GU_ZERO, GU_ONE_MINUS_SRC_ALPHA, 0, 0);
@@ -1355,8 +1195,6 @@ void Scene4Draw() {
                  gShadowIdxCount, gShadowIdx, gShadow);
   sceGuDisable(GU_BLEND);
   sceGuDepthMask(GU_FALSE);
-
-  // Everything else, from the end of the road group to the last vertex.
   int detail = gSolidIdxCount - (gRoadIdxOffset + gRoadIdxCount);
   if (detail > 0)
     sceGuDrawArray(GU_TRIANGLES,
