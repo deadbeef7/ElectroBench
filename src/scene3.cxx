@@ -1828,7 +1828,7 @@ int RunPoolScene(bool *gaveUpOut) {
   int samples = 0;
   SDL_GL_GetAttribute(SDL_GL_SAMPLES, &samples);
   std::printf("Antialiasing: %dx MSAA%s\n", samples, samples > 1 ? "" : " (unavailable)");
-  std::printf("Display: %s %dx%d | capture with Win+PrtScr, or --screenshot FILE\n",
+  std::printf("Display: %s %dx%d | capture with Win+PrtScr, or --screenshot FILE (outputs a ppm file)\n",
               gWindowedMode ? "windowed" : "borderless fullscreen",
               gWindowWidth, gWindowHeight);
   std::fflush(stdout);
