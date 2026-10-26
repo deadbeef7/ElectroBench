@@ -1,20 +1,8 @@
-// ElectroBench — shared HUD font atlas.
-//
-// One 8x8-per-glyph bitmap font (96 printable ASCII glyphs) shared by ALL FOUR
-// scenes of the single ElectroBench binary, so every scene renders
-// identical HUD text:
-//   * src/main.cxx   draws it as fixed-function textured quads (GL 2.1)
-//   * src/scene2.cxx draws it through shaders/ps14/hud_*.glsl (GL 3.3)
-//
-// Layout: 16 columns x 6 rows of 8x8 cells packed into the top-left of a
-// 512x64 RGBA8 texture (the used region is 128x48; the padding keeps
-// power-of-two dimensions for ancient drivers).
+// ElectroBench — shared HUD font atlas..
 #pragma once
 
 #include <cstddef>
 
-// 96 glyphs, ASCII 32..127. Each glyph is 8 bytes, one byte per row,
-// LSB = leftmost pixel (the orientation used by this atlas builder).
 static const unsigned char kFontAtlasGlyphs[96][8] = {
     {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, {0x18,0x3C,0x3C,0x18,0x18,0x00,0x18,0x00}, // space !
     {0x36,0x36,0x00,0x00,0x00,0x00,0x00,0x00}, {0x36,0x7F,0x36,0x7F,0x36,0x00,0x00,0x00}, // " #
@@ -74,12 +62,7 @@ static const int kFontAtlasW = 512;    // texture width  (POT)
 static const int kFontAtlasH = 64;     // texture height (POT)
 static const int kFontAtlasGlyphW = 8; // glyph cell width in texels
 
-// True when FontAtlasGlyphUV returns a usable rect for this char.
 inline bool FontAtlasHasGlyph(int c) { return c >= 32 && c <= 126; }
-
-// Fills an RGBA8888 buffer (kFontAtlasW x kFontAtlasH) with the atlas:
-// opaque white where a glyph pixel is set, fully transparent elsewhere.
-// Tint with the fragment colour / shader uniform at draw time.
 inline void FontAtlasFillRGBA(unsigned char *px, size_t byteCount) {
   for (size_t i = 0; i < byteCount; ++i) px[i] = 0;
   for (int g = 0; g < 96; g++) {
@@ -95,11 +78,6 @@ inline void FontAtlasFillRGBA(unsigned char *px, size_t byteCount) {
     }
   }
 }
-
-// Half-texel-inset UV rect [u0 v0 u1 v1] for ASCII char c (32..126). With
-// LINEAR filtering, full-cell UVs bleed the neighbouring glyphs' edge texels
-// into each glyph — the janky fringes. Out-of-range characters get a zero
-// rect; callers should advance the pen without drawing those.
 inline void FontAtlasGlyphUV(int c, float uv[4]) {
   uv[0] = uv[1] = uv[2] = uv[3] = 0.0f;
   if (!FontAtlasHasGlyph(c)) return;
