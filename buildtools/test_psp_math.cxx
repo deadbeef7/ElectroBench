@@ -1,18 +1,3 @@
-// Host-side check for the PSP port's CPU math.
-//
-// The PSP itself cannot be run from this build machine, so the two pieces that
-// decide whether the sea looks right are tested here instead:
-//
-//   1. pspfast::Atan2/Asin/Acos against libm over the domain the shader uses;
-//      these replaced the per-vertex atan2f/asinf calls.
-//   2. pspwaves::kPacked and PackedScalar() against kWaves/Reference().
-//      PackedScalar is the lane-for-lane twin of the VFPU asm in
-//      psp_waves.hxx, so a packing or sign mistake is caught here even though
-//      the vsin.q/vdot.q instructions themselves only run on Allegrex.
-//
-// Build and run:
-//   g++ -O2 -std=c++17 -Ipsp/src tools/test_psp_math.cxx -o build/test_psp_math
-//   ./build/test_psp_math
 #include <cmath>
 #include <cstdio>
 
