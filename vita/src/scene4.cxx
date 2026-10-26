@@ -1,15 +1,4 @@
-// ElectroBench — scene 4 of the single ElectroBench binary: the power-lines
-// scene. A late-afternoon Japanese suburb memory: orange sky,
-// white drifting clouds, and a tangle of utility poles, crossarms, insulators,
-// transformers and sagging wires receding into the heat haze — the
-// serial-experiments mood, built entirely from analytic geometry (no model
-// files, no textures: every cylinder, catenary and quad is generated on the CPU
-// at startup).
-//
-// Like src/scene2.cxx and src/scene3.cxx, this translation unit is NOT a
-// program of its own. It exports RunPoleScene(), which main.cxx calls as the
-// fourth scene of the one and only ElectroBench executable.
-//
+// ElectroBench — scene 4 of the single ElectroBench binary: the lain-inspired scene
 
 #include <algorithm>
 #include <array>
@@ -34,23 +23,15 @@
 
 extern bool gWindowedMode;
 #include "font_atlas.hxx"
-#include "jobs.hxx" // startup CPU work on the spare cores (see Setup)
-#include "post.hxx" // shared HDR camera (see its header for what it replaces)
+#include "jobs.hxx" // startup CPU work on the spare cores 
+#include "post.hxx" // shared HDR camera 
 
-// Diagnostics for the camera set-up. On the Vita stderr is the SceShell
-// console, which a homebrew run never shows, so the same lines go to the
-// persistent ux0:/data/ELEB00002/spinlog.txt owned by src/vita_main.cxx.
 #ifdef ELECTROBENCH_VITA
 void VitaLog(const char *fmt, ...);
 #define SCENE4_LOG(...) VitaLog(__VA_ARGS__)
 #else
 #define SCENE4_LOG(...) ((void)0)
 #endif
-
-// ------------------------------------------------------------- HDR camera
-// Shared with scene 2 and the Android build (post.hxx). Every pass below asks
-// gPost.ready whether to write linear radiance or its own LDR curve, and the
-// frame ends in one ACES composite instead of three separate tone curves.
 static postproc::Pipeline gPost;
 static postproc::Settings gPostSettings;
 
@@ -314,7 +295,6 @@ static void AddCylinder(const Vec3 &base, const Vec3 &top, float rBase, float rT
     gIdx.push_back(a); gIdx.push_back(a + 1); gIdx.push_back(a + 2);
     gIdx.push_back(a + 1); gIdx.push_back(a + 3); gIdx.push_back(a + 2);
   }
-  // caps (fan around the centre vertex)
   for (int cap = 0; cap < 2; cap++) {
     Vec3 c = cap ? top : base;
     Vec3 n = cap ? axis : Vec3Scale(axis, -1.0f);
@@ -731,9 +711,6 @@ static void AddPole(const PoleSpec &p, bool concrete = false) {
       prev = cur;
     }
   }
-
-  // BUILD-P9: pole hardware on the road face — step bolts, the asset number
-  // plate with its band strap, and (on a deterministic scatter) the guy wire.
   AddStepBolts(p, 3.15f, 6.15f, side);
   {
     Vec3 pa = PoleAxisAt(p, 2.35f);
@@ -1231,10 +1208,6 @@ static void AddTreeline() {
 
 }
 
-// The upload half of BuildSceneGeometry: split out so the tessellation above,
-// which is the single largest piece of CPU work in either scene, can run on a
-// worker thread while the GL thread compiles the three programs (Setup). Only
-// this half touches GL, and only after jobs::WaitAll().
 static void UploadSceneGeometry() {
   glGenVertexArrays(1, &gObjVao);
   glGenBuffers(1, &gObjVbo);
@@ -1396,7 +1369,6 @@ static void DrawSky(const Mat4 &view, const Vec3 &eye, double timeSec) {
   Vec3 sd = SunDirNow(timeSec);
   glUniform3f(gSkyProg.loc("uSunDir"), sd.x, sd.y, sd.z);
   glUniform1f(gSkyProg.loc("uTime"), (float)timeSec);
-  // 1 = linear radiance for the HDR camera, 0 = the shader's own film curve.
   glUniform1f(gSkyProg.loc("uHdrOut"), gPost.ready ? 1.0f : 0.0f);
   glDrawElements(GL_TRIANGLES, gSkyIndexCount, GL_UNSIGNED_INT, nullptr);
   glBindVertexArray(0);
@@ -1465,7 +1437,6 @@ static void DrawGroundShadows(const Mat4 &view, const Vec3 &eye, double t,
       }
     }
   }
-  // stream the buffers (VAO unbound: buffer bindings here are global)
   glBindVertexArray(0);
   glBindBuffer(GL_ARRAY_BUFFER, gShadowVbo);
   glBufferData(GL_ARRAY_BUFFER, v.size() * sizeof(ObjVertex), v.data(),
@@ -1556,8 +1527,6 @@ static void RenderScene() {
   }
   float aspect = (float)gWindowWidth / (float)gWindowHeight;
   Mat4Perspective(gProj, 52.0f, aspect, 0.1f, 900.0f);
-
-  // ---- the HDR camera target (default framebuffer if unavailable) ----
   const bool hdr = postproc::Begin(gPost, gWindowWidth, gWindowHeight);
   glViewport(0, 0, gWindowWidth, gWindowHeight);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -1668,14 +1637,6 @@ static void WriteScreenshotPPM(const char *path) {
   std::vector<unsigned char> rgb((size_t)w * h * 3);
   glFinish();
   glPixelStorei(GL_PACK_ALIGNMENT, 1);
-  // GL_RGBA/GL_UNSIGNED_BYTE is the one readback vitaGL answers with a plain
-  // CPU copy of the display surface (its fast_store path). GL_RGB is routed
-  // through sceGxmTransferCopy instead, which Vita3K only stubs out: that
-  // variant hands back an untouched (black) destination buffer. The alpha byte
-  // is dropped below, so the PPM matches the GL_RGB form byte for byte.
-  //
-  // FRONT is the last frame the display queue already presented, so the copy
-  // cannot race GXM draws still in flight for the current back buffer.
   glReadBuffer(GL_FRONT);
   glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
   glReadBuffer(GL_BACK);
@@ -1704,10 +1665,6 @@ static void WriteScreenshotPPM(const char *path) {
 // ------------------------------------------------------------------- setup
 static void Setup() {
   BuildSkyMesh();
-  // Everything below that is CPU work - the whole pole/wire/house/tree line -
-  // runs on a worker while this thread compiles the programs. BuildSceneGeometry
-  // builds gVerts/gIdx and nothing else; its GL half is UploadSceneGeometry,
-  // called once the worker is joined.
   jobs::Start(1, [](int) { BuildSceneGeometry(); });
   BuildFontAtlas();
 
@@ -1736,11 +1693,6 @@ static void Setup() {
   glEnable(GL_CULL_FACE);
   glCullFace(GL_BACK);
   glClearColor(0.60f, 0.30f, 0.10f, 1.0f);
-
-  // Camera settings, identical to the desktop scene: a late sun is far above
-  // 1.0 at the wet-road speculars and the insulator glints, so the threshold
-  // sits at 1.15 -- only genuine highlights seed the bloom, not the whole
-  // orange sky.
   gPostSettings.exposure = 0.97f;
   gPostSettings.bloom = 0.085f;
   gPostSettings.threshold = 1.15f;
@@ -1828,14 +1780,6 @@ int RunPoleScene(bool *gaveUpOut) {
 
   std::printf("Renderer: %s | %s\n", glGetString(GL_RENDERER), glGetString(GL_VERSION));
   std::fflush(stdout);
-
-  // The one stretch of scene 4 with no output of its own is between the
-  // context coming up and the first presented frame: geometry, font atlas and
-  // three program links all happen in there. "The app dies when scene 4 starts
-  // and nothing was output" cannot be told apart from a first-draw crash
-  // without a line on each side of it. These reach stdout.txt on Android and
-  // the console everywhere else, and fflush because a crash is exactly the case
-  // where buffered stdout would lose them.
   std::printf("scene 4: setup start (geometry, font atlas, three programs)\n");
   std::fflush(stdout);
   Setup();
