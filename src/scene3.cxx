@@ -1123,7 +1123,7 @@ static void RenderText(float x, float y, const char *text, float scale = 2.0f) {
 
 static void RenderHUD() {
   char line1[128];
-  std::snprintf(line1, sizeof(line1), "FPS: %d   Scene 3   build D9", gFps);
+  std::snprintf(line1, sizeof(line1), "FPS: %d   Scene 3   release 0.5", gFps);
   RenderText(16.0f, 16.0f, line1);
 }
 
