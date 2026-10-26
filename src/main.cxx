@@ -908,10 +908,6 @@ void renderScene() {
         printf("  %10.6f %10.6f %10.6f %10.6f\n", pv2[r * 4 + 0],
                pv2[r * 4 + 1], pv2[r * 4 + 2], pv2[r * 4 + 3]);
     }
-    // empirical calibration: unproject known screen pixels of the MAIN camera
-    // with GLU (uses GL's own matrices, no hand-derived rays), intersect the
-    // floor, then evaluate light_matrix exactly like the GLSL shader does and
-    // compare against the actual depth dump.
     {
       const float az = cam_azimuth * 3.14159265f / 180.0f;
       const float el = cam_elevation * 3.14159265f / 180.0f;
@@ -1302,7 +1298,7 @@ int main(int argc, char **argv) {
     PoleSceneSetShotTime(gShotTime);
   }
 
-  printf("ElectroBench version 0.4 build R1 (Release) (2026-10-09)\n");
+  printf("ElectroBench version 0.5 build R1 (Release) (2026-10-26)\n");
 
   {
     static const char *kKey[] = {
