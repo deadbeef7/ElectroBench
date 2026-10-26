@@ -22,4 +22,5 @@ The app requests no permissions: no network, no ads, no analytics, no
 tracking, no hidden downloads. It is the renderer and nothing else.
 
 Controls: tap the screen to end the current scene early and move on; BACK
-quits.
+quits. (PS : the app may refuse to open after you tap the screen (for now tapping the screen also exists so don't tap the screen) in that case just keep opening it
+or kill it from task manager)
