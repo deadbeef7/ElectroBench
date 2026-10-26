@@ -16,8 +16,6 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-# The shader tree lives under the Vita port after the restructure; both packages
-# embed it as `shaders/` (the VPK at app0:/shaders, the APK at assets/shaders).
 SHADER_ROOT = ROOT / "vita" / "shaders"
 SHADERS = sorted(SHADER_ROOT.glob("*/*.glsl"))
 ARTIFACTS = (
