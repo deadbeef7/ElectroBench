@@ -2,49 +2,11 @@
 // ElectroBench on Android: entry point for the port that runs SCENE 2 (dusk
 // ocean) and SCENE 4 (power lines / "lain").
 //
-// This file is to android/jni/android_sdl.cxx what src/vita_main.cxx is to
-// vitaport/src/vita_sdl.cxx: it owns the process, decides which scene runs
-// first, and hands the scenes a window/GL device through the same tiny SDL2
-// subset both ports implement. The two scene translation units, the shader
-// tree and the asset resolver are the desktop ones, compiled unchanged.
-//
-// What it has to do that the Vita port does not:
-//
-//   * Unpack the shader tree. On the Vita the .vpk mounts its own filesystem
-//     (app0:) and the scenes read shaders straight out of it. An APK does not
-//     mount: assets are inside the zip, and the scenes load shaders with
-//     std::ifstream. So assets/shaders/** is copied into the app's files
-//     directory at startup and SDL_GetBasePath() answers with that directory,
-//     which is the path resolveAssetPath() already tries last.
-//   * Keep the screen awake and the app immersive: a 2x45 s benchmark whose
-//     display dims halfway through is not a benchmark.
-//   * Put the run where it can be read. There is no console on a phone, so
-//     stdout/stderr (the scenes print their FPS and score there) go to
-//     <app files>/stdout.txt, the port's own trace goes to portlog.txt, and
-//     frames are captured as PNGs - see android_sdl.cxx for why the capture
-//     lives in the presentation path.
-//
-// Controls
-//   BACK                     quit the app
-//   tap / A / ENTER / SPACE  end the current scene early (the desktop Esc key)
-//
-// Optional run spec, written to <app files>/electrobench.txt (the external app
-// files directory when the device has one). One "key=value" per line:
-//
-//   start=2|4     which scene runs first (default 2, then the other one)
-//   only=2|4      run just that scene
-//   shots=off     no captures
-//   shots=10,45.1,47   capture at those seconds after the scene's first frame
-//                      (default 45.1, 47, 48.5: the benchmark is 45 s and the
-//                      results screen then holds for 4 s)
-//
-// Verify with: adb shell ls /sdcard/Android/data/<package>/files
-// ===========================================================================
 #include <android/asset_manager.h>
 #include <android/configuration.h>
 #include <android/looper.h>
 #include <android/native_activity.h>
-#include <android/window.h>  // AWINDOW_FLAG_FULLSCREEN / _KEEP_SCREEN_ON
+#include <android/window.h>  
 #include <android_native_app_glue.h>
 #include <jni.h>
 
@@ -56,20 +18,10 @@
 #include <unistd.h>
 
 #include "android_port.hxx"
+int RunOceanScene(bool *gaveUpOut);  
+int RunPoleScene(bool *gaveUpOut);   
 
-// --------------------------------------------------------------- scene entries
-// Same signatures src/vita_main.cxx declares.
-int RunOceanScene(bool *gaveUpOut);  // scene 2 (dusk ocean)
-int RunPoleScene(bool *gaveUpOut);   // scene 4 (power lines)
-
-// Defined by the desktop main.cxx, which is not part of this build. The scenes
-// read it to decide whether to trust their own requested window size or the size
-// the platform reports back: false means "adopt the real surface", which is what
-// makes them render at the device's native resolution.
 bool gWindowedMode = false;
-
-// The glue's android_main() runs on its own thread; the SDL subset reaches the
-// activity, the window and the input queue through this.
 struct android_app *gApp = nullptr;
 
 namespace {
@@ -82,13 +34,6 @@ struct LaunchSpec {
   double shots[kMaxShots] = {45.1, 47.0, 48.5};
   int shotCount = 3;
 };
-
-// ------------------------------------------------------------------- JNI bits
-// Everything the port needs from the Java side is read here, from the activity
-// the glue hands us: the external files directory (so shots and logs can be
-// pulled off the device without a debugger) and the package name (so the log
-// says where to look). Failures are never fatal - the port falls back to the
-// app-private directory.
 struct ActivityPaths {
   std::string packageName;
   std::string externalFilesDir;
@@ -137,16 +82,6 @@ ActivityPaths QueryActivity(ANativeActivity *activity) {
   return paths;
 }
 
-// Fullscreen + keep the screen on: the display would otherwise dim halfway
-// through the 45 s benchmark, and the status bar would eat the top of it.
-//
-// ANativeActivity_setWindowFlags is documented as callable from any thread (it
-// posts to the Java main thread), which is what makes it usable here: this runs
-// on the glue's own android_main thread, not on the UI thread. Hiding the
-// navigation bar as well would take setSystemUiVisibility on the decor view,
-// which a non-UI thread may not touch and which would need a Java (dex) side to
-// post - so the navigation bar stays, and the scenes simply get a surface that
-// is inset by it. See the README for that trade-off.
 void ApplyWindowFlags(ANativeActivity *activity) {
   if (!activity) return;
   ANativeActivity_setWindowFlags(activity, AWINDOW_FLAG_KEEP_SCREEN_ON | AWINDOW_FLAG_FULLSCREEN, 0);
@@ -155,9 +90,6 @@ void ApplyWindowFlags(ANativeActivity *activity) {
 // ------------------------------------------------------------------ filesystem
 void MakeDir(const std::string &path) { mkdir(path.c_str(), 0770); }
 
-// An APK's asset directory lists files only - AAssetDir cannot walk into a
-// subdirectory - so the port spells the tree out instead of recursing. If a
-// scene ever loads a non-shader asset, its directory belongs in this list.
 const char *kAssetDirs[] = {"shaders", "shaders/ps14", "shaders/pole"};
 
 int CopyAssetTree(AAssetManager *assets, const char *internalDir) {
@@ -178,14 +110,8 @@ int CopyAssetTree(AAssetManager *assets, const char *internalDir) {
       const std::string to = dest + "/" + name;
       FILE *out = std::fopen(to.c_str(), "wb");
       if (out && data != nullptr) {
-        // Always rewritten rather than timestamp-compared: 12 files of GLSL are
-        // cheaper to copy than the class of bug that a stale shader causes (see
-        // the shader-cache note in the README).
         if (std::fwrite(data, 1, (size_t)length, out) == (size_t)length) {
           copied++;
-          // One line per file with its size. A shader that arrives truncated
-          // fails in the driver's compiler later and reads like a shader bug, so
-          // the sizes are recorded next to the compile verdicts they belong to.
           PortLog("  unpacked %-34s %ld bytes", to.c_str(), (long)length);
         }
       }
@@ -264,9 +190,6 @@ LaunchSpec ReadLaunchSpec(const std::string &shareDir, const std::string &intern
 }
 
 // ------------------------------------------------------------------- lifecycle
-// Blocks until the activity has a window (or is going away). The scenes create
-// their GL context inside their first frame and have no retry path of their own,
-// so the port must not start one before the surface exists.
 void WaitForWindow() {
   while (!gApp->window && !gApp->destroyRequested) {
     int events = 0;
@@ -312,9 +235,6 @@ void android_main(struct android_app *app) {
   PortLog("package %s", paths.packageName.empty() ? "(unknown)" : paths.packageName.c_str());
   PortLog("internal dir %s", internalDir.c_str());
   PortLog("shots and logs: %s", PortShareDir());
-
-  // No console on a phone: the scenes' FPS/score lines are printf, so capture
-  // them in the share directory where they can be read afterwards.
   if (FILE *out = PortShareOpen("stdout.txt", "w")) {
     const int fd = fileno(out);
     fflush(out);
@@ -349,8 +269,6 @@ void android_main(struct android_app *app) {
     bool gaveUp = false;
     const int rc = scene == 2 ? RunOceanScene(&gaveUp) : RunPoleScene(&gaveUp);
     PortLog("scene %d returned %d%s", scene, rc, gaveUp ? " (gave up)" : "");
-    // 2 means "the user asked to quit" (BACK), 0 means the scene fused on into
-    // the next one; anything else still lets the other scene have its run.
     if (rc == 2 || PortQuitRequested()) {
       PortLog("quit requested; stopping after scene %d", scene);
       break;
