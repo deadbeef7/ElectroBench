@@ -6,8 +6,6 @@
 //   * 480x272 16-bit framebuffer + 16-bit depth, both in the 2 MB EDRAM, double
 //     buffered through sceGuSwapBuffers
 //   * two 5650 buffers and the depth buffer live at EDRAM offsets 0 / 512 KiB
-//   * the CPU runs at the hardware maximum (333 MHz CPU, 166 MHz bus), and the
-//     per-vertex shading in psp_scene2.cxx is all VFPU float code
 //   * the GE's blend units carry the reflection and glitter passes additively,
 //     which is how the fixed function pipeline gets the shader's mix()
 //
@@ -43,10 +41,6 @@ constexpr unsigned int kDispOffset = kPspDispVram;
 constexpr unsigned int kDepthOffset = kPspDepthVram;
 constexpr int kBenchMs = 45000;                   // same 45 s run as the original
 constexpr int kResultsMs = 6000;                  // then hand over to the next scene
-
-// Display list. GU_DIRECT lets this grow to whatever the frame needs (three
-// sea passes of ~5.3k vertices, the sky grid and the HUD); 2 MB is far above
-// the ~500 KB a frame actually emits, so the list can never truncate.
 unsigned int gList[524288] __attribute__((aligned(16))); // 2 MB
 unsigned short gFontTex[kFontAtlasW * kFontAtlasH] __attribute__((aligned(16)));
 bool gFontTexDirty = true;
@@ -130,9 +124,6 @@ void HudDraw() {
   sceGuEnable(GU_BLEND);
   sceGuBlendFunc(GU_ADD, GU_SRC_ALPHA, GU_ONE_MINUS_SRC_ALPHA, 0, 0);
   if (gFontTexDirty) {
-    // The atlas is sampled straight out of RAM (see psp_scene2.hxx): writing
-    // the pixels back is all the GE needs, the block-transfer copy into VRAM
-    // is what used to be rejected and stop the whole display list.
     sceKernelDcacheWritebackRange(gFontTex, sizeof(gFontTex));
     gFontTexDirty = false;
   }
@@ -148,16 +139,12 @@ void HudDraw() {
   sceGumOrtho(0.0f, (float)kScreenW, (float)kScreenH, 0.0f, -1.0f, 1.0f);
   sceGumMatrixMode(GU_VIEW);
   sceGumLoadIdentity();
-  // Upload to the GE: sceGum* only edits the local matrix stack, and this
-  // path draws with sceGuDrawArray, which does not push it.
   sceGumUpdateMatrix();
 
   sceGuDrawArray(GU_TRIANGLES, GU_TEXTURE_32BITF | GU_COLOR_8888 | GU_VERTEX_32BITF,
                  gHudCount, nullptr, gHudVerts);
   sceGuDisable(GU_TEXTURE_2D);
   sceGuDisable(GU_BLEND);
-  // Restore depth writes: both scenes draw their opaque geometry next frame
-  // and would be invisible against the cleared depth buffer without this.
   sceGuDepthMask(GU_FALSE);
   sceGuEnable(GU_DEPTH_TEST);
 }
@@ -176,31 +163,14 @@ void GuInit() {
   sceGuViewport(2048, 2048, kScreenW, kScreenH);
   sceGuScissor(0, 0, kScreenW, kScreenH);
   sceGuEnable(GU_SCISSOR_TEST);
-  // Inverted-Z buffer: near maps to 65535 and the clear value is 0, so the
-  // depth test must be GEQUAL (this is what the PSPSDK samples pair with these
-  // two calls). With LEQUAL every fragment loses against the cleared 0 and any
-  // pass that leaves the depth test on - i.e. the whole sea - is discarded.
   sceGuDepthRange(65535, 0);
   sceGuDepthFunc(GU_GEQUAL);
   sceGuEnable(GU_DEPTH_TEST);
-  // View-volume clipping. The GE clips a primitive against the near plane (and
-  // the user clip planes) only while GU_CLIP_PLANES is on; with it off a
-  // triangle that crosses the near plane is dropped whole instead of being
-  // clipped. Scene 4's ground and carriageway are 60 m slices, so the slice the
-  // camera stands in always crosses the 0.35 near plane and its geometry - the
-  // foreground right under the eye - vanished, leaving the sky's below-horizon
-  // band (a flat orange-red) showing through. Verified in the emulator with a
-  // probe quad straddling the camera: absent with clipping off, drawn across
-  // the lower screen with it on.
   sceGuEnable(GU_CLIP_PLANES);
   sceGuFrontFace(GU_CW);
   sceGuDisable(GU_CULL_FACE);
   sceGuShadeModel(GU_SMOOTH);
   sceGuTexEnvColor(0xFFFFFFFF);
-  // The GE always transforms by world * view * projection, and GUM's MODEL
-  // stack starts UNINITIALISED: leaving it alone makes every draw collapse to
-  // a point (the clear still shows, which hides the bug). Push identity into
-  // the GE once here and never touch the model matrix again.
   sceGumMatrixMode(GU_MODEL);
   sceGumLoadIdentity();
   sceGumUpdateMatrix();
@@ -210,12 +180,6 @@ void GuInit() {
   sceGuDisplay(1);
 }
 
-// The 3D matrices are built by hand and pushed with sceGuSetMatrix instead of
-// going through sceGumPerspective/sceGumLookAt: on this toolchain those two
-// produce matrices that the GE never rasterises anything with (a probe triangle
-// 25 units in front of the eye simply does not appear), while the same values
-// set explicitly do. The GE uses row vectors, so the projection is the GL one
-// transposed: w' = z (looking down +Z) and z' = z*A + B with near -> 0.
 void SetSceneMatrix(const float eye[3], float yaw, float pitch, float fovDeg,
                     float nearZ, float farZ) {
   const float fov = fovDeg * 3.14159265f / 180.0f;
@@ -258,11 +222,6 @@ void SetSceneMatrix(const float eye[3], float yaw, float pitch, float fovDeg,
 }
 
 void SetSkyMatrix() {
-  // The sky grid is clip-space (-1..1) with z=0, drawn under an orthographic
-  // projection: the perspective would clip it at the near plane.
-  // sceGumOrtho takes (left, right, BOTTOM, top): bottom must be -1 and top +1,
-  // otherwise the grid's y=+1 row (the zenith) is drawn at the bottom of the
-  // screen and the sky - sun included - appears upside down.
   sceGumMatrixMode(GU_PROJECTION);
   sceGumLoadIdentity();
   sceGumOrtho(-1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f);
@@ -271,41 +230,16 @@ void SetSkyMatrix() {
   sceGumUpdateMatrix();
 }
 
-// ------------------------------------------------------------- benchmark clock
-//
-// The run clock has to satisfy two things at once, and neither clock on the
-// console does both:
-//
-//  * sceKernelGetSystemTimeWide() resolves to a microsecond and is monotonic,
-//    which is what a frame time needs, but it counts ticks of the kernel timer
-//    and that timer is clocked off the bus. With the port no longer pinning the
-//    clocks its seconds are not the seconds on a stopwatch, so it cannot be the
-//    run clock on its own.
-//  * sceRtcGetCurrentTick() is the console's real-time clock: correct rate, but
-//    it is a serial-bus read with coarse granularity on some emulators (whole
-//    seconds), which cannot time a 16 ms frame and makes a per-frame meter
-//    divide by a span of zero.
-//
-// So: measure with the kernel timer (fine, monotonic) and correct its rate
-// against the RTC (correct, coarse). The ratio is measured once at startup and
-// refined every few seconds during the run; when the RTC is too coarse to
-// resolve the interval the ratio stays 1, which is the right answer for an
-// emulator running on a sane host clock.
-//
-// Both halves are needed for the numbers in the HUD: before this, the frame
-// meter and the scene clock read the same source, so one wrong clock produced a
-// HUD that disagreed with the emulator about the frame rate and about how many
-// seconds had passed.
 namespace {
 
-double gRtcRes = 1000000.0;   // ticks per second, as reported (1 MHz on PSP)
-bool gRtcFine = false;        // false when the RTC only moves in whole seconds
+double gRtcRes = 1000000.0;   
+bool gRtcFine = false;      
 bool gClockReady = false;
 
-double gRate = 1.0;           // kernel seconds -> wall seconds
+double gRate = 1.0;           
 bool gRateMeasured = false;
 
-double gUptime = 0.0;         // wall seconds since ClockInit()
+double gUptime = 0.0;        
 u64 gKernPrev = 0;
 u64 gCalKern = 0;
 u64 gCalRtc = 0;
@@ -314,9 +248,6 @@ inline u64 RtcTick() {
   u64 tick = 0;
   return sceRtcGetCurrentTick(&tick) == 0 ? tick : 0;
 }
-
-// Ratio of RTC progress to kernel-timer progress over the current calibration
-// window. < 0 means "not measurable yet".
 double MeasuredRate(u64 kernUs) {
   if (!gRtcFine) return -1.0;
   const double kernSpan = (double)(kernUs - gCalKern) * 1e-6;
@@ -333,10 +264,6 @@ double MeasuredRate(u64 kernUs) {
 void ClockInit() {
   const u32 res = sceRtcGetTickResolution();
   gRtcRes = res > 0 ? (double)res : 1000000.0;
-
-  // Is the RTC fine-grained? Two reads a few milliseconds apart: an emulator
-  // that exposes it in whole seconds returns the same tick twice, and any rate
-  // measured from that would be noise, so the kernel timer is trusted as-is.
   const u64 rtc0 = RtcTick();
   sceKernelDelayThread(8000);
   const u64 rtc1 = RtcTick();
@@ -346,8 +273,6 @@ void ClockInit() {
   gCalKern = gKernPrev;
   gCalRtc = rtc1;
 
-  // One short calibration window before the first frame so the whole run is
-  // measured at the right rate instead of the first seconds being off.
   sceKernelDelayThread(200000);
   const u64 kernNow = sceKernelGetSystemTimeWide();
   const double rate = MeasuredRate(kernNow);
@@ -369,8 +294,6 @@ double NowSeconds() {
     gUptime += (double)(kern - gKernPrev) * 1e-6 * gRate;
     gKernPrev = kern;
   }
-  // Re-measure the rate every 4 s of kernel time; a coarse RTC averages out
-  // over that window and a slow one is corrected within the first few seconds.
   const double sinceCal = (double)(kern - gCalKern) * 1e-6;
   if (sinceCal >= 4.0) {
     const double rate = MeasuredRate(kern);
@@ -384,10 +307,6 @@ double NowSeconds() {
   return gUptime;
 }
 
-// Every scene sets up the state it needs, but a pass that leaves something on
-// (the sea leaves its additive passes with depth writes off, the HUD leaves
-// texturing on) would leak into the next frame or the next scene. Reset the
-// pieces both scenes share, once per frame, after the clear.
 void ResetDrawState() {
   sceGuDisable(GU_FOG);
   sceGuDisable(GU_BLEND);
@@ -412,15 +331,6 @@ struct SceneStat {
   int slowFrames;       // frames that took more than 100 ms
 };
 
-// Sliding-window frame-rate meter for the HUD.
-//
-// The HUD used to show a counter accumulated in one-second buckets. That reads
-// as "the counter runs for a second and then stops": the first bucket is the
-// only one that differs (it contains the scene's first, cold frame), every
-// later bucket holds the same number of frames, and because the figure was an
-// int it printed the same value for the rest of the run. The rate is now
-// measured over the last kFpsWindow frame timestamps, so it is a continuous
-// average that visibly tracks the frame time instead of a per-second step.
 struct FpsMeter {
   static constexpr int kWindow = 90;
   double stamp[kWindow];
@@ -444,10 +354,6 @@ struct FpsMeter {
   }
 };
 
-// One benchmark run: kBenchMs of scene, then the result panel for kResultsMs.
-// Both scenes are initialised up front, so the hand-over between them does not
-// pay the scene-4 geometry build (the largest single piece of CPU work in
-// either scene) inside the second scene's timing.
 SceneStat RunScene(int scene) {
   SceneStat stat{0, 0.0, 0.0, 0.0, 0};
   const double start = NowSeconds();
@@ -469,9 +375,6 @@ SceneStat RunScene(int scene) {
       gRunning = false;
       break;
     }
-    // SELECT skips straight to the next scene's results panel. The timed
-    // figures are frozen at that moment, so the results screen's own frames do
-    // not dilute the average.
     if ((pad.Buttons & PSP_CTRL_SELECT) && !results) {
       results = true;
       resultsAt = now;
@@ -511,16 +414,11 @@ SceneStat RunScene(int scene) {
     HudBegin();
     char line[64];
     if (!results) {
-      // The frame time is measured here, before the HUD is built, so the
-      // figures on screen describe the frame that is about to be presented.
       const double frameMs = (now - lastFrameAt) * 1000.0;
       lastFrameAt = now;
       if (frameMs > stat.worstFrameMs) stat.worstFrameMs = frameMs;
       if (frameMs > 100.0) stat.slowFrames++;
       meter.Sample(now);
-      // Tenths are formatted with integer arithmetic: the PSP's printf has to
-      // synthesise float conversions in software, which is both slow in a
-      // per-frame path and one more thing that can print the wrong number.
       const int rate10 = (int)(meter.Rate() * 10.0 + 0.5);
       const int t10 = (int)(t * 10.0 + 0.5);
       snprintf(line, sizeof(line), "FPS: %d.%d", rate10 / 10, rate10 % 10);
@@ -583,14 +481,6 @@ int main(int argc, char *argv[]) {
 
   char report[512];
   int used = 0;
-  // Report the clocks the console is actually running at. This used to be the
-  // literal "333/333/166 MHz" the port set for itself; the firmware decides
-  // those values on its own (and the maximum is not guaranteed on every
-  // model), so printing a constant would describe a clock that may never have
-  // been set - which is exactly how a report ends up disagreeing with the
-  // frame rate printed next to it.
-  // The PSP exposes the CPU and bus clocks (the GE runs off the bus); there is
-  // no separate GPU clock to read.
   used += snprintf(report + used, sizeof(report) - (size_t)used,
                    "ElectroBench PSP\nclock: %d/%d MHz (cpu/bus)\n",
                    scePowerGetCpuClockFrequency(),
@@ -605,10 +495,6 @@ int main(int argc, char *argv[]) {
       const int avg10 = (int)(st.fps * 10.0 + 0.5);
       const int sec10 = (int)(st.seconds * 10.0 + 0.5);
       const int worst10 = (int)(st.worstFrameMs * 10.0 + 0.5);
-      // The worst single frame and the number of frames over 100 ms are what
-      // turn "it stutters every few seconds" into a number: a satisfied run
-      // shows a worst frame close to the average, a hitching one shows a spike
-      // several times larger with only a handful of slow frames.
       used += snprintf(report + used, sizeof(report) - (size_t)used,
                        "%s\nframes: %d\navg fps: %d.%d\nrun: %d.%d s\n"
                        "worst frame: %d.%d ms\nframes > 100 ms: %d\n\n",
