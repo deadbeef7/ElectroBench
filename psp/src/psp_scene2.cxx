@@ -2,19 +2,7 @@
 //
 // The PSP Graphics Engine has no programmable shaders, so this is not a
 // translation of shaders/ps14/{sea,sky}_frag.glsl but a rebuild of the same
-// scene on the fixed-function pipeline. What maps where:
-//
-//   * wave field, normals, cloud shadows, fresnel, body colour, foam
-//     -> per-vertex VFPU float code here (the GE cannot shade per pixel)
-//   * reflection + haze  -> additive pass sampled from the same sky texture
-//     the backdrop uses (equirectangular), UV from the reflected ray
-//   * sun glitter        -> additive pass: the smooth path gate is per-vertex,
-//     the sparkle itself is a dot texture scrolled over it
-//   * sky                -> one small equirect texture, regenerated every few
-//     frames (cloud drift), drawn as a coarse ray-cast grid
-//
-// Everything is the same numbers as the GLSL: kSunDir, the six wave sines, the
-// maroon horizon, the indigo water body, the nine-cloud deck from scene2.cxx.
+// scene on the fixed-function pipeline. 
 #include "psp_scene2.hxx"
 
 #include "psp_fastmath.hxx"
@@ -41,15 +29,6 @@ constexpr int kMaxIndices = kSegments * kRings * 6;
 constexpr int kSkyW = 256, kSkyH = 128;
 constexpr int kSparkW = 128, kSparkH = 128;
 constexpr int kChaosW = 128;
-// Rows of the sky panorama rebuilt per frame. kSkyH / kSkyRowsPerFrame frames
-// make one full pass (128 at the default), so no single frame carries the bake.
-//
-// It used to be 4. The panorama only changes because the nine clouds drift at
-// 0.0025 rad/s, which moves a 256-column sky by one texel every ten seconds, so
-// a full pass every ~two seconds was rebuilding the same image thirty times
-// over - and every texel of it costs an acos, an exp lookup and the nine-cloud
-// loop. One row per frame keeps the cost off the frame budget without the
-// band-to-band cloud positions drifting far enough apart to see.
 constexpr int kSkyRowsPerFrame = 1;
 constexpr int kSkyGridX = 14, kSkyGridY = 9;
 constexpr int kSkyGridVerts = (kSkyGridX + 1) * (kSkyGridY + 1);
@@ -66,9 +45,6 @@ const float kCloudRad[kClouds] = {0.048f, 0.037f, 0.030f, 0.043f, 0.027f, 0.036f
 const float kCloudStretch[kClouds] = {3.3f, 2.4f, 2.1f, 2.8f, 2.2f, 2.3f, 3.6f, 4.6f, 4.2f};
 const float kCloudDrift[kClouds] = {-0.0025f, 0.0032f, -0.0018f, 0.0022f, -0.0027f, 0.0015f, 0.0020f, -0.0015f, 0.0012f};
 
-// ---------------------------------------------------------------- fast math
-// The Allegrex has no hardware trig: a LUT with linear interpolation is what
-// keeps ~5k vertices of shading inside the frame budget.
 float gSin[4097];
 float gExp[513];     // exp(-8..0)
 float gGamma[1025];  // x^(1/2.2), the panorama's display transfer
@@ -77,12 +53,6 @@ float gChaos[kChaosW * kChaosW];
 void BuildMathTables() {
   for (int i = 0; i <= 4096; i++) gSin[i] = std::sin(TWO_PI * (float)i / 4096.0f);
   for (int i = 0; i <= 512; i++) gExp[i] = std::exp(-8.0f * (float)i / 512.0f);
-  // The panorama's gamma used three std::pow() calls per texel. std::pow is a
-  // double-precision libm entry point, and the Allegrex has no double FPU, so
-  // every one of them is a soft-float routine: 1,024 texels a frame times
-  // three of those was tens of milliseconds of the frame budget for a curve
-  // that only ever has to feed a 5-bit channel. One table, linear
-  // interpolation, no visible difference.
   for (int i = 0; i <= 1024; i++)
     gGamma[i] = std::pow((float)i * (1.0f / 1024.0f), 1.0f / 2.2f);
   unsigned int s = 0x9E3779B9u;
@@ -100,9 +70,6 @@ inline float WrapAngle(float x) {
 inline float FastSin(float x) {
   x = WrapAngle(x) * (4096.0f / TWO_PI);
   int i = (int)x;
-  // WrapAngle can round a tiny negative input to exactly TWO_PI, which makes
-  // i == 4096 and gSin[i + 1] read past the table. Masking keeps the lookup in
-  // range (the value at 4096 is the same as at 0 anyway).
   i &= 4095;
   float f = x - (float)i;
   return gSin[i] + (gSin[i + 1] - gSin[i]) * f;
@@ -123,8 +90,6 @@ inline float FastExpNeg(float x) { // x >= 0 -> exp(-x)
   float t = x * 64.0f;
   int i = (int)t;
   float f = t - (float)i;
-  // Same one-past-the-end case as FastSin: x just under 8 can round t up to
-  // 512, and gExp[513] does not exist.
   if (i > 511) { i = 511; f = 1.0f; }
   return gExp[i] + (gExp[i + 1] - gExp[i]) * f;
 }
@@ -150,13 +115,6 @@ inline float Chaos(float x, float z) {
 }
 
 // --------------------------------------------------------------- wave field
-// The six waves themselves live in psp_waves.hxx, which evaluates them four at
-// a time on the VFPU (vsin.q/vcos.q/vdot.q) and has a portable twin that the
-// host test checks against the direct sum. One call returns the height and
-// both gradient components; the old two-call version evaluated every sine
-// twice.
-
-// Micro-chop the fragment shader adds near the camera (detailNormals()).
 inline void DetailGradient(float x, float z, float t, float dist, float *gx, float *gz) {
   float fade = FastExpNeg(dist * 0.004f);
   if (fade < 0.02f) return;
@@ -226,8 +184,6 @@ float CloudShadow(float wx, float wy, float wz, float ex, float ey, float ez,
 }
 
 // ----------------------------------------------------------------- textures
-// CPU-side images, sampled in place: sceGuTexImage takes the pointer and the
-// GE reads the texels out of main RAM (Scene2Build writeback-flushes them).
 unsigned short gSkyTex[kSkyW * kSkyH] __attribute__((aligned(16)));
 unsigned short gSparkTex[kSparkW * kSparkH] __attribute__((aligned(16)));
 
@@ -237,17 +193,6 @@ inline unsigned short Pack5551(float r, float g, float b) {
   int ib = (int)(Saturate(b) * 31.0f + 0.5f);
   return (unsigned short)(ir | (ig << 5) | (ib << 10) | 0x8000);
 }
-
-// The sky palette: the same dusk the sky_frag tonemaps to - indigo overhead,
-// a maroon band, gold sun with a wide glow, warm horizon bars, then the nine
-// drifting clouds with warm undersides.
-//
-// Only rows [y0, y1) are rebuilt, so the panorama can be refreshed in bands a
-// few rows at a time. Every texel costs an acos, a handful of libm pow()s and
-// the nine-cloud loop; baking all 32,768 of them in one frame froze the scene
-// for seconds at a time, which looked like the sea stopping and starting
-// again. The cloud drift is 0.0025 rad/s, so spreading one pass over ~half a
-// second is invisible.
 void BuildSkyRows(float t, int y0, int y1) {
   (void)t;
   const float sd[3] = {kSunDir[0], kSunDir[1], kSunDir[2]};
@@ -317,8 +262,6 @@ void BuildSkyRows(float t, int y0, int y1) {
       gSkyTex[y * kSkyW + x] = Pack5551(r, g, b);
     }
   }
-  // The GE samples the panorama straight out of RAM: publish just the band
-  // that changed rather than write back the whole cache mid-frame.
   sceKernelDcacheWritebackRange(&gSkyTex[y0 * kSkyW],
                                 (y1 - y0) * kSkyW * (int)sizeof(unsigned short));
 }
@@ -569,9 +512,6 @@ void Scene2Build(double timeSeconds) {
       float vR = Mix(0.5f - elev / PI, 0.5f, horizonW);
       float uH = pspfast::Atan2(dirXZz, dirXZx) / TWO_PI;
       uR = Mix(uR, uH, horizonW);
-
-      // pass 1 has no texture, so its vertices are colour-first (the GE reads
-      // attributes in the flag order texture, colour, normal, position).
       BodyVertex &b = gBody[vCount];
       b.color = Color8888(bodyR * bodyW, bodyG * bodyW, bodyB * bodyW, 1.0f);
       b.x = sx; b.y = wy; b.z = sz;
@@ -580,8 +520,6 @@ void Scene2Build(double timeSeconds) {
       rf.u = uR; rf.v = vR;
       rf.color = Color8888(reflW, reflW, reflW, 1.0f);
       rf.x = sx; rf.y = wy; rf.z = sz;
-
-      // glitter: smooth path gate per vertex x sparkle texture per pixel
       float pathGate = pspfast::Pow10(sunAlign) * 0.96f + 0.04f;
       float nearField = 1.0f - SmoothStep(260.0f, 950.0f, dxz);
       float gate = Mix(1.0f, 0.55f + 0.90f * chaos, nearField);
@@ -596,14 +534,10 @@ void Scene2Build(double timeSeconds) {
       vCount++;
     }
   }
-
-  // The GE DMAs these arrays straight out of RAM: flush the data cache once,
-  // before any draw command that reads them is submitted.
   sceKernelDcacheWritebackAll();
 }
 
 void Scene2DrawSky() {  // The sky grid is in clip-space coordinates (-1..1), so it needs its own
-  // orthographic projection; the caller restores the perspective for the sea.
   sceGuDisable(GU_DEPTH_TEST);
   sceGuDepthMask(GU_TRUE);
   sceGuDisable(GU_BLEND);
@@ -621,8 +555,6 @@ void Scene2DrawSky() {  // The sky grid is in clip-space coordinates (-1..1), so
 
 void Scene2Draw() {
   sceGuEnable(GU_DEPTH_TEST);
-  // GU_TRUE disables depth writes, GU_FALSE allows them: the opaque body is
-  // the pass that must write depth, the additive passes must not.
   sceGuDepthMask(GU_FALSE);
   sceGuDisable(GU_CULL_FACE);
 
