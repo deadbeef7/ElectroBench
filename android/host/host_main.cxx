@@ -2,8 +2,8 @@
 // Host GLES3 check: render ONE scene of the port to a PPM on the host's own
 // OpenGL ES 3 driver, using the scene's own screenshot path.
 //
+//   host_bench 1 /tmp/scene1.ppm 3.0
 //   host_bench 2 /tmp/scene2.ppm 3.0
-//   host_bench 4 /tmp/scene4.ppm 3.0
 //
 // The scene writes the image itself (its WriteScreenshotPPM reads the default
 // framebuffer back with glReadPixels) and prints the "lit=" count next to it, so
@@ -24,8 +24,8 @@
 #include <string>
 #include <vector>
 
-int RunOceanScene(bool *gaveUpOut);  // scene 2 (dusk ocean)
-int RunPoleScene(bool *gaveUpOut);   // scene 4 (power lines)
+int RunOceanScene(bool *gaveUpOut);  // scene 1 (dusk ocean)
+int RunPoleScene(bool *gaveUpOut);   // scene 2 (power lines)
 
 void OceanSceneSetScreenshot(const char *path);
 void OceanSceneSetShotTime(float t);
@@ -34,7 +34,7 @@ void PoleSceneSetShotTime(float t);
 
 // The scenes read this to decide whether to trust their requested size or the
 // size the platform reports back. False means "adopt the real surface", which is
-// how the harness gets a 1366x768 frame out of scene 4's 1280x720 default.
+// how the harness gets a 1366x768 frame out of scene 2's 1280x720 default.
 bool gWindowedMode = false;
 
 #ifdef ELECTROBENCH_VITA
@@ -66,7 +66,7 @@ void PortShotTrace(const char *fmt, ...) {
 // the host's own ES 3 driver, and fail if any pair does not link.
 //
 // This exists because a shader can be perfectly valid on its own and still be
-// unlinkable with its partner: scene 2's sea shipped dead exactly that way, with
+// unlinkable with its partner: scene 1's sea shipped dead exactly that way, with
 // `uTime` highp in sea_vert (a vertex shader's float default) and mediump in
 // sea_frag (after its `precision mediump float;`). Each file passed
 // glslangValidator as GLSL ES 1.00 and each compiled alone; the pair's link
@@ -84,18 +84,18 @@ struct ShaderPair {
 };
 
 const ShaderPair kPrograms[] = {
-    {"scene 2 sea", "shaders/ps14/sea_vert.glsl", "shaders/ps14/sea_frag.glsl"},
-    {"scene 2 sky", "shaders/ps14/sky_vert.glsl", "shaders/ps14/sky_frag.glsl"},
-    {"scene 2 hud", "shaders/ps14/hud_vert.glsl", "shaders/ps14/hud_frag.glsl"},
-    {"scene 4 sky", "shaders/pole/sky_vert.glsl", "shaders/pole/sky_frag.glsl"},
-    {"scene 4 object", "shaders/pole/object_vert.glsl", "shaders/pole/object_frag.glsl"},
-    {"scene 4 hud", "shaders/ps14/hud_vert.glsl", "shaders/pole/hud_frag.glsl"},
-    // The Vita's last-resort pair (src/scene2.cxx swaps these in if the device
+    {"scene 1 sea", "shaders/ps14/sea_vert.glsl", "shaders/ps14/sea_frag.glsl"},
+    {"scene 1 sky", "shaders/ps14/sky_vert.glsl", "shaders/ps14/sky_frag.glsl"},
+    {"scene 1 hud", "shaders/ps14/hud_vert.glsl", "shaders/ps14/hud_frag.glsl"},
+    {"scene 2 sky", "shaders/pole/sky_vert.glsl", "shaders/pole/sky_frag.glsl"},
+    {"scene 2 object", "shaders/pole/object_vert.glsl", "shaders/pole/object_frag.glsl"},
+    {"scene 2 hud", "shaders/ps14/hud_vert.glsl", "shaders/pole/hud_frag.glsl"},
+    // The Vita's last-resort pair (src/scene1.cxx swaps these in if the device
     // compiler rejects the full program). They run on the same vertex stages,
     // so a precision mismatch here would leave the Vita fallback just as dead
     // as the shader it replaces - link them here too.
-    {"scene 2 sea fallback", "shaders/ps14/sea_vert.glsl", "shaders/ps14/fallback_sea_frag.glsl"},
-    {"scene 2 sky fallback", "shaders/ps14/sky_vert.glsl", "shaders/ps14/fallback_sky_frag.glsl"},
+    {"scene 1 sea fallback", "shaders/ps14/sea_vert.glsl", "shaders/ps14/fallback_sea_frag.glsl"},
+    {"scene 1 sky fallback", "shaders/ps14/sky_vert.glsl", "shaders/ps14/fallback_sky_frag.glsl"},
 };
 
 // One line per driver-log line: a 4 KB info log through a printf-style buffer is
@@ -212,15 +212,15 @@ int main(int argc, char **argv) {
   if (argc == 2 && std::strcmp(argv[1], "--check-shaders") == 0) return CheckShaders();
   if (argc < 4) {
     std::fprintf(stderr,
-                 "usage: host_bench <2|4> OUT.ppm SECONDS\n"
-                 "  e.g. host_bench 2 /tmp/scene2.ppm 3.0\n");
+                 "usage: host_bench <1|2> OUT.ppm SECONDS\n"
+                 "  e.g. host_bench 1 /tmp/scene1.ppm 3.0\n");
     return 2;
   }
   const int scene = std::atoi(argv[1]);
   const char *out = argv[2];
   const float seconds = (float)std::atof(argv[3]);
-  if (scene != 2 && scene != 4) {
-    std::fprintf(stderr, "scene must be 2 or 4 (got %d)\n", scene);
+  if (scene != 1 && scene != 2) {
+    std::fprintf(stderr, "scene must be 1 or 2 (got %d)\n", scene);
     return 2;
   }
 
@@ -234,7 +234,7 @@ int main(int argc, char **argv) {
 
   bool gaveUp = false;
   int rc = 0;
-  if (scene == 2) {
+  if (scene == 1) {
     OceanSceneSetScreenshot(out);
     OceanSceneSetShotTime(seconds);
     rc = RunOceanScene(&gaveUp);

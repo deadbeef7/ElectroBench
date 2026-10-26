@@ -312,10 +312,10 @@ void LogGlCapabilities() {
     PortLog("  %-34s %d", limit.name, (int)value);
   }
   const struct { const char *name; const char *why; } wanted[] = {
-      {"GL_EXT_color_buffer_float", "scene 2's RGBA16F environment cube is renderable"},
+      {"GL_EXT_color_buffer_float", "scene 1's RGBA16F environment cube is renderable"},
       {"GL_OES_texture_half_float_linear", "that cube is filterable"},
       {"GL_EXT_color_buffer_half_float", "half-float render targets (older spelling)"},
-      {"GL_OES_standard_derivatives", "scene 4's object shader enables it"},
+      {"GL_OES_standard_derivatives", "scene 2's object shader enables it"},
       {"GL_OES_vertex_array_object", "VAOs (core in ES 3.0, often still listed)"},
   };
   GLint extensionCount = 0;
@@ -378,12 +378,12 @@ void LogProgramInterface(GLuint program) {
 
 void ValidateShaderPrograms() {
   static const struct { const char *label; const char *vertex; const char *fragment; } programs[] = {
-      {"scene 2 sea", "shaders/ps14/sea_vert.glsl", "shaders/ps14/sea_frag.glsl"},
-      {"scene 2 sky", "shaders/ps14/sky_vert.glsl", "shaders/ps14/sky_frag.glsl"},
-      {"scene 2 hud", "shaders/ps14/hud_vert.glsl", "shaders/ps14/hud_frag.glsl"},
-      {"scene 4 sky", "shaders/pole/sky_vert.glsl", "shaders/pole/sky_frag.glsl"},
-      {"scene 4 object", "shaders/pole/object_vert.glsl", "shaders/pole/object_frag.glsl"},
-      {"scene 4 hud", "shaders/ps14/hud_vert.glsl", "shaders/pole/hud_frag.glsl"},
+      {"scene 1 sea", "shaders/ps14/sea_vert.glsl", "shaders/ps14/sea_frag.glsl"},
+      {"scene 1 sky", "shaders/ps14/sky_vert.glsl", "shaders/ps14/sky_frag.glsl"},
+      {"scene 1 hud", "shaders/ps14/hud_vert.glsl", "shaders/ps14/hud_frag.glsl"},
+      {"scene 2 sky", "shaders/pole/sky_vert.glsl", "shaders/pole/sky_frag.glsl"},
+      {"scene 2 object", "shaders/pole/object_vert.glsl", "shaders/pole/object_frag.glsl"},
+      {"scene 2 hud", "shaders/ps14/hud_vert.glsl", "shaders/pole/hud_frag.glsl"},
   };
   PortLog("--- shader validation (the port compiles all six programs itself)");
   for (const auto &program : programs) {

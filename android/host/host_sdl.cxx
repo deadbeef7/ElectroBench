@@ -11,7 +11,7 @@
 // Why this exists: the APK cannot be run here - there is no device, no emulator
 // and no KVM in this container - so the port's own pixels are otherwise
 // unobservable. On this branch the Vita3K route was a wall (the emulator models
-// the shader register bank as 20 vec4 and drops scene 2's sky and sea draws
+// the shader register bank as 20 vec4 and drops scene 1's sky and sea draws
 // entirely; see the README). This harness renders the *same* scene translation
 // units and the *same* shader tree through a real OpenGL ES 3 driver, which is
 // the API level the Android port targets, and lets the scenes' own screenshot

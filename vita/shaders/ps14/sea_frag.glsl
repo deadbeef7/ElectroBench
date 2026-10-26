@@ -4,12 +4,12 @@
 // Re-seeded from the v0.3 release (tag v0.3: shaders/ps14/sea_frag.glsl) and
 // re-ported through the same rewrites. The deltas beyond the mechanical
 // rewrite are all noted inline: MAX_CLOUDS raised to 9 to match
-// src/scene2.cxx, the whole-stage highp below, v0.3's roughness-matched
+// src/scene1.cxx, the whole-stage highp below, v0.3's roughness-matched
 // reflection LOD carried as the ES 1.00 textureCube LOD-bias overload, v0.3's
 // glitter lobes restored verbatim (they only pixelate at mediump), and the
 // cloud-shadow deck kept as the cheap envelope-only approximation - the puff
 // erosion v0.3 used cost ~100 noise samples per fragment per cloud here,
-// which pinned scene 2 to a few FPS on a phone and kept the Vita from coming
+// which pinned scene 1 to a few FPS on a phone and kept the Vita from coming
 // up at all. The envelope tracks the same cloud uniforms, so the shadow still
 // lands where the sky's clouds are.
 //
@@ -106,11 +106,11 @@ uniform vec3  uSkyZenith;
 uniform vec3  uSkyMid;
 uniform vec3  uSkyHorizon;
 
-// 9, not v0.3's 7: src/scene2.cxx uploads nine clouds' worth of uniforms
+// 9, not v0.3's 7: src/scene1.cxx uploads nine clouds' worth of uniforms
 // (MAX_CLOUDS is 9 there and in sky_frag.glsl, which the sea's shadow deck
 // must track). An array smaller than the upload makes every glUniform1fv
 // GL_INVALID_OPERATION, so the cloud-shadow uniforms would silently stay zero.
-#define MAX_CLOUDS 9             // must match shaders/ps14/sky_frag.glsl and src/scene2.cxx
+#define MAX_CLOUDS 9             // must match shaders/ps14/sky_frag.glsl and src/scene1.cxx
 uniform int   uCloudCount;
 uniform float uCloudAzim[MAX_CLOUDS];   // centre azimuth, radians
 uniform float uCloudElev[MAX_CLOUDS];   // centre elevation, radians
@@ -141,7 +141,7 @@ float waveHeight(vec2 p, float t) {
 // cloud deck used by the sky. The shadow only needs the deck's COVERAGE, so
 // this uses the cloud's elliptical envelope: the eight-lobe erosion used for
 // the visible sky silhouette cost ~100 noise samples per fragment here (and
-// nine clouds of it per pixel), which is what pinned scene 2 to a few FPS on
+// nine clouds of it per pixel), which is what pinned scene 1 to a few FPS on
 // a phone and kept it from coming up on the Vita at all. The shadow is soft
 // by nature, so the extra silhouette detail never read anyway.
 float cloudSmoothMax(float a, float b, float k) {

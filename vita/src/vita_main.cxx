@@ -1,6 +1,6 @@
 // ===========================================================================
-// ElectroBench on the PS Vita: entry point for the port that runs SCENE 2
-// (dusk ocean) and SCENE 4 (power lines / "lain") and nothing else.
+// ElectroBench on the PS Vita: entry point for the port that runs SCENE 1
+// (dusk ocean) and SCENE 2 (power lines / "lain") and nothing else.
 //
 #include <vitasdk.h>
 
@@ -12,8 +12,8 @@
 #include <cstdlib>
 #include <cstring>
 
-int RunOceanScene(bool *gaveUpOut);  // scene 2 (GL 3.3 dusk ocean)
-int RunPoleScene(bool *gaveUpOut);   // scene 4 (GL 3.3 power lines)
+int RunOceanScene(bool *gaveUpOut);  // scene 1 (GL 3.3 dusk ocean)
+int RunPoleScene(bool *gaveUpOut);   // scene 2 (GL 3.3 power lines)
 
 void OceanSceneSetScreenshot(const char *path);
 void OceanSceneSetShotTime(float t);
@@ -78,19 +78,19 @@ bool LTriggerHeld(void) {
 
 void ApplyLaunchSpec(const char *spec, bool *startWithPoles) {
   if (!spec || !spec[0]) return;
-  if (std::strstr(spec, "start=4")) *startWithPoles = true;
+  if (std::strstr(spec, "start=2")) *startWithPoles = true;
 
+  const char *shot1 = std::strstr(spec, "shot1=");
   const char *shot2 = std::strstr(spec, "shot2=");
-  const char *shot4 = std::strstr(spec, "shot4=");
-  if (shot2) {
-    OceanSceneSetScreenshot("ux0:/data/ELEB00002/vita_shot_scene2.ppm");
-    OceanSceneSetShotTime((float)std::atof(shot2 + 6));  // skip "shot2="
-    VitaLog("scene 2 screenshot scheduled at t=%.1f", std::atof(shot2 + 6));
+  if (shot1) {
+    OceanSceneSetScreenshot("ux0:/data/ELEB00002/vita_shot_scene1.ppm");
+    OceanSceneSetShotTime((float)std::atof(shot1 + 6));  // skip "shot1="
+    VitaLog("scene 1 screenshot scheduled at t=%.1f", std::atof(shot1 + 6));
   }
-  if (shot4) {
-    PoleSceneSetScreenshot("ux0:/data/ELEB00002/vita_shot_scene4.ppm");
-    PoleSceneSetShotTime((float)std::atof(shot4 + 6));  // skip "shot4="
-    VitaLog("scene 4 screenshot scheduled at t=%.1f", std::atof(shot4 + 6));
+  if (shot2) {
+    PoleSceneSetScreenshot("ux0:/data/ELEB00002/vita_shot_scene2.ppm");
+    PoleSceneSetShotTime((float)std::atof(shot2 + 6));  // skip "shot2="
+    VitaLog("scene 2 screenshot scheduled at t=%.1f", std::atof(shot2 + 6));
   }
 }
 
@@ -126,15 +126,15 @@ int main(int argc, char **argv) {
   (void)argv;
 
   const bool startWithPoles = LTriggerHeld() || StartWithPolesFromLaunch();
-  VitaLog("ElectroBench (Vita port): scenes 2 and 4, starting with scene %d",
-          startWithPoles ? 4 : 2);
+  VitaLog("ElectroBench (Vita port): scenes 1 and 2, starting with scene %d",
+          startWithPoles ? 2 : 1);
 
-  const int order[2] = {startWithPoles ? 4 : 2, startWithPoles ? 2 : 4};
+  const int order[2] = {startWithPoles ? 2 : 1, startWithPoles ? 1 : 2};
   for (int i = 0; i < 2; i++) {
     bool gaveUp = false;
     const int scene = order[i];
     VitaLog("--- scene %d ---", scene);
-    const int rc = (scene == 2) ? RunOceanScene(&gaveUp) : RunPoleScene(&gaveUp);
+    const int rc = (scene == 1) ? RunOceanScene(&gaveUp) : RunPoleScene(&gaveUp);
     VitaLog("scene %d returned %d%s", scene, rc, gaveUp ? " (gave up)" : "");
     if (VitaPortQuitRequested()) break;
   }

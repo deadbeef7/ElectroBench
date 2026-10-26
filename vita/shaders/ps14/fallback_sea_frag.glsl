@@ -1,6 +1,6 @@
 #version 100
-// FALLBACK sea for scene 2, used only by the Vita port when the full
-// sea_frag.glsl program fails to link on the device compiler (src/scene2.cxx
+// FALLBACK sea for scene 1, used only by the Vita port when the full
+// sea_frag.glsl program fails to link on the device compiler (src/scene1.cxx
 // logs that failure and swaps this in). No texture fetches, no cloud deck and
 // no loops, so it cannot fail the way the full program might; it keeps the
 // scene readable with a lit sea and a sun path.

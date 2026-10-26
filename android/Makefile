@@ -35,7 +35,7 @@ TARGET_SDK := 34
 
 # Bump together with the fastlane changelog and the F-Droid recipe's Builds entry.
 VERSION_CODE ?= 1
-VERSION_NAME ?= 1.0
+VERSION_NAME ?= 0.5
 
 ABIS := arm64-v8a armeabi-v7a x86_64
 
@@ -83,8 +83,8 @@ LIBS := -lEGL -lGLESv3 -llog -landroid -lm
 PORT_CPP := $(ROOT)/android/jni/android_main.cxx \
             $(ROOT)/android/jni/android_sdl.cxx \
             $(ROOT)/vita/src/jobs.cxx \
-            $(ROOT)/vita/src/scene2.cxx \
-            $(ROOT)/vita/src/scene4.cxx
+            $(ROOT)/vita/src/scene1.cxx \
+            $(ROOT)/vita/src/scene2.cxx
 PORT_HEADERS := $(ROOT)/android/jni/android_port.hxx \
                 $(ROOT)/android/include/GL/glew.h \
                 $(ROOT)/android/include/SDL2/SDL_opengl.h \
@@ -134,16 +134,16 @@ HOST_CFLAGS := -std=c++17 -O2 -pthread $(HOST_INCLUDES) \
                -DELECTROBENCH_VITA -DELECTROBENCH_ASSET_PREFIX='""'
 HOST_CWD := $(ROOT)/vita
 HOST_SRCS := $(ROOT)/android/host/host_main.cxx $(ROOT)/android/host/host_sdl.cxx \
-             $(ROOT)/vita/src/jobs.cxx $(ROOT)/vita/src/scene2.cxx $(ROOT)/vita/src/scene4.cxx
+             $(ROOT)/vita/src/jobs.cxx $(ROOT)/vita/src/scene1.cxx $(ROOT)/vita/src/scene2.cxx
 HOST_BIN := $(BUILD)/host/host_bench
 # The moment each scene is captured at, in benchmark seconds.
-#   * Scene 2 counts real seconds, so its capture waits out one full orbit lap
+#   * Scene 1 counts real seconds, so its capture waits out one full orbit lap
 #     (26 s: forward, turn left, restore) and shoots the reference pose.
-#   * Scene 4 counts simulated seconds and advances them by at most 0.1 per
+#   * Scene 2 counts simulated seconds and advances them by at most 0.1 per
 #     frame, so anything but the opening frame would need hundreds of frames on
 #     a software rasteriser. 0.0 is the pose it starts the benchmark on.
-HOST_SHOT_SECONDS_S2 ?= 26.0
-HOST_SHOT_SECONDS_S4 ?= 0.0
+HOST_SHOT_SECONDS_S1 ?= 26.0
+HOST_SHOT_SECONDS_S2 ?= 0.0
 HOST_SHOT_ENV := LIBGL_ALWAYS_SOFTWARE=1 ELECTROBENCH_HOST_SIZE=1366x768
 
 $(HOST_BIN): $(HOST_SRCS) $(SHADERS)
@@ -151,11 +151,11 @@ $(HOST_BIN): $(HOST_SRCS) $(SHADERS)
 	$(HOST_CXX) $(HOST_CFLAGS) -o $@ $(HOST_SRCS) -lEGL -lGLESv2
 
 host-render: $(HOST_BIN)
-	@for scene in 2 4; do \
+	@for scene in 1 2; do \
 	    pp="$(BUILD)/host/scene$$scene.ppm"; \
 	    case $$scene in \
-	        2) secs=$(HOST_SHOT_SECONDS_S2);; \
-	        *) secs=$(HOST_SHOT_SECONDS_S4);; \
+	        1) secs=$(HOST_SHOT_SECONDS_S1);; \
+	        *) secs=$(HOST_SHOT_SECONDS_S2);; \
 	    esac; \
 	    echo "--- scene $$scene at t=$$secs"; \
 	    if command -v xvfb-run >/dev/null 2>&1; then \
@@ -180,14 +180,14 @@ host-shaders: $(HOST_BIN)
 	    cd $(HOST_CWD) && LIBGL_ALWAYS_SOFTWARE=1 $(HOST_BIN) --check-shaders; \
 	fi
 
-# The two phone screenshots the store listing shows: scene 2 is the first one,
-# scene 4 the second. Frames are rendered anew first, so the listing can never
+# The two phone screenshots the store listing shows: scene 1 is the first one,
+# scene 2 the second. Frames are rendered anew first, so the listing can never
 # lag what the scenes actually draw.
 SCREENSHOT_DIR := $(ROOT)/fastlane/metadata/android/en-US/images/phoneScreenshots
 host-png: host-render
 	@mkdir -p $(SCREENSHOT_DIR)
-	python3 $(ROOT)/buildtools/ppm_to_png.py $(BUILD)/host/scene2.ppm $(SCREENSHOT_DIR)/1.png
-	python3 $(ROOT)/buildtools/ppm_to_png.py $(BUILD)/host/scene4.ppm $(SCREENSHOT_DIR)/2.png
+	python3 $(ROOT)/buildtools/ppm_to_png.py $(BUILD)/host/scene1.ppm $(SCREENSHOT_DIR)/1.png
+	python3 $(ROOT)/buildtools/ppm_to_png.py $(BUILD)/host/scene2.ppm $(SCREENSHOT_DIR)/2.png
 	@ls -l $(SCREENSHOT_DIR)/*.png
 
 

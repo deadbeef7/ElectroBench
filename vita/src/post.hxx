@@ -2,8 +2,8 @@
 // ElectroBench -- shared HDR camera for the PS Vita and Android ports.
 //
 // This is the port of src/post.hxx (the desktop GL 3.3 pipeline) to the GL
-// surface vitaGL and GLES 3.0 have in common. The scenes it serves (2 dusk
-// ocean, 4 power lines) used to write their own tone-mapped, gamma-encoded
+// surface vitaGL and GLES 3.0 have in common. The scenes it serves (1 dusk
+// ocean, 2 power lines) used to write their own tone-mapped, gamma-encoded
 // colour straight into the default framebuffer -- six shaders, each with its
 // own response curve (pow(c, 1/2.2), Reinhard-ish col/(col*0.35+0.72), an ACES
 // blend in the sky). The same radiance therefore had three different

@@ -1,6 +1,6 @@
 # ElectroBench for Android — packaging notes
 
-This folder builds the Android port: scenes 2 and 4 from the ElectroBench
+This folder builds the Android port: scenes 1 and 2 from the ElectroBench
 renderer, compiled against OpenGL ES 3 as a `NativeActivity` app. There is no
 Java source, no `classes.dex` and no Gradle project — `make` drives the NDK
 compiler, `aapt2` and `apksigner` directly, and the manifest declares

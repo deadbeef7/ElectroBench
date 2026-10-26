@@ -9,7 +9,7 @@ attribute vec3 aPos;
 uniform mat4 uViewProj;
 uniform mat4 uModel;
 
-// highp on both sides, like scene 2's sky: the fragment stage measures the
+// highp on both sides, like scene 1's sky: the fragment stage measures the
 // sun's angular radius from this direction and the halo lives in a few
 // milliradians, which fp16 (a mobile fragment's mediump) cannot resolve.
 varying highp vec3 vDir;
@@ -27,7 +27,7 @@ void main() {
     // direction: a flat colour with the clouds, cirrus and sun disc all
     // gated away - reproducible on any GLES stack that honours mediump as
     // fp16 (Mesa on the host and every phone), i.e. not device specific.
-    // aPos is already the unit direction, exactly what scene 2's sky sends
+    // aPos is already the unit direction, exactly what scene 1's sky sends
     // (ps14/sky_vert.glsl) and what mediump can normalize.
     vDir = aPos;
     gl_Position = uViewProj * w;

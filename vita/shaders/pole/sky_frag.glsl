@@ -7,7 +7,7 @@
 // last ~0.3% of dot(dir, sunDir), and a fragment-only mediump (fp16 on mobile
 // GPUs) quantises that dot in steps of 0.000977 - about 40% of the disc's own
 // radius. The disc mask collapsed from 164 values to two (0 and 1, a hard-edged
-// circle) and the halo edge stepped into concentric arcs. Scene 2's sky was
+// circle) and the halo edge stepped into concentric arcs. Scene 1's sky was
 // fixed with highp varyings alone; this shader's whole body is the atmosphere
 // integral, so the declaration is promoted instead and the two terms that
 // measure the sun are evaluated as angular distances, which stay
@@ -22,7 +22,7 @@ varying highp vec3 vDir;
 // No uEyePos here: the fragment stage used to recover the view direction as
 // normalize(vDir - uEyePos) from a mediump world position, which overflowed
 // mediump inside normalize() and flattened the whole sky (see the note in
-// sky_vert.glsl). vDir is now the unit direction itself, as in the scene 2
+// sky_vert.glsl). vDir is now the unit direction itself, as in the scene 1
 // sky, so the subtraction - and this uniform - are gone.
 uniform highp vec3 uSunDir;
 uniform float uTime;

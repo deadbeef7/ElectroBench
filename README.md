@@ -1,4 +1,4 @@
-# ElectroBench on the PlayStation Vita, Android and the Sony PSP (scenes 2 and 4) 
+# ElectroBench on the PlayStation Vita, Android and the Sony PSP (Vita/Android: scenes 1 and 2; PSP: scenes 2 and 4) 
 
 Android and Vita use ported shaders from the PC version and the PSP is hand-translated from the GE.
 

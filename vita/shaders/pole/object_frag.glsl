@@ -370,7 +370,7 @@ void main() {
     // highlight grow without bound as the surface turned edge-on: dist-treeline
     // facets (rough 1.0, so D is a flat 0.318) reached sp > 4, and sunTint*sp alone
     // is (4.0, 2.6, 1.4) - pure white after the tonemap. Everything sitting on the
-    // horizon is seen edge-on, which is why scene 4's background houses and the
+    // horizon is seen edge-on, which is why scene 2's background houses and the
     // ridge behind them burned out to flat white.
     float kg = a2 * 0.5;
     float G = 0.25 / (max(NoV * (1.0 - kg) + kg, 1e-4)

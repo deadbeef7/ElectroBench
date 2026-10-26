@@ -9,7 +9,7 @@
 // "ghost suns" ring around the sun. Declaring only the varying highp (the
 // previous revision) was not enough, because the locals that do the halo math
 // still took the stage default. highp in the fragment stage is mandated by ES
-// 3.0, which is what the APK targets, and SceShaccCg accepts it; scene 4's sky
+// 3.0, which is what the APK targets, and SceShaccCg accepts it; scene 2's sky
 // shader has shipped whole-stage highp for the same reason. The masks below
 // also measure the ANGLE to the sun instead of pow(dot, n), so the halo is
 // well conditioned even at the bottom of the highp range.
@@ -152,7 +152,7 @@ vec4 cloudSample(vec3 dir) {
         // The previous version wrapped every puff in atan() + sines and its own
         // three-octave erosion fetch (12 hashes), i.e. ~100 noise samples per
         // cloud per fragment before the sun-transmission loop multiplied that
-        // by seven. That cost is what held scene 2 at a few FPS on a phone and
+        // by seven. That cost is what held scene 1 at a few FPS on a phone and
         // is the reason the whole program could not come up on the Vita; the
         // silhouette is still eroded by the envelope noise below, so the puffs
         // stay ragged rather than turning into clean circles.

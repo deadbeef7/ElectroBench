@@ -1,6 +1,6 @@
 // ===========================================================================
-// ElectroBench on Android: entry point for the port that runs SCENE 2 (dusk
-// ocean) and SCENE 4 (power lines / "lain").
+// ElectroBench on Android: entry point for the port that runs SCENE 1 (dusk
+// ocean) and SCENE 2 (power lines / "lain").
 //
 #include <android/asset_manager.h>
 #include <android/configuration.h>
@@ -29,7 +29,7 @@ namespace {
 const int kMaxShots = 8;
 
 struct LaunchSpec {
-  int firstScene = 2;
+  int firstScene = 1;
   bool onlyFirst = false;
   double shots[kMaxShots] = {45.1, 47.0, 48.5};
   int shotCount = 3;
@@ -180,8 +180,8 @@ LaunchSpec ReadLaunchSpec(const std::string &shareDir, const std::string &intern
     const std::string value = line.substr(eq + 1);
     if (key == "start" || key == "only") {
       const int scene = std::atoi(value.c_str());
-      if (scene == 2 || scene == 4) spec.firstScene = scene;
-      if (key == "only" && (scene == 2 || scene == 4)) spec.onlyFirst = true;
+      if (scene == 1 || scene == 2) spec.firstScene = scene;
+      if (key == "only" && (scene == 1 || scene == 2)) spec.onlyFirst = true;
     } else if (key == "shots") {
       if (!ParseShots(value, &spec)) PortLog("unusable shots line: %s", line.c_str());
     }
@@ -264,10 +264,10 @@ void android_main(struct android_app *app) {
 
   const int sceneCount = spec.onlyFirst ? 1 : 2;
   for (int i = 0; i < sceneCount; i++) {
-    const int scene = i == 0 ? spec.firstScene : (spec.firstScene == 2 ? 4 : 2);
-    PortBeginScene(scene == 2 ? "scene2" : "scene4", spec.shots, spec.shotCount);
+    const int scene = i == 0 ? spec.firstScene : (spec.firstScene == 1 ? 2 : 1);
+    PortBeginScene(scene == 1 ? "scene1" : "scene2", spec.shots, spec.shotCount);
     bool gaveUp = false;
-    const int rc = scene == 2 ? RunOceanScene(&gaveUp) : RunPoleScene(&gaveUp);
+    const int rc = scene == 1 ? RunOceanScene(&gaveUp) : RunPoleScene(&gaveUp);
     PortLog("scene %d returned %d%s", scene, rc, gaveUp ? " (gave up)" : "");
     if (rc == 2 || PortQuitRequested()) {
       PortLog("quit requested; stopping after scene %d", scene);

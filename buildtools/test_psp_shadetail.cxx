@@ -6,7 +6,7 @@
 namespace {
 
 // The palette entries and the sun the scene starts under, copied from
-// psp_scene4.cxx / src/scene4.cxx (they are the same numbers there).
+// psp_scene4.cxx / src/scene2.cxx (they are the same numbers there).
 const float kGravel[3] = {0.330f, 0.272f, 0.205f};
 const float kRoad[3] = {0.115f, 0.120f, 0.132f};
 const float kKerb[3] = {0.245f, 0.238f, 0.225f};

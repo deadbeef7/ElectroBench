@@ -1,6 +1,6 @@
 #version 100
-// FALLBACK sky for scene 2, used only by the Vita port when the full
-// sky_frag.glsl program fails to link on the device compiler (src/scene2.cxx
+// FALLBACK sky for scene 1, used only by the Vita port when the full
+// sky_frag.glsl program fails to link on the device compiler (src/scene1.cxx
 // logs that failure and swaps this in). It exists so a shader rejection costs
 // the detail, not the frame: the scene still paints a dusk gradient with a sun
 // glow instead of a black screen with nothing to read.

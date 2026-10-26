@@ -1,7 +1,7 @@
 // A handful of threads for the scene setup code.
 //
-// Both scenes spend most of their start-up time on the CPU: scene 2 fills three
-// 256x256 procedural textures, scene 4 tessellates a few hundred thousand
+// Both scenes spend most of their start-up time on the CPU: scene 1 fills three
+// 256x256 procedural textures, scene 2 tessellates a few hundred thousand
 // vertices of poles, wires, houses and trees. None of that touches GL, and on
 // the Vita it would otherwise run on one core of four - while the (unavoidably
 // serial) SceShaccCg compiles hold the same core. So the data generation goes to

@@ -3,7 +3,7 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 PSP_OBJ=${PSP_OBJ:-$ROOT/psp/src/psp_scene2.o}
-VITA_OBJS=${VITA_OBJS:-$ROOT/build-vita/scene2.o $ROOT/build-vita/scene4.o}
+VITA_OBJS=${VITA_OBJS:-$ROOT/build-vita/scene1.o $ROOT/build-vita/scene2.o}
 PSP_OD=${PSP_OD:-${PSPDEV:-/usr/local/pspdev}/bin/psp-objdump}
 VITA_OD=${VITA_OD:-${VITASDK:-/usr/local/vitasdk}/bin/arm-vita-eabi-objdump}
 
@@ -32,7 +32,7 @@ fi
 
 # NEON in the Vita scene translation units. The exact count moves with the
 # compiler, so require a healthy fraction of the hundreds both TUs emit (384 in
-# scene2.o, 1213 in scene4.o with the pinned SDK).
+# scene1.o, 1213 in scene2.o with the pinned SDK).
 for obj in $VITA_OBJS; do
   vita_neon=$("$VITA_OD" -d "$obj" | grep -cE '\bv(add|sub|mul|mla)\.f32|\bvld[0-9]|\bvst[0-9]' || true)
   if [ "$vita_neon" -lt 200 ]; then

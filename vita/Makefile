@@ -1,5 +1,5 @@
 # ===========================================================================
-# ElectroBench -- PlayStation Vita port (SCENE 2 and SCENE 4 only).
+# ElectroBench -- PlayStation Vita port (SCENE 1 and SCENE 2 only).
 #
 # From the repo root:
 #   vdpm install vitaGL
@@ -49,7 +49,7 @@ LIBS := -lvitaGL -lvitashark -lSceShaccCgExt -lmathneon \
         -lstdc++ -lm -lc
 
 OBJS := $(BUILD)/vita_main.o $(BUILD)/vita_sdl.o $(BUILD)/jobs.o \
-        $(BUILD)/scene2.o $(BUILD)/scene4.o
+        $(BUILD)/scene1.o $(BUILD)/scene2.o
 
 SHADERS := $(wildcard shaders/*/*.glsl)
 
@@ -62,11 +62,11 @@ $(BUILD)/%.o: src/%.cxx
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 # The two ported scenes compile from the shared sources, unchanged.
-$(BUILD)/scene2.o: src/scene2.cxx
+$(BUILD)/scene1.o: src/scene1.cxx
 	@mkdir -p $(BUILD)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-$(BUILD)/scene4.o: src/scene4.cxx
+$(BUILD)/scene2.o: src/scene2.cxx
 	@mkdir -p $(BUILD)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
