@@ -1,27 +1,8 @@
 #!/bin/sh
-# ============================================================================
-# Verify that the two consoles' vector units are still in the build, from the
-# repo root:
-#
-#   sh buildtools/check_codegen.sh
-#
-# This is a regression guard, not a benchmark. On the PSP the sea's wave field
-# is deliberately written as VFPU quad assembly (psp/src/psp_waves.hxx): if a
-# future compiler flag or refactor drops the asm, the object stops containing
-# vsin.q/vcos.q/vdot.q and the port silently falls back to scalar math. On the
-# Vita the scenes rely on -mfpu=neon -ftree-vectorize producing NEON for the
-# setup/geometry loops; -O1 or a changed float flag would quietly remove it.
-# Both symptoms are invisible on screen, so they are checked here.
-#
-# Requires both ports to have been built first:
-#   make -C psp && make
-# ============================================================================
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 PSP_OBJ=${PSP_OBJ:-$ROOT/psp/src/psp_scene2.o}
-# Both scene translation units, because both lean on the vectoriser: scene 2
-# shades 5k sea vertices per frame, scene 4 builds and lights its geometry.
 VITA_OBJS=${VITA_OBJS:-$ROOT/build-vita/scene2.o $ROOT/build-vita/scene4.o}
 PSP_OD=${PSP_OD:-${PSPDEV:-/usr/local/pspdev}/bin/psp-objdump}
 VITA_OD=${VITA_OD:-${VITASDK:-/usr/local/vitasdk}/bin/arm-vita-eabi-objdump}
