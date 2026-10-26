@@ -51,10 +51,6 @@ LIBS := -lvitaGL -lvitashark -lSceShaccCgExt -lmathneon \
 OBJS := $(BUILD)/vita_main.o $(BUILD)/vita_sdl.o $(BUILD)/jobs.o \
         $(BUILD)/scene2.o $(BUILD)/scene4.o
 
-# The packed shader tree. Listing the files (not just the directory) matters:
-# regenerating a shader rewrites it in place, which does not touch the
-# directory's timestamp, so a directory-only prerequisite would leave the .vpk
-# holding the previous revision of the shaders.
 SHADERS := $(wildcard shaders/*/*.glsl)
 
 .PHONY: all clean check vpk check-codegen check-artifacts host-render
