@@ -27,7 +27,11 @@ Repo: https://github.com/deadbeef7/ElectroBench
 Builds:
   - versionName: '0.5'
     versionCode: 1
-    commit: SET-ME-TO-THE-RELEASE-COMMIT
+    # The commit this entry builds: the last commit that changed anything the
+    # APK or the listing is made of. It reads one commit behind this copy
+    # because a commit cannot carry its own hash; the fdroiddata copy is the
+    # one F-Droid builds from.
+    commit: 722500258943a91eedf1e2a0bd10650a22f11b7a
     # NDK r26d. F-Droid installs this revision into its SDK and exports
     # ANDROID_NDK / ANDROID_NDK_HOME, which the Makefile reads ($($$NDK$$) is
     # passed explicitly so the recipe does not depend on that variable name).
