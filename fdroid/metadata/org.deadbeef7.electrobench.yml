@@ -19,7 +19,7 @@ RepoType: git
 Repo: https://github.com/deadbeef7/ElectroBench
 
 Builds:
-  - versionName: '1.0'
+  - versionName: '0.5'
     versionCode: 1
     # Full hash of the release commit - the commit that carries this file, its
     # Makefile `unsigned` target and the fastlane listing. Replace with
@@ -35,5 +35,5 @@ Builds:
 
 AutoUpdateMode: Version
 UpdateCheckMode: Tags
-CurrentVersion: '1.0'
+CurrentVersion: '0.5'
 CurrentVersionCode: 1
