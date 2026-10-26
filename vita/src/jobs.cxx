@@ -1,11 +1,5 @@
 // Worker threads for scene setup. See jobs.hxx for why this exists.
 //
-// pthreads rather than std::thread: the Vita port links VitaSDK's newlib, whose
-// pthread implementation maps onto SceKernel threads, so one implementation
-// covers the Vita, Android and the host build with no per-platform branch. A
-// small pool is created on demand and joined by WaitAll(); setup runs this a
-// few times per scene, so thread creation is nothing next to the milliseconds of
-// noise() it hides, and there is no idle pool to leak or to wake at exit.
 #include "jobs.hxx"
 
 #include <pthread.h>
@@ -20,9 +14,6 @@
 
 namespace jobs {
 namespace {
-
-// One queue, worked on by at most CoreCount()-1 threads plus (in WaitAll) the
-// calling thread. Tasks are taken under the mutex, run outside it.
 struct Pool {
   std::mutex mutex;
   std::vector<std::function<void()>> tasks;
@@ -80,15 +71,11 @@ void Enqueue(const std::function<void()> &task) {
     gPool.threads.push_back(thread);
     gPool.alive++;
   }
-  // If the thread could not be created the task simply stays queued and runs
-  // on the calling thread in WaitAll(): slower, never wrong.
 }
 
 }  // namespace
 
 void Start(int count, const std::function<void(int)> &task) {
-  // The caller's function object may not outlive this call (a temporary lambda
-  // is the normal case), so each task gets its own copy.
   std::function<void(int)> copy = task;
   for (int i = 0; i < count; i++) Enqueue([copy, i] { copy(i); });
 }
