@@ -67,16 +67,24 @@ by it and ignores `versionName` when deciding which APK is newer.
 # 3. build and check the artifact the store will take
 make -C android unsigned && \
   aapt2 dump badging build-android/ElectroBench-*-unsigned.apk | head -1
-# 4. commit, tag, push
+# 4. commit, tag (v<version>), push both the branch and the tag
 # 5. copy fdroid/metadata/org.deadbeef7.electrobench.yml into your fdroiddata
-#    fork as metadata/org.deadbeef7.electrobench.yml, append a Builds entry for
-#    the new version, and set `commit:` to `git rev-parse HEAD` of the tag.
+#    fork as metadata/org.deadbeef7.electrobench.yml, add the Builds entry for
+#    the new version, and set its `commit:` to `git rev-parse v<version>`.
 ```
 
-The `commit:` field in the recipe is a placeholder (`SET-ME-TO-THE-RELEASE-COMMIT`)
-because a commit hash cannot exist before the commit is made: fill it in step 5
-with the hash of the release commit, which is the commit that must contain this
-Makefile's `unsigned` target and the fastlane listing.
+The `commit:` in the in-repo copy names the release commit it describes, which
+is necessarily one commit older than the copy itself: a commit cannot contain
+its own hash. The copy in fdroiddata is the one F-Droid builds from, so it is
+the copy that has to be right; the in-repo one is kept so the recipe is
+versioned next to the code it builds.
+
+Pushing the tag is not optional. The recipe reads the version out of
+`android/Makefile` at each tag (`UpdateCheckData`) because no tag here carries
+`android/AndroidManifest.xml` - the Android port is newer than every tag - so
+`fdroid checkupdates` can only see a release once a tag containing `android/`
+exists. Before that it fails with "Couldn't find any version information".
+`AutoUpdateMode: Version` then appends the next Builds entry by itself.
 
 ## F-Droid
 
@@ -102,8 +110,10 @@ What the recipe relies on, and what this folder guarantees for it:
   system, no ads and no analytics. There are no anti-features to declare.
 * **Listing metadata** from `fastlane/metadata/android/en-US/`: title, short
   and full description, icon, two phone screenshots and per-version
-  changelogs. Images are PNGs from the port's own GLES3 render path
-  (1366×768): `make -C android host-png` re-renders both from the current
+  changelogs. `short_description.txt` is capped at 80 characters by F-Droid
+  (it is the app's summary in the client), the full description at 4000, and
+  the icon must stay 512×512. Images are PNGs from the port's own GLES3 render
+  path (1366×768): `make -C android host-png` re-renders both from the current
   source through the host driver, so the listing cannot lag the scenes.
   Replace them with device captures whenever newer ones exist, because
   F-Droid reads them out of the repository at the commit it builds.

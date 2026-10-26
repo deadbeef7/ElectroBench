@@ -7,7 +7,13 @@
 # The app is NDK + make only (no Gradle, no Java), so this is a "manual" build:
 # fdroidserver runs the `build:` commands and then collects the single APK the
 # `output:` glob matches. Nothing is downloaded during the build; the NDK and
-# SDK come from F-Droid's build server, selected by `ndk:` below.
+# SDK come from F-Droid's build server, selected by `ndk:` below. The Makefile
+# finds aapt2/zipalign/android.jar by picking the newest numeric build-tools and
+# platform it is given, so no SDK component version is pinned here.
+#
+# The build passes $$VERCODE$$/$$VERSION$$ down to make: the version a build
+# ships is the one this metadata entry declares, even if the Makefile defaults
+# were to drift from it.
 Categories:
   - Graphics
   - Development
@@ -21,19 +27,21 @@ Repo: https://github.com/deadbeef7/ElectroBench
 Builds:
   - versionName: '0.5'
     versionCode: 1
-    # Full hash of the release commit - the commit that carries this file, its
-    # Makefile `unsigned` target and the fastlane listing. Replace with
-    # `git rev-parse HEAD` of that commit before opening the fdroiddata MR.
     commit: SET-ME-TO-THE-RELEASE-COMMIT
     # NDK r26d. F-Droid installs this revision into its SDK and exports
     # ANDROID_NDK / ANDROID_NDK_HOME, which the Makefile reads ($($$NDK$$) is
     # passed explicitly so the recipe does not depend on that variable name).
     ndk: 26.3.11579264
     build:
-      - make -C android unsigned SDK=$$SDK$$ NDK=$$NDK$$
+      - make -C android unsigned SDK=$$SDK$$ NDK=$$NDK$$ VERSION_CODE=$$VERCODE$$ VERSION_NAME=$$VERSION$$
     output: build-android/ElectroBench-*-unsigned.apk
 
 AutoUpdateMode: Version
 UpdateCheckMode: Tags
+# `Tags` alone checks each tag's android/AndroidManifest.xml, which does not
+# exist in this repo's tags (the Android port is newer than every tag), so the
+# check is pointed at the one file that holds the version: android/Makefile.
+# A release must therefore be tagged - an untagged commit cannot be discovered.
+UpdateCheckData: 'android/Makefile|VERSION_CODE\s*\?=\s*(\d+)|android/Makefile|VERSION_NAME\s*\?=\s*([0-9][0-9.]*)'
 CurrentVersion: '0.5'
 CurrentVersionCode: 1
