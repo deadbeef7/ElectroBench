@@ -114,6 +114,82 @@ all: $(APK)
 # Force APK repacking so the embedded shaders can never silently lag the tree.
 FORCE:
 
+# ------------------------------------------- host OpenGL ES 3 render check
+# The APK cannot be run here: no device, no emulator, no KVM. So the scenes and
+# the shader tree are instead rendered through the host's own OpenGL ES 3 driver
+# (Mesa, software rasteriser) by the small harness in android/host/ - the same
+# scene translation units and the same shaders the APK ships, at the ES 3.0 API
+# level it targets. It says nothing about the Android activity/EGL glue, which
+# only a device can exercise, and it is where the listing's screenshots come
+# from (host-png below).
+#
+# -DELECTROBENCH_VITA: the scenes' Vita branch is the one that calls the port's
+# VitaLog/PortShotTrace hooks, which android/host/host_main.cxx provides for the
+# host. An empty asset prefix makes the scenes' "shaders/..." lookups read the
+# checkout instead of the console's app0: mount, which is why both targets below
+# run from the directory that holds the shader tree.
+HOST_CXX ?= g++
+HOST_INCLUDES := -I$(ROOT)/android/include -I$(ROOT)/vita/include -I$(ROOT)/vita/lib
+HOST_CFLAGS := -std=c++17 -O2 -pthread $(HOST_INCLUDES) \
+               -DELECTROBENCH_VITA -DELECTROBENCH_ASSET_PREFIX='""'
+HOST_CWD := $(ROOT)/vita
+HOST_SRCS := $(ROOT)/android/host/host_main.cxx $(ROOT)/android/host/host_sdl.cxx \
+             $(ROOT)/vita/src/jobs.cxx $(ROOT)/vita/src/scene2.cxx $(ROOT)/vita/src/scene4.cxx
+HOST_BIN := $(BUILD)/host/host_bench
+# The moment each scene is captured at, in benchmark seconds.
+#   * Scene 2 counts real seconds, so its capture waits out one full orbit lap
+#     (26 s: forward, turn left, restore) and shoots the reference pose.
+#   * Scene 4 counts simulated seconds and advances them by at most 0.1 per
+#     frame, so anything but the opening frame would need hundreds of frames on
+#     a software rasteriser. 0.0 is the pose it starts the benchmark on.
+HOST_SHOT_SECONDS_S2 ?= 26.0
+HOST_SHOT_SECONDS_S4 ?= 0.0
+HOST_SHOT_ENV := LIBGL_ALWAYS_SOFTWARE=1 ELECTROBENCH_HOST_SIZE=1366x768
+
+$(HOST_BIN): $(HOST_SRCS) $(SHADERS)
+	@mkdir -p $(dir $@)
+	$(HOST_CXX) $(HOST_CFLAGS) -o $@ $(HOST_SRCS) -lEGL -lGLESv2
+
+host-render: $(HOST_BIN)
+	@for scene in 2 4; do \
+	    pp="$(BUILD)/host/scene$$scene.ppm"; \
+	    case $$scene in \
+	        2) secs=$(HOST_SHOT_SECONDS_S2);; \
+	        *) secs=$(HOST_SHOT_SECONDS_S4);; \
+	    esac; \
+	    echo "--- scene $$scene at t=$$secs"; \
+	    if command -v xvfb-run >/dev/null 2>&1; then \
+	        cd $(HOST_CWD) && $(HOST_SHOT_ENV) xvfb-run -a -s "-screen 0 1366x768x24" \
+	            $(HOST_BIN) $$scene $$pp $$secs; \
+	    else \
+	        cd $(HOST_CWD) && $(HOST_SHOT_ENV) $(HOST_BIN) $$scene $$pp $$secs; \
+	    fi; \
+	done
+	@ls -l $(BUILD)/host/*.ppm
+
+# host-shaders is deliberately separate from host-render: it needs a GL context
+# but no frames, so it runs in about a second and can gate every change to a
+# shader. It is the only check here that sees a program's two stages together -
+# the sea shipped dead once with each stage valid on its own and the pair
+# unlinkable (see android/host/host_main.cxx).
+host-shaders: $(HOST_BIN)
+	@if command -v xvfb-run >/dev/null 2>&1; then \
+	    cd $(HOST_CWD) && LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s "-screen 0 640x480x24" \
+	        $(HOST_BIN) --check-shaders; \
+	else \
+	    cd $(HOST_CWD) && LIBGL_ALWAYS_SOFTWARE=1 $(HOST_BIN) --check-shaders; \
+	fi
+
+# The two phone screenshots the store listing shows: scene 2 is the first one,
+# scene 4 the second. Frames are rendered anew first, so the listing can never
+# lag what the scenes actually draw.
+SCREENSHOT_DIR := $(ROOT)/fastlane/metadata/android/en-US/images/phoneScreenshots
+host-png: host-render
+	@mkdir -p $(SCREENSHOT_DIR)
+	python3 $(ROOT)/buildtools/ppm_to_png.py $(BUILD)/host/scene2.ppm $(SCREENSHOT_DIR)/1.png
+	python3 $(ROOT)/buildtools/ppm_to_png.py $(BUILD)/host/scene4.ppm $(SCREENSHOT_DIR)/2.png
+	@ls -l $(SCREENSHOT_DIR)/*.png
+
 
 define ABI_RULE
 $(BUILD)/$(1)/libmain.so: $(SOURCES) $(GLUE)

@@ -103,8 +103,10 @@ What the recipe relies on, and what this folder guarantees for it:
 * **Listing metadata** from `fastlane/metadata/android/en-US/`: title, short
   and full description, icon, two phone screenshots and per-version
   changelogs. Images are PNGs from the port's own GLES3 render path
-  (1366×768); replace them with device captures whenever newer ones exist,
-  because F-Droid reads them out of the repository at the commit it builds.
+  (1366×768): `make -C android host-png` re-renders both from the current
+  source through the host driver, so the listing cannot lag the scenes.
+  Replace them with device captures whenever newer ones exist, because
+  F-Droid reads them out of the repository at the commit it builds.
 
 ### Checking the recipe locally
 
