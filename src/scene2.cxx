@@ -1047,8 +1047,11 @@ int RunOceanScene(bool *gaveUpOut) {
   std::fflush(stdout);
   SDL_GL_SetSwapInterval(0);
 
-  if (glewInit() != GLEW_OK) {
-    std::fprintf(stderr, "glewInit failed\n");
+  // GLEW built for GLX (as most Linux distributions ship it) loads every GL function on an EGL
+  // context too (SDL on Wayland), and then returns GLEW_ERROR_NO_GLX_DISPLAY: not a failure
+  GLenum glewError = glewInit();
+  if (glewError != GLEW_OK && glewError != GLEW_ERROR_NO_GLX_DISPLAY) {
+    std::fprintf(stderr, "glewInit failed: %s\n", glewGetErrorString(glewError));
     return EXIT_FAILURE;
   }
 
