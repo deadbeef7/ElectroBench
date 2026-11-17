@@ -45,7 +45,7 @@ void main() {
 
     float foot = max(fwidth(plane.x), fwidth(plane.y));
     float grout = (1.0 - smoothstep(0.06, 0.34, foot))
-                * smoothstep(0.10, 0.0, abs(c - 0.5));
+                * (1.0 - smoothstep(0.0, 0.10, abs(c - 0.5)));
     albedo *= mix(1.0, 0.62, grout);
 
 
@@ -94,8 +94,8 @@ void main() {
 
     panel *= smoothstep(half_ * 1.00, half_ * 0.86, box);
 
-    float mull = smoothstep(0.030, 0.012, abs(q.x))
-               + smoothstep(0.030, 0.012, abs(q.y));
+    float mull = (1.0 - smoothstep(0.012, 0.030, abs(q.x)))
+               + (1.0 - smoothstep(0.012, 0.030, abs(q.y)));
     panel *= clamp(1.0 - mull * 0.85, 0.0, 1.0);
 
 

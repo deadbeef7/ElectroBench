@@ -95,15 +95,15 @@ float panelRadiance(vec3 rd, vec3 Ld) {
     float box = max(abs(q.x), abs(q.y));
 
 
-    float edgeT = smoothstep(0.30, 0.165, box);
+    float edgeT = (1.0 - smoothstep(0.165, 0.30, box));
     float panel = edgeT * (0.62 + 0.38 * smoothstep(0.015, 0.24, edgeT));
     float louvre = 0.5 + 0.5 * cos(q.x * 210.0);
     panel *= 0.86 + 0.14 * louvre;
-    panel *= smoothstep(0.300, 0.258, box);
-    float mull = smoothstep(0.030, 0.012, abs(q.x))
-               + smoothstep(0.030, 0.012, abs(q.y));
+    panel *= (1.0 - smoothstep(0.258, 0.300, box));
+    float mull = (1.0 - smoothstep(0.012, 0.030, abs(q.x)))
+               + (1.0 - smoothstep(0.012, 0.030, abs(q.y)));
     panel *= clamp(1.0 - mull * 0.85, 0.0, 1.0);
-    return panel + 0.055 * smoothstep(0.78, 0.30, box);
+    return panel + 0.055 * (1.0 - smoothstep(0.30, 0.78, box));
 }
 
 

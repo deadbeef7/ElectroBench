@@ -94,6 +94,17 @@ static void Mat4LookAt(Mat4 &m, const Vec3 &eye, const Vec3 &center, const Vec3 
   m = r;
 }
 
+static void Mat4Ortho(Mat4 &m, float l, float r, float b, float t, float n, float f) {
+  m.fill(0.0f);
+  m[0] = 2.0f / (r - l);
+  m[5] = 2.0f / (t - b);
+  m[10] = -2.0f / (f - n);
+  m[12] = -(r + l) / (r - l);
+  m[13] = -(t + b) / (t - b);
+  m[14] = -(f + n) / (f - n);
+  m[15] = 1.0f;
+}
+
 static double NowSeconds() {
   return (double)SDL_GetPerformanceCounter() / (double)SDL_GetPerformanceFrequency();
 }
@@ -169,10 +180,8 @@ static Program LinkProgram(const char *vsPath, const char *fsPath) {
 static const char *const gName = "ElectroBench - Scene 4 (Lain)";
 static const int WIDTH = 1280, HEIGHT = 720;
 static const float kGroundY = 0.0f;
-static const Vec3 kSunDir{-0.30f, 0.20f, 0.93f};
-
 static Vec3 SunDirNow(double t) {
-  float az = -0.30f - 0.004f * (float)t;               
+  float az = 0.30f - 0.004f * (float)t;               
   float el = 0.20f - 0.0011f * (float)t;                
   if (el < 0.15f) el = 0.15f;
   Vec3 s{az, el, 0.93f};
@@ -192,8 +201,22 @@ static postproc::Settings gPostSettings;
 static GLuint gFontTex = 0;
 static GLuint gSkyVao = 0, gSkyVbo = 0, gSkyIbo = 0;
 static int gSkyIndexCount = 0;
+
+// Real-time sun shadow map and the sky cubemap the materials reflect. Both are
+// rebuilt every frame: the camera dollies down the corridor, so a cached static
+// shadow map would smear as soon as the view moved.
+static const int kShadowSize = 4096;
+static GLuint gShadowFbo = 0, gShadowTex = 0;
+static GLuint gShadowProg = 0;
+static bool gShadowReady = false;
+static Mat4 gLightVP;
+
+static const int kEnvSize = 256;
+static GLuint gSkyCube = 0, gSkyEnvFbo = 0, gSkyEnvDepth = 0;
+static bool gSkyEnvReady = false;
 static GLuint gObjVao = 0, gObjVbo = 0, gObjIbo = 0;
 static int gObjIndexCount = 0;
+static int gRoadIndexStart = -1; // flat receivers are skipped when casting
 
 static SDL_Window *gWindow = nullptr;
 static SDL_GLContext gContext = nullptr;
@@ -259,7 +282,6 @@ static const float kMatWall = 8.0f;
 static const float kMatRoof = 9.0f;
 static const float kMatGlass = 10.0f;
 static const float kMatLeaf = 11.0f;
-static const float kMatShadow = 12.0f;
 static const float kMatGlow = 13.0f;     
 static const float kMatSteel = 14.0f;
 static const float kMatKerb = 15.0f;
@@ -280,7 +302,6 @@ static const float kRoadX = 2.6f;       // road centre (matches uRoadX)
 static const float kRoadHalf = 2.7f;    // 5.4 m carriageway
 static const float kRoadY = 0.030f;
 static const float kPaintY = 0.050f;
-static const float kShadowY = 0.075f;
 static const float kKerbTopY = 0.190f;
 
 static void PushVert(const Vec3 &p, const Vec3 &n, const Vec3 &c,
@@ -1395,99 +1416,6 @@ static void DrawSky(const Mat4 &view, const Vec3 &eye, double timeSec) {
   glEnable(GL_DEPTH_TEST);
 }
 
-static GLuint gShadowVao = 0, gShadowVbo = 0, gShadowIbo = 0;
-static void DrawGroundShadows(const Mat4 &view, const Vec3 &eye, double t,
-                              const std::vector<PoleSpec> &lineA,
-                              const std::vector<PoleSpec> &lineB) {
-  if (!gShadowVao) {
-    glGenVertexArrays(1, &gShadowVao);
-    glGenBuffers(1, &gShadowVbo);
-    glGenBuffers(1, &gShadowIbo);
-    glBindVertexArray(gShadowVao);
-    glBindBuffer(GL_ARRAY_BUFFER, gShadowVbo);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(ObjVertex), (void *)0);
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(ObjVertex),
-                          (void *)(3 * sizeof(float)));
-    glEnableVertexAttribArray(2);
-    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(ObjVertex),
-                          (void *)(6 * sizeof(float)));
-    glEnableVertexAttribArray(3);
-    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(ObjVertex),
-                          (void *)(9 * sizeof(float)));
-    glEnableVertexAttribArray(4);
-    glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, sizeof(ObjVertex),
-                          (void *)(10 * sizeof(float)));
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gShadowIbo);
-    glBindVertexArray(0);
-  }
-  Vec3 sunDir = SunDirNow(t);
-  Vec3 sun = Vec3Norm({sunDir.x, 0.0f, sunDir.z});
-  Vec3 perp{-sun.z, 0.0f, sun.x};
-  const float kAlpha[6] = {0.46f, 0.39f, 0.31f, 0.23f, 0.15f, 0.07f};
-  const int kStrips = 5;
-  std::vector<ObjVertex> v;
-  std::vector<unsigned int> idx;
-  v.reserve((lineA.size() + lineB.size()) * kStrips * 4);
-  idx.reserve((lineA.size() + lineB.size()) * kStrips * 6);
-  for (const std::vector<PoleSpec> *line : {&lineA, &lineB}) {
-    for (const PoleSpec &p : *line) {
-      float reach = 16.0f * (1.0f + 0.05f * (float)((int(p.z) % 7)));
-      Vec3 b{p.x, kShadowY, p.z};
-      for (int k = 0; k < kStrips; k++) {
-        float t0 = (float)k / kStrips, t1 = (float)(k + 1) / kStrips;
-        Vec3 c0 = Vec3Add(b, Vec3Scale(sun, -reach * t0));
-        Vec3 c1 = Vec3Add(b, Vec3Scale(sun, -reach * t1));
-        float w0 = 0.30f + 0.95f * t0, w1 = 0.30f + 0.95f * t1;
-        float a0 = kAlpha[k], a1 = kAlpha[k + 1];
-        unsigned int s = (unsigned int)v.size();
-        v.push_back({c0.x + perp.x * w0, kShadowY, c0.z + perp.z * w0, 0, 1, 0,
-                     0, 0, 0, kMatShadow, a0});
-        v.push_back({c0.x - perp.x * w0, kShadowY, c0.z - perp.z * w0, 0, 1, 0,
-                     0, 0, 0, kMatShadow, a0});
-        v.push_back({c1.x - perp.x * w1, kShadowY, c1.z - perp.z * w1, 0, 1, 0,
-                     0, 0, 0, kMatShadow, a1});
-        v.push_back({c1.x + perp.x * w1, kShadowY, c1.z + perp.z * w1, 0, 1, 0,
-                     0, 0, 0, kMatShadow, a1});
-        idx.push_back(s); idx.push_back(s + 1); idx.push_back(s + 2);
-        idx.push_back(s); idx.push_back(s + 2); idx.push_back(s + 3);
-      }
-    }
-  }
-  // stream the buffers (VAO unbound: buffer bindings here are global)
-  glBindVertexArray(0);
-  glBindBuffer(GL_ARRAY_BUFFER, gShadowVbo);
-  glBufferData(GL_ARRAY_BUFFER, v.size() * sizeof(ObjVertex), v.data(),
-               GL_STREAM_DRAW);
-  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gShadowIbo);
-  glBufferData(GL_ELEMENT_ARRAY_BUFFER, idx.size() * sizeof(unsigned int),
-               idx.data(), GL_STREAM_DRAW);
-
-  glBindVertexArray(gShadowVao);
-  glUseProgram(gObjProg.handle);
-  Mat4 vp;
-  Mat4Multiply(vp, gProj, view);
-  Mat4 model;
-  Mat4Identity(model);
-  glDisable(GL_CULL_FACE);
-  glUniformMatrix4fv(gObjProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
-  glUniformMatrix4fv(gObjProg.loc("uModel"), 1, GL_FALSE, model.data());
-  glUniform3f(gObjProg.loc("uEyePos"), eye.x, eye.y, eye.z);
-  glUniform3f(gObjProg.loc("uSunDir"), sunDir.x, sunDir.y, sunDir.z);
-  glUniform1f(gObjProg.loc("uTime"), (float)t);
-  glUniform1f(gObjProg.loc("uRoadX"), kRoadX);
-  glUniform1f(gObjProg.loc("uHdrOut"), gPost.ready ? 1.0f : 0.0f);
-  glEnable(GL_BLEND);
-  glBlendFunc(GL_ZERO, GL_ONE_MINUS_SRC_ALPHA);
-  glDepthMask(GL_FALSE);  
-  glDrawElements(GL_TRIANGLES, (GLsizei)idx.size(), GL_UNSIGNED_INT, nullptr);
-  glDepthMask(GL_TRUE);
-  glDisable(GL_BLEND);
-  glEnable(GL_CULL_FACE);
-  glBindVertexArray(0);
-}
-
 static void DrawGrid(const Mat4 &view, const Vec3 &eye, double timeSec) {
   (void)timeSec;
   Mat4 vp;
@@ -1505,9 +1433,236 @@ static void DrawGrid(const Mat4 &view, const Vec3 &eye, double timeSec) {
   glUniform1f(gObjProg.loc("uTime"), (float)timeSec);
   glUniform1f(gObjProg.loc("uRoadX"), kRoadX);
   glUniform1f(gObjProg.loc("uHdrOut"), gPost.ready ? 1.0f : 0.0f);
+
+  glActiveTexture(GL_TEXTURE0);
+  glBindTexture(GL_TEXTURE_CUBE_MAP, gSkyCube);
+  glUniform1i(gObjProg.loc("uSkyEnvTex"), 0);
+  glActiveTexture(GL_TEXTURE1);
+  glBindTexture(GL_TEXTURE_2D, gShadowTex);
+  glUniform1i(gObjProg.loc("uShadowMap"), 1);
+  glActiveTexture(GL_TEXTURE0);
+  glUniformMatrix4fv(gObjProg.loc("uLightVP"), 1, GL_FALSE, gLightVP.data());
+  glUniform2f(gObjProg.loc("uShadowTexel"), 1.0f / (float)kShadowSize,
+              1.0f / (float)kShadowSize);
+  glUniform1f(gObjProg.loc("uShadowEnabled"), gShadowReady ? 1.0f : 0.0f);
+  glUniform1f(gObjProg.loc("uShadowStrength"), 1.0f);
+  glUniform1f(gObjProg.loc("uEnvMaxLod"), 8.0f);
   glDrawElements(GL_TRIANGLES, gObjIndexCount, GL_UNSIGNED_INT, nullptr);
   glBindVertexArray(0);
   glEnable(GL_CULL_FACE);
+}
+
+
+// ------------------------------------------------- shadow map + sky cubemap
+static GLuint LinkSourceProgram(const char *vsSrc, const char *fsSrc,
+                                const char *label) {
+  GLuint vs = CompileShader(GL_VERTEX_SHADER, vsSrc, label);
+  GLuint fs = CompileShader(GL_FRAGMENT_SHADER, fsSrc, label);
+  GLuint prog = glCreateProgram();
+  glAttachShader(prog, vs);
+  glAttachShader(prog, fs);
+  glLinkProgram(prog);
+  GLint ok = 0;
+  glGetProgramiv(prog, GL_LINK_STATUS, &ok);
+  if (!ok) {
+    char log[2048];
+    glGetProgramInfoLog(prog, sizeof(log), nullptr, log);
+    std::fprintf(stderr, "pole scene: %s failed:\n%s\n", label, log);
+  }
+  glDeleteShader(vs);
+  glDeleteShader(fs);
+  return prog;
+}
+
+static const char *kShadowVert = R"GLSL(
+#version 330 core
+layout(location = 0) in vec3 aPos;
+uniform mat4 uLightVP;
+uniform mat4 uModel;
+void main() {
+    gl_Position = uLightVP * uModel * vec4(aPos, 1.0);
+}
+)GLSL";
+
+static const char *kShadowFrag = R"GLSL(
+#version 330 core
+void main() {}
+)GLSL";
+
+static void CreateShadowResources() {
+  glGenTextures(1, &gShadowTex);
+  glBindTexture(GL_TEXTURE_2D, gShadowTex);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, kShadowSize, kShadowSize,
+               0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+  const float border[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+  glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, border);
+
+  glGenFramebuffers(1, &gShadowFbo);
+  glBindFramebuffer(GL_FRAMEBUFFER, gShadowFbo);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D,
+                         gShadowTex, 0);
+  glDrawBuffer(GL_NONE);
+  glReadBuffer(GL_NONE);
+  gShadowReady = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  if (!gShadowReady)
+    std::fprintf(stderr, "pole scene: shadow map unavailable, falling back to no shadows\n");
+  else
+    std::printf("Shadows: %dx%d sun map, PCF 3x3\n", kShadowSize, kShadowSize);
+}
+
+static void CreateSkyEnvResources() {
+  glGenTextures(1, &gSkyCube);
+  glBindTexture(GL_TEXTURE_CUBE_MAP, gSkyCube);
+  for (int i = 0; i < 6; i++)
+    glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, GL_RGBA16F, kEnvSize,
+                 kEnvSize, 0, GL_RGBA, GL_FLOAT, nullptr);
+  glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+  glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+
+  glGenRenderbuffers(1, &gSkyEnvDepth);
+  glBindRenderbuffer(GL_RENDERBUFFER, gSkyEnvDepth);
+  glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, kEnvSize, kEnvSize);
+  glGenFramebuffers(1, &gSkyEnvFbo);
+  glBindFramebuffer(GL_FRAMEBUFFER, gSkyEnvFbo);
+  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER,
+                            gSkyEnvDepth);
+  gSkyEnvReady = true;
+  for (int i = 0; i < 6 && gSkyEnvReady; i++) {
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, gSkyCube, 0);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+      gSkyEnvReady = false;
+  }
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  if (!gSkyEnvReady)
+    std::fprintf(stderr, "pole scene: sky cubemap unavailable, reflections fall back to sky\n");
+  else
+    std::printf("Reflections: %dx%d linear sky cubemap\n", kEnvSize, kEnvSize);
+}
+
+static void UpdateLightMatrix(const Vec3 &eye, const Vec3 &sunDir) {
+  // Centre the orthographic sun frustum a little ahead of the camera so the
+  // poles and the cable web in front of the view are inside it. Extents are
+  // generous because a 0.2 elevation sun throws very long shadows.
+  Vec3 center{eye.x, 5.0f, eye.z + 42.0f};
+  // Snap the centre to the shadow texel grid. Without this the whole map
+  // slides under the scene as the camera dollies, and edges crawl.
+  const float kShadowExtent = 104.0f; // matches the ortho box below
+  const float texel = kShadowExtent / (float)kShadowSize;
+  center.x = std::floor(center.x / texel) * texel;
+  center.z = std::floor(center.z / texel) * texel;
+  Vec3 lightPos = Vec3Add(center, Vec3Scale(sunDir, 150.0f));
+  Mat4 lightView;
+  Mat4LookAt(lightView, lightPos, center, {0, 1, 0});
+  Mat4 lightProj;
+  // 104 m across 4096 texels is 2.5 cm per texel: fine enough that the pole
+  // contacts land where the poles land, tight enough that both rows and the
+  // cable web in front of the camera stay inside the map.
+  Mat4Ortho(lightProj, -52.0f, 52.0f, -52.0f, 52.0f, 0.1f, 280.0f);
+  Mat4Multiply(gLightVP, lightProj, lightView);
+}
+
+static void RenderShadowMap() {
+  if (!gShadowReady || !gShadowProg) return;
+  glBindFramebuffer(GL_FRAMEBUFFER, gShadowFbo);
+  glViewport(0, 0, kShadowSize, kShadowSize);
+  glClear(GL_DEPTH_BUFFER_BIT);
+  glEnable(GL_DEPTH_TEST);
+  glDepthMask(GL_TRUE);
+  glDisable(GL_BLEND);
+  // Two-sided casting: cables and signs are single-sided, and culling either
+  // face leaves holes in the map that look like detached or missing shadows.
+  glDisable(GL_CULL_FACE);
+  glEnable(GL_POLYGON_OFFSET_FILL);
+  glPolygonOffset(0.0f, 256.0f); // units only; the slope factor is huge at a grazing sun
+
+  glUseProgram(gShadowProg);
+  glUniformMatrix4fv(glGetUniformLocation(gShadowProg, "uLightVP"), 1, GL_FALSE,
+                     gLightVP.data());
+  Mat4 model;
+  Mat4Identity(model);
+  glUniformMatrix4fv(glGetUniformLocation(gShadowProg, "uModel"), 1, GL_FALSE,
+                     model.data());
+  glBindVertexArray(gObjVao);
+  // Skip the ground quad (indices 0..5) and the road quad: they are flat
+  // receivers, and self-shadowing them is what forced a large bias that
+  // shifted pole contacts several metres at this sun elevation.
+  const int kGroundIdx = 6;
+  if (gRoadIndexStart > kGroundIdx) {
+    glDrawElements(GL_TRIANGLES, gRoadIndexStart - kGroundIdx, GL_UNSIGNED_INT,
+                   (void *)(size_t)(kGroundIdx * sizeof(unsigned int)));
+    const int afterRoad = gRoadIndexStart + 6;
+    if (afterRoad < gObjIndexCount)
+      glDrawElements(GL_TRIANGLES, gObjIndexCount - afterRoad, GL_UNSIGNED_INT,
+                     (void *)(size_t)(afterRoad * sizeof(unsigned int)));
+  } else {
+    glDrawElements(GL_TRIANGLES, gObjIndexCount - kGroundIdx, GL_UNSIGNED_INT,
+                   (void *)(size_t)(kGroundIdx * sizeof(unsigned int)));
+  }
+  glBindVertexArray(0);
+
+
+  glDisable(GL_POLYGON_OFFSET_FILL);
+  glEnable(GL_CULL_FACE);
+  glCullFace(GL_BACK);
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  glViewport(0, 0, gWindowWidth, gWindowHeight);
+}
+
+static void RenderSkyEnv(const Vec3 &eye, double timeSec) {
+  if (!gSkyEnvReady || !gSkyProg.handle) return;
+  static const GLenum faces[6] = {
+      GL_TEXTURE_CUBE_MAP_POSITIVE_X, GL_TEXTURE_CUBE_MAP_NEGATIVE_X,
+      GL_TEXTURE_CUBE_MAP_POSITIVE_Y, GL_TEXTURE_CUBE_MAP_NEGATIVE_Y,
+      GL_TEXTURE_CUBE_MAP_POSITIVE_Z, GL_TEXTURE_CUBE_MAP_NEGATIVE_Z};
+  static const Vec3 fwd[6] = {{1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1}};
+  static const Vec3 up[6] = {{0,-1,0},{0,-1,0},{0,0,1},{0,0,-1},{0,-1,0},{0,-1,0}};
+
+  Vec3 sd = SunDirNow(timeSec);
+  Mat4 proj;
+  Mat4Perspective(proj, 90.0f, 1.0f, 0.1f, 2000.0f);
+
+  glBindFramebuffer(GL_FRAMEBUFFER, gSkyEnvFbo);
+  glViewport(0, 0, kEnvSize, kEnvSize);
+  glDisable(GL_DEPTH_TEST);
+  glDisable(GL_CULL_FACE);
+  glUseProgram(gSkyProg.handle);
+  glBindVertexArray(gSkyVao);
+  Mat4 model;
+  Mat4Identity(model);
+  model[0] = kDomeRadius; model[5] = kDomeRadius; model[10] = kDomeRadius;
+  model[12] = eye.x; model[13] = eye.y; model[14] = eye.z;
+  glUniformMatrix4fv(gSkyProg.loc("uModel"), 1, GL_FALSE, model.data());
+  glUniform3f(gSkyProg.loc("uEyePos"), eye.x, eye.y, eye.z);
+  glUniform3f(gSkyProg.loc("uSunDir"), sd.x, sd.y, sd.z);
+  glUniform1f(gSkyProg.loc("uTime"), (float)timeSec);
+  glUniform1f(gSkyProg.loc("uHdrOut"), 1.0f);
+
+  for (int i = 0; i < 6; i++) {
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, faces[i],
+                           gSkyCube, 0);
+    Mat4 view;
+    Mat4LookAt(view, eye, Vec3Add(eye, fwd[i]), up[i]);
+    Mat4 vp;
+    Mat4Multiply(vp, proj, view);
+    glUniformMatrix4fv(gSkyProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
+    glDrawElements(GL_TRIANGLES, gSkyIndexCount, GL_UNSIGNED_INT, nullptr);
+  }
+  glBindTexture(GL_TEXTURE_CUBE_MAP, gSkyCube);
+  glGenerateMipmap(GL_TEXTURE_CUBE_MAP);
+  glBindVertexArray(0);
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  glViewport(0, 0, gWindowWidth, gWindowHeight);
+  glEnable(GL_CULL_FACE);
+  glEnable(GL_DEPTH_TEST);
 }
 
 static void WriteScreenshotPPM(const char *path);
@@ -1547,12 +1702,18 @@ static void RenderScene() {
   float aspect = (float)gWindowWidth / (float)gWindowHeight;
   Mat4Perspective(gProj, 52.0f, aspect, 0.1f, 900.0f);
 
+  // Sun shadows and the material-reflection environment are rendered before
+  // the camera target is bound; both are per-frame because the camera dollies.
+  Vec3 sunNow = SunDirNow(gSimTime);
+  UpdateLightMatrix(eye, sunNow);
+  RenderShadowMap();
+  RenderSkyEnv(eye, gSimTime);
+
   const bool hdr = postproc::Begin(gPost, gWindowWidth, gWindowHeight);
   glViewport(0, 0, gWindowWidth, gWindowHeight);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
   DrawGrid(view, eye, gSimTime);
-  DrawGroundShadows(view, eye, gSimTime, gLineA, gLineB);
   DrawSky(view, eye, gSimTime);
   if (hdr) postproc::End(gPost, gPostSettings, t);
   RenderHUD();
@@ -1684,6 +1845,10 @@ static void Setup() {
   gHudProg = LinkProgram(resolveAssetPath("shaders/ps14/hud_vert.glsl").c_str(),
                          resolveAssetPath("shaders/pole/hud_frag.glsl").c_str());
 
+  gShadowProg = LinkSourceProgram(kShadowVert, kShadowFrag, "sun shadow");
+  CreateShadowResources();
+  CreateSkyEnvResources();
+
   glEnable(GL_DEPTH_TEST);
   glDepthFunc(GL_LEQUAL);
   glEnable(GL_CULL_FACE);
@@ -1695,7 +1860,7 @@ static void Setup() {
   // threshold at 1.0 means only genuine highlights (sun disc, speculars,
   // glazed insulators) seed the bloom, not the whole orange sky.
   gPostSettings.exposure = 0.97f;
-  gPostSettings.bloom = 0.085f;
+  gPostSettings.bloom = 0.050f;
   gPostSettings.threshold = 1.15f;
   gPostSettings.knee = 0.60f;
   gPostSettings.aberration = 0.0090f;

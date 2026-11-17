@@ -1,73 +1,103 @@
 #version 330 core
-// Fragment shader for the sea surface.
-//
-// Structure intentionally mirrors the phases of a shader_model 1.4 pixel
-// shader (as used by the 3DMark2001 SE "Nature" ocean):
-//   1) addressing  : sample ripple gradient texture -> perturbation vector
-//   2) dependent read: perturbed coords -> environment reflection lookup
-//   3) blend/address: add sun glitter, blend with deep-water color
-// Six texture fetches per phase is the PS1.4 budget; this uses far fewer.
-//
-// Noise discipline: every term here is analytic or texture-chaos MODULATED by
-// analytic gates. Free-floating glow terms (not tied to the sun path, cloud
-// shadows or crest height) show up as pale-teal speckle over the dark water —
-// they were the "light blue noise" artifact and must stay gated.
-//
-// Realism layer (this pass): on top of the displaced swell banks the shading
-// adds two octaves of ANALYTIC detail wavelets (extra normals, tiny amplitude,
-// no vertex cost), slope-gated crest foam (it appears where waves actually
-// face the light and break — not as a uniform tile), sun-tinted glitter, and
-// a sky-tinted horizon sheen so the far sea is a mirror of the sky band above
-// it rather than dark water with a haze knob.
 
-in vec3 vWorld;
-in vec2 vUV;
+// Sea surface for the dusk-ocean scene.
+//
+// Shading model (all of it physically motivated, no hand-tuned pow() stacks):
+//   * the wave normal is the exact analytic gradient of the same band-limited
+//     field the vertex stage displaces, plus two sub-grid detail octaves and a
+//     scrolling ripple gradient;
+//   * reflection is the sky cubemap sampled through the water's own roughness,
+//     so the surface returns the same air column the sky pass drew;
+//   * the sun is a GGX microfacet lobe on the resolved normal plus a broad
+//     statistical lobe for the slope variance of the sub-pixel surface - that
+//     pair is what forms a continuous glitter path (one sharp lobe alone gives
+//     isolated sparks, one broad lobe alone washes the whole sea white);
+//   * the water body is deep absorption plus a crest transmission term;
+//   * distant water fades into the sky's own horizon radiance, so the finite
+//     patch melts into the sky instead of ending on a hard line.
 
-uniform sampler2D uRippleTex;    // two-channel ripple gradient (RG8)
-uniform samplerCube uSkyEnvTex;  // sky environment cubemap (RGBA16F)
-uniform sampler2D uFoamTex;      // tileable foam / caustic detail
+in vec3  vWorld;
+in vec2  vUV;
+in float vDist;
+
+uniform sampler2D   uRippleTex;
+uniform samplerCube uSkyEnvTex;
+uniform sampler2D   uFoamTex;
 uniform float uTime;
 uniform vec3  uEyePos;
 uniform vec3  uSunDir;
-uniform vec3  uHorizonColor;
 uniform vec3  uWaterColor;
-// 1.0 while the scene renders into the camera pipeline's half-float target:
-// emit linear radiance (the glitter path reaches well past 1.0) and let the
-// shared ACES composite do exposure and the display transfer. 0.0 keeps the
-// old self-contained tonemap for the direct-to-window fallback.
 uniform float uHdrOut;
 
-#define MAX_CLOUDS 7             // must match sky_frag.glsl and tidebench.cxx
+#define MAX_CLOUDS 9
 uniform int   uCloudCount;
-uniform float uCloudAzim[MAX_CLOUDS];   // centre azimuth, radians
-uniform float uCloudElev[MAX_CLOUDS];   // centre elevation, radians
-uniform float uCloudRadius[MAX_CLOUDS]; // angular half-height, radians
-uniform float uCloudStretch[MAX_CLOUDS];// azimuthal elongation (>1 = wider than tall)
+uniform float uCloudAzim[MAX_CLOUDS];
+uniform float uCloudElev[MAX_CLOUDS];
+uniform float uCloudRadius[MAX_CLOUDS];
+uniform float uCloudStretch[MAX_CLOUDS];
 
 out vec4 fragColor;
 
 const float PI = 3.14159265359;
+const float kWaterF0 = 0.020;       // ((1.33 - 1)/(1.33 + 1))^2
+const float kWavePixelAngle = 0.0018;
 
-// NORMAL FIELD: smooth sines (finite differences of this drive the lighting).
-// Scale/speed of each line must match the DISPLACEMENT field in sea_vert.glsl
-// so crest banks light up where the geometry actually rises. The displacement
-// shader additionally sharpens crests and adds two long swells; that asymmetry
-// is deliberate (sharp banks, smooth lighting).
-float waveHeight(vec2 p, float t) {
-    float h = 0.0;
-    h += sin(dot(p, vec2(0.98,  0.20)) * 0.170 + t * 1.30) * 1.55;
-    h += sin(dot(p, vec2(-0.64,  0.77)) * 0.240 + t * 1.60) * 1.00;
-    h += sin(dot(p, vec2( 0.36, -0.93)) * 0.380 + t * 2.10) * 0.55;
-    h += sin(dot(p, vec2(-0.91, -0.42)) * 0.540 + t * 2.70) * 0.34;
-    h += sin(dot(p, vec2( 0.59,  0.81)) * 0.860 + t * 3.40) * 0.20;
-    h += sin(dot(p, vec2(-0.20,  0.98)) * 1.450 + t * 4.40) * 0.11;
-    return h;
+// ------------------------------------------------------------------ wave field
+// Same table as sea_vert.glsl. `dist` fades each component once its wavelength
+// falls under a few pixels: that is the correct band-limit for the pixel
+// footprint, and it is why the horizon stops shimmering.
+float bandFade(float k, float dist) {
+    float lambda = 6.2831853 / k;
+    return smoothstep(1.5, 4.0, lambda / max(dist * kWavePixelAngle, 1e-3));
 }
 
-// CLOUD SHADOWS: intersect each water fragment's sun ray with the same 620 m
-// cloud deck used by the sky. The eight 3D lobes, morph, and boundary erosion
-// below intentionally match sky_frag.glsl, so the moving shadow footprint
-// tracks the visible cloud instead of being a separate decorative mask.
+// One component: h = A (c + 0.35 c|c|) for sharp=true, plain sine otherwise.
+// dh/dp = A (1 + 0.7|c|) cos(phase) d k for the sharp form.
+void addWave(vec2 p, float t, vec2 d, float k, float a, float s, float fade,
+             bool sharp, inout float h, inout vec2 g) {
+    if (fade <= 0.0) return;
+    float phase = dot(p, d) * k + t * s;
+    float c = sin(phase);
+    if (sharp) {
+        h += a * fade * (c + 0.16 * c * abs(c));
+        g += d * (k * a * fade * (1.0 + 0.32 * abs(c)) * cos(phase));
+    } else {
+        h += a * fade * c;
+        g += d * (k * a * fade * cos(phase));
+    }
+}
+
+vec2 waveGrad(vec2 p, float t, float dist, out float height) {
+    vec2 g = vec2(0.0);
+    float h = 0.0;
+    addWave(p, t, vec2(0.52, 0.30),  0.045, 2.10, 0.42, 1.0, false, h, g);
+    addWave(p, t, vec2(0.10, -0.49), 0.075, 1.30, 0.55, 1.0, false, h, g);
+    addWave(p, t, vec2(0.98, 0.20),  0.170, 1.45, 1.30, bandFade(0.170, dist), true, h, g);
+    addWave(p, t, vec2(-0.64, 0.77), 0.240, 0.85, 1.60, bandFade(0.240, dist), true, h, g);
+    addWave(p, t, vec2(0.36, -0.93), 0.380, 0.55, 2.10, bandFade(0.380, dist), false, h, g);
+    addWave(p, t, vec2(-0.91, -0.42), 0.540, 0.34, 2.70, bandFade(0.540, dist), false, h, g);
+    addWave(p, t, vec2(0.71, -0.70), 0.620, 0.28, 2.95, bandFade(0.620, dist), false, h, g);
+    addWave(p, t, vec2(0.59, 0.81),  0.860, 0.20, 3.40, bandFade(0.860, dist), false, h, g);
+    addWave(p, t, vec2(-0.20, 0.98), 1.450, 0.11, 4.40, bandFade(1.450, dist), false, h, g);
+    height = h;
+    return g;
+}
+
+// Sub-grid detail: only where the pixel footprint can still resolve it, so it
+// never aliases into crawling sparkle.
+void detailGrad(vec2 p, float t, float dist, inout vec2 grad) {
+    float fade = exp(-dist * 0.0035);
+    if (fade < 0.02) return;
+    vec2 d1 = vec2(0.86, 0.51), d2 = vec2(-0.44, 0.90);
+    float ph1 = dot(p, d1) * 2.60 + t * 5.10;
+    float ph2 = dot(p, d2) * 5.30 + t * 6.80;
+    grad += d1 * (2.60 * 0.050 * cos(ph1)) * fade;
+    grad += d2 * (5.30 * 0.018 * cos(ph2)) * fade;
+}
+
+// --------------------------------------------------------------------- clouds
+// Same 1.5 km deck as sky_frag.glsl: the shadow on the water is sampled from
+// the same noise field, so it stays locked to the visible bank.
 float cloudHash21(vec2 p) {
     vec3 p3 = fract(vec3(p.xyx) * 0.1031);
     p3 += dot(p3, p3.yzx + 33.33);
@@ -85,6 +115,19 @@ float cloudValueNoise(vec2 p) {
     return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
 
+float cloudCell(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    float d = 1.0;
+    for (int y = -1; y <= 1; y++) {
+        for (int x = -1; x <= 1; x++) {
+            vec2 g = vec2(float(x), float(y));
+            vec2 o = vec2(cloudHash21(i + g), cloudHash21(i + g + 17.3));
+            d = min(d, length(g + o - f));
+        }
+    }
+    return d;
+}
+
 float cloudErosion(vec2 p) {
     float n = 0.57 * cloudValueNoise(p);
     p = mat2(0.80, -0.60, 0.60, 0.80) * p * 2.03 + 17.1;
@@ -93,243 +136,174 @@ float cloudErosion(vec2 p) {
     return n + 0.14 * cloudValueNoise(p);
 }
 
-float cloudSmoothMax(float a, float b, float k) {
-    float h = clamp(0.5 + 0.5 * (a - b) / k, 0.0, 1.0);
-    return mix(b, a, h) + k * h * (1.0 - h);
-}
+const float kDeckHeight = 1500.0;
 
-float projectedCloudDensity(vec3 dir) {
-    float density = 0.0;
-    dir = normalize(dir);
-    for (int i = 0; i < MAX_CLOUDS; i++) {
-        if (i >= uCloudCount) break;
-        vec3 c = vec3(cos(uCloudElev[i]) * cos(uCloudAzim[i]),
-                      sin(uCloudElev[i]),
-                      cos(uCloudElev[i]) * sin(uCloudAzim[i]));
-        vec3 delta = dir - c;
-        vec3 t1 = normalize(vec3(-sin(c.z), 0.0, cos(c.z)));
-        vec3 t2 = normalize(cross(c, t1));
-        vec3 p = vec3(dot(delta, t1) / max(uCloudStretch[i], 1.0),
-                      dot(delta, t2), dot(delta, c));
-        float R = max(uCloudRadius[i], 0.001);
-        if (dot(p, p) > R * R * 3.1) continue;
-
-        const int PUFFS = 8;
-        vec3 offsets[PUFFS];
-        offsets[0] = vec3( 0.00,  0.00,  0.00);
-        offsets[1] = vec3( 0.68,  0.02,  0.03);
-        offsets[2] = vec3(-0.62,  0.10, -0.04);
-        offsets[3] = vec3( 0.25,  0.28,  0.06);
-        offsets[4] = vec3(-0.27,  0.35, -0.02);
-        offsets[5] = vec3( 0.05,  0.53,  0.08);
-        offsets[6] = vec3( 0.43, -0.12, -0.07);
-        offsets[7] = vec3(-0.40, -0.10,  0.05);
-        float radii[PUFFS];
-        radii[0] = 0.55; radii[1] = 0.39; radii[2] = 0.37; radii[3] = 0.34;
-        radii[4] = 0.31; radii[5] = 0.27; radii[6] = 0.30; radii[7] = 0.29;
-
-        float local = 0.0;
-        for (int j = 0; j < PUFFS; j++) {
-            vec3 q = p - offsets[j] * R;
-            float ang = atan(q.y, q.x);
-            float morph = 0.045 * sin(uTime * 0.10 + uCloudAzim[i] * 9.0 + float(j) * 1.7)
-                        + 0.035 * cos(uTime * 0.065 + uCloudAzim[i] * 5.0 + float(j) * 2.9);
-            float rj = R * radii[j] * (1.0
-                + 0.11 * sin(ang * 3.0 + uCloudAzim[i] * 7.0 + float(j) * 2.1)
-                + 0.065 * sin(ang * 5.0 - uCloudAzim[i] * 11.0 + float(j) * 4.7)
-                + morph);
-            float lobeNoise = cloudErosion(vec2(
-                cos(ang) * 1.8 + uCloudAzim[i] * 3.7,
-                sin(ang) * 1.8 + float(j) * 2.1 + uCloudElev[i] * 9.0));
-            rj *= 0.91 + 0.16 * lobeNoise;
-            vec3 metric = vec3(q.x / rj, q.y / (rj * 0.92), q.z / (rj * 1.18));
-            local = cloudSmoothMax(local, 1.0 - smoothstep(0.62, 1.12, length(metric)), 0.10);
-        }
-
-        vec2 envelopeP = p.xy / R;
-        float ang = atan(envelopeP.y, envelopeP.x);
-        float envelopeRadius = length(envelopeP)
-            * (1.0 + 0.055 * sin(ang * 4.0 + uCloudAzim[i] * 13.0));
-        float envelope = 1.0 - smoothstep(0.96, 1.56, envelopeRadius);
-        float n = cloudErosion(envelopeP * 3.2 + vec2(uCloudAzim[i] * 5.1, i * 7.3));
-        float fine = cloudErosion(envelopeP * 7.8 + vec2(uCloudAzim[i] * 11.0, i * 13.0));
-        float shoulder = 1.0 - smoothstep(0.10, 0.82, local);
-        local = smoothstep(0.035, 0.78,
-               local * (0.70 + 0.30 * n + 0.12 * fine - 0.20 * shoulder))
-               * envelope;
-        float baseCut = smoothstep(-0.78, -0.48, envelopeP.y + (n - 0.5) * 0.18);
-        local *= baseCut * (1.0 - 0.12 * smoothstep(0.48, 0.95, envelopeP.y));
-        density = cloudSmoothMax(density, clamp(local, 0.0, 1.0), 0.07);
-    }
-    return clamp(density, 0.0, 1.0);
+float cloudCover(vec2 worldXZ, out float hf) {
+    vec2 p = worldXZ * 0.00033;
+    p.x *= 0.82;
+    p += vec2(uTime * 0.00070, uTime * 0.00022);
+    p += 0.42 * (vec2(cloudValueNoise(p * 2.1 + 7.0),
+                      cloudValueNoise(p * 2.3 + 31.0)) - 0.5);
+    float base = cloudErosion(p);
+    float det = cloudErosion(p * 3.9 + 17.0);
+    float fine = cloudValueNoise(p * 16.0 + 53.0);
+    float micro = cloudValueNoise(p * 47.0 + 91.0);
+    float cells = cloudCell(p * 1.9 + 11.0);
+    float shape = base + 0.17 * (det - 0.5) + 0.090 * (fine - 0.5)
+                + 0.035 * (micro - 0.5) + 0.20 * (0.46 - cells);
+    float cover = smoothstep(0.565, 0.690, shape);
+    cover *= 0.66 + 0.34 * smoothstep(0.38, 0.72, det);
+    hf = clamp((shape - 0.55) * 4.0, 0.0, 1.0);
+    return cover;
 }
 
 float cloudShadow(vec3 world, vec3 sd) {
-    float travel = max((620.0 - world.y) / max(sd.y, 0.15), 0.0);
-    vec3 hitDir = normalize(world - uEyePos + sd * travel);
-    float local = projectedCloudDensity(hitDir);
-    return clamp(exp(-local * 2.4), 0.12, 1.0);
+    if (sd.y < 0.015) return 1.0;
+    float t = (kDeckHeight - world.y) / sd.y;
+    if (t < 0.0 || t > 260000.0) return 1.0;
+    float hf;
+    float c = cloudCover(world.xz + sd.xz * t, hf);
+    return clamp(exp(-c * 2.8), 0.10, 1.0);
 }
 
-// Three octaves of small analytic wavelets: extra normal detail that would
-// be wasted (and aliased) as vertex displacement, but sells micro-chop up
-// close. Frequencies chosen so screen-space wavelength stays > ~4px at typical
-// orbit distances — content finer than that reads as noise on real GPUs.
-void detailNormals(vec2 p, float t, float dist, inout vec2 grad) {
-    float fade = exp(-dist * 0.004);   // micro-chop is a NEAR-camera feature
-    if (fade < 0.02) return;
-    float w1 = sin(dot(p, vec2(0.86, 0.51)) * 1.15 + t * 5.10);
-    float w2 = sin(dot(p, vec2(-0.44, 0.90)) * 2.30 + t * 6.80);
-    float w3 = sin(dot(p, vec2(0.22, -0.97)) * 4.40 + t * 8.60);
-    grad += vec2(0.86, 0.51) * 1.15 * w1 * 0.045;
-    grad += vec2(-0.44, 0.90) * 2.30 * w2 * 0.022;
-    grad += vec2(0.22, -0.97) * 4.40 * w3 * 0.010;
+// -------------------------------------------------------------- microfacet
+float GgxD(float NoH, float a2) {
+    float denom = NoH * NoH * (a2 - 1.0) + 1.0;
+    return a2 / (PI * denom * denom + 1e-7);
+}
+
+float SmithG(float NoV, float NoL, float a2) {
+    float k = a2 * 0.5;
+    return (NoL / (NoL * (1.0 - k) + k)) * (NoV / (NoV * (1.0 - k) + k));
 }
 
 void main() {
-    vec3 sd = normalize(uSunDir);
-    vec3 dir = normalize(vWorld - uEyePos);   // fragment direction (eye -> point)
-
-    // ---- analytic wave normal (finite differences of the wave field) ----
-    float dist = length(vWorld.xz - uEyePos.xz);
-    float e = 0.35;
-    float hC = waveHeight(vWorld.xz, uTime);
-    float hX = waveHeight(vWorld.xz + vec2(e, 0.0), uTime);
-    float hZ = waveHeight(vWorld.xz + vec2(0.0, e), uTime);
-    vec2 grad = vec2(-(hX - hC) / e, -(hZ - hC) / e);
-    detailNormals(vWorld.xz, uTime, dist, grad);
-    vec3 N = normalize(vec3(grad.x, 1.0, grad.y));
-
-    // ---- phase 1: addressing - ripple normal map, scrolled over the surface
-    float rippleFade = exp(-dist * 0.0018);           // ripples die out far away
-    vec2 uvA = vUV * 40.0 + vec2(uTime * 0.0040, uTime * 0.0031);
-    vec2 uvB = vUV * 97.0 - vec2(uTime * 0.0026, uTime * 0.0042);
-    vec2 ripA = texture(uRippleTex, uvA).rg;
-    vec2 ripB = texture(uRippleTex, uvB).rg;
-    vec2 pert = (ripA + ripB) * 0.5 * rippleFade;
-
-    // ---- phase 2: dependent read - perturbed reflection of the sky ----
-    vec3 V = normalize(uEyePos - vWorld);             // towards the eye
-    vec3 R = reflect(-V, N);
-    R = normalize(R + vec3(pert.x, 0.0, pert.y) * 1.25);
-    // Reflections stretch vertically (the classic flattened-reflection trick):
-    // grazing rays would otherwise hug the bright horizon band and light the
-    // whole sea up. Biasing the ray up makes off-sun water reflect the dark
-    // upper sky while the sun glitter path stays put (it is a separate term).
-    R.y = abs(R.y) * 0.30 + 0.45;
-    R = normalize(R);
-    // azimuthal smear toward the sun: only rays near the SUN azimuth keep
-    // crisp reflections; off-path rays mirror-blend toward the dark upper sky
-    // so the glow column stays narrow and the sides read deep blue/purple
     vec3 L = normalize(uSunDir);
-    vec2 sunXZ = normalize(L.xz);
-    vec2 dirXZ = normalize(vWorld.xz - uEyePos.xz + vec2(1e-4));
-    float sunAlign = max(dot(dirXZ, sunXZ), 0.0);
-    vec3 Rdark = normalize(vec3(R.x, abs(R.y) * 1.8 + 0.62, R.z)); // steep: upper sky
-    R = normalize(mix(Rdark, R, pow(sunAlign, 6.0)));
+    vec3 V = normalize(uEyePos - vWorld);
+    float dist = vDist;
 
-    // Roughness-matched reflection LOD: the sun disc occupies a handful of
-    // cubemap texels, and sampling them at LOD 0 mirrors as small SQUARE
-    // patches on the water. Wave facets are rough at every distance, so the
-    // reflection blurs with range — which also smears the sun into a soft
-    // vertical glow (real water behaviour) instead of texel squares.
-    float reflDist = dist;
-    vec3 reflColor = textureLod(uSkyEnvTex, R, clamp(1.5 + reflDist * 0.0012, 1.0, 5.0)).rgb;
-    float offSun = 1.0 - smoothstep(0.08, 0.45, sunAlign);
-    reflColor *= mix(1.0, 0.46, offSun);
+    // ---- normal: exact gradient of the drawn field + band-limited detail ----
+    float hC;
+    vec2 grad = waveGrad(vWorld.xz, uTime, dist, hC);
+    detailGrad(vWorld.xz, uTime, dist, grad);
 
-    // ---- fresnel: sea is a mirror at grazing angles, glass straight down ----
-    float NdV = max(dot(N, V), 0.0);
-    float fresnel = 0.022 + 0.978 * pow(1.0 - NdV, 5.0);
-    // stronger sky reflections: at dusk the whole water surface reads as a
-    // dark mirror of the sky — lift the base fresnel and clamp the minimum
-    // reflectance higher than the physical 2%
-    fresnel = clamp(fresnel * 1.25 + 0.045, 0.0, 0.92);
+    // ---- ripple normal: two scrolling samples, faded before they alias ----
+    float rippleFade = exp(-dist * 0.0011);
+    vec2 uvA = vUV * 420.0 + vec2(uTime * 0.0040, uTime * 0.0031);
+    vec2 uvB = vUV * 1100.0 - vec2(uTime * 0.0026, uTime * 0.0042);
+    vec2 ripA = texture(uRippleTex, uvA).rg * 2.0 - 1.0;
+    vec2 ripB = texture(uRippleTex, uvB).rg * 2.0 - 1.0;
+    vec2 pert = (ripA + ripB) * 0.5 * rippleFade;
+    grad += pert * 0.140;
 
-    // ---- water body: near-black purple deep, warmed by the sky band ----
-    vec3 body = uWaterColor * 0.55 + uHorizonColor * 0.03;
+    vec3 N = normalize(vec3(-grad.x, 1.0, -grad.y));
 
-    // directional sun lighting on the wave slopes: faces tilted toward the
-    // low sun glow warm, backslopes fall to near-black — this is what makes
-    // the sea read as lit by the same sun as the sky instead of pasted on.
-    // Prefaced by an azimuth gate so the WARM slope light lives inside the
-    // sun path; off-path water stays deep blue/purple.
-    float sunDiffuse = max(dot(N, L), 0.0);
-    float warmGate = pow(sunAlign, 3.0);
+    float shadow = cloudShadow(vWorld, L);
+    float NoL = max(dot(N, L), 0.0);
+    float NoV = clamp(dot(N, V), 1e-3, 1.0);
 
-    // cloud shadows: the projected puffs gate ALL direct sun terms
-    float shadow = cloudShadow(vWorld, sd);
+    // ---- water body: absorption + crest transmission -----------------------
+    vec3 body = uWaterColor * 1.35 * (0.24 + 0.76 * NoL)
+              + vec3(0.006, 0.013, 0.026);
+    float crestTop = smoothstep(1.10, 3.60, hC);
+    // Sunlight scattered through a thin crest toward the eye; strongest when
+    // the sun is behind the wave, which is exactly when real water glows green.
+    float through = pow(clamp(dot(-V, L), 0.0, 1.0), 3.0);
+    body += vec3(0.035, 0.070, 0.050) * crestTop * (0.20 + 0.80 * through)
+          * (0.35 + 0.65 * shadow) * 0.60;
 
-    // MUCH darker water where the sun's light doesn't reach: off-path base
-    // drops to near-black indigo, and cloud shadows multiply direct light
-    body *= 0.44 + 0.40 * sunDiffuse * warmGate * shadow + 0.12 * sunDiffuse * (0.35 + 0.65 * shadow);
-    body *= mix(0.40, 1.0, warmGate * shadow + (1.0 - warmGate) * 0.25 * shadow); // dark off-path + shadowed body
-    body *= mix(0.52, 1.0, 1.0 - offSun);
-    body += vec3(1.05, 0.42, 0.20) * pow(sunDiffuse, 3.0) * warmGate * shadow * 0.42; // warm slopes in the path
+    // ---- sky reflection: the cubemap, through the water's roughness --------
+    vec3 R = reflect(-V, N);
+    R.y = max(R.y, 0.002);
+    // Real water never mirrors the sky like glass: centimetre-scale ripples,
+    // which no mesh resolves, smear the reflection over several degrees. That
+    // is a roughness, so it is applied as a cubemap mip level here. Without it
+    // the sea reads as polished chrome, not water.
+    float rough = clamp(0.22 + dist * 0.00055, 0.22, 0.90);
+    float lod = 2.0 + rough * 8.0;
+    vec3 skySharp = textureLod(uSkyEnvTex, R, lod).rgb;
+    vec3 skyWide  = textureLod(uSkyEnvTex, R, lod + 2.0).rgb;
+    vec3 reflColor = mix(skySharp, skyWide, 0.55);
+    // Facets tilted away from the eye are shadowed by the waves in front of
+    // them, so the reflected sky loses a good part of its energy on open water.
+    float reflVis = 0.55 / (1.0 + 2.6 * dot(N.xz, N.xz));
+    reflColor *= reflVis;
+    reflColor = min(reflColor, vec3(0.22));
 
-    // ---- slope-gated crest foam ----
-    // Foam only where the shading says waves actually BREAK: a height band
-    // AND the slope facing the sun/light AND some ripple chaos — the noise
-    // tile alone would foam uniformly everywhere, which reads fake.
-    // Cloud shadows gate foam too: nothing breaks where light doesn't reach.
-    float crest = smoothstep(0.55, 1.25, hC) * mix(0.25, 1.0, shadow);
-    float slopeFacing = max(dot(N, L), 0.0) * warmGate + 0.15;
-    float chaos = texture(uRippleTex, vUV * 190.0 + vec2(uTime * 0.011, -uTime * 0.007)).g;
-    float foam = texture(uFoamTex, vUV * 23.0 + vec2(uTime * 0.010, 0.0)).r;
-    foam *= texture(uFoamTex, vUV * 41.0 - vec2(0.0, uTime * 0.013)).g;
-    foam *= crest * slopeFacing * (0.35 + 0.65 * chaos);
-    body += vec3(0.55, 0.48, 0.58) * foam * 0.55; // dim warm-gray foam
+    float fresnel = kWaterF0 + (1.0 - kWaterF0) * pow(1.0 - NoV, 5.0);
+    fresnel = clamp(fresnel, 0.0, 0.80);
 
-    // subsurface glow against the light: THIN CRESTS transmit a dim jade-green
-    // where sunlight actually passes through the water. Gated to the sun's
-    // azimuth AND to un-shadowed sun — ungated it speckled pale-teal noise
-    // across the dark off-path sea (the light-blue artifact).
-    body += vec3(0.05, 0.18, 0.14) * sunAlign * warmGate * shadow * crest * 0.55;
-
-    vec3 color = mix(body, reflColor, fresnel);
-
-    // ---- horizon sheen: the far sea is a MIRROR of the sky band above it
-    // (grazing fresnel -> nearly pure reflection up there), so by geometry
-    // the water edge converges into the sky with no haze knob needed.
-    vec2 dxdz = vWorld.xz - uEyePos.xz;
-    vec3 skyAtHorizon = texture(uSkyEnvTex,
-        normalize(vec3(dxdz.x, 0.012, dxdz.y))).rgb;
-    float horizonMix = smoothstep(1500.0, 1900.0, dist);
-    color = mix(color, skyAtHorizon, horizonMix * 0.85);
-
-    // ---- aerial haze: near water stays dark and readable, while the far
-    // sea melts into the horizon. The haze target is the ACTUAL sky colour
-    // at this fragment's azimuth — sampled from the env cubemap just above
-    // the horizon line — so the far edge of the patch converges into the sky
-    // band above it (bright glow on the sun side, dark maroon away from it).
-    float haze = 1.0 - exp(-dist * 0.00075);
-    color = mix(color, skyAtHorizon, haze * (0.30 + 0.70 * haze));
-
-    // ---- phase 3: address + blend - sun glitter path ----
-    // tight sparkle core + broad soft sheen, gated to the sun's azimuth column
-    // so the glow stays a NARROW path down the middle with dark water either
-    // side. Killed entirely inside cloud shadows, tinted orange, and the
-    // sparkle variance rides the ripple chaos.
+    // ---- sun: sharp lobe on the resolved normal + statistical broad lobe ---
     vec3 H = normalize(L + V);
-    float NdH = max(dot(N, H), 0.0);
-    float pathGate = pow(sunAlign, 10.0) * 0.96 + 0.04;
-    float sparkleGate = (0.55 + 0.90 * chaos);
-    float glint = pow(NdH, 520.0) * 6.0;              // pinpoint sparkles
-    float glintMid = pow(NdH, 90.0) * 0.55;           // mid falloff keeps it grainy
-    float glintWide = pow(NdH, 14.0) * 0.22;          // soft sheen around the path
-    color += vec3(1.0, 0.56, 0.24) * (glint + glintMid + glintWide * pathGate)
-             * (0.25 + max(L.y, 0.0) * 1.2) * pathGate * shadow * sparkleGate;
+    float sunE = 2.0;
+    vec3 sunTint = vec3(1.0, 0.60, 0.30);
 
+    vec3 Ns = normalize(N + vec3(pert.x, 0.0, pert.y) * 0.22);
+    float NoHs = max(dot(Ns, H), 0.0);
+    float NoLs = max(dot(Ns, L), 1e-3);
+    float alphaS = clamp(0.045 + dist * 0.00020, 0.045, 0.30);
+    float aS = alphaS * alphaS;
+    float Fs = kWaterF0 + (1.0 - kWaterF0) * pow(1.0 - max(dot(V, H), 0.0), 5.0);
+    float sharp = GgxD(NoHs, aS) * Fs * SmithG(NoV, NoLs, aS)
+                / (4.0 * NoV * NoLs + 1e-4) * NoLs;
+
+    // Unresolved slope variance: a wide lobe on the smooth normal gives the
+    // path its body; the ripples break it into the shimmer on top.
+    float aB = 0.012;
+    float NoHb = max(dot(N, H), 0.0);
+    float Fb = kWaterF0 + (1.0 - kWaterF0) * pow(1.0 - NoV, 5.0);
+    float broad = GgxD(NoHb, aB) * Fb * SmithG(NoV, NoL, aB)
+                / (4.0 * NoV * NoL + 1e-4) * NoL;
+
+    // The sharp lobe is the resolved facet; the sparkle texture is the slope
+    // population of everything below the pixel, so it scatters the highlight
+    // into points along the path instead of a solid ribbon.
+    float sp1 = texture(uRippleTex, vUV * 1200.0 + vec2(uTime * 0.017, -uTime * 0.013)).r;
+    float sp2 = texture(uRippleTex, vUV * 2100.0 - vec2(uTime * 0.011, uTime * 0.019)).g;
+    float sparkle = 0.30 + 0.95 * smoothstep(0.28, 0.80, sp1 * 0.6 + sp2 * 0.6);
+    // Only a small fraction of the sea's solid angle can return the sun to the
+    // eye, and what does return is a spike the exposure clips, not a sheet.
+    // Weights and the cap below were set against the reference: the path must
+    // sit on dark water, not replace it.
+    // Soft warm glow along the path: the unresolved forward-scattered body of
+    // the reflection, which keeps the column readable between sparkle points.
+    float sunAlign = max(dot(R, L), 0.0);
+    float pathGlow = pow(sunAlign, 26.0) * 0.10;
+    vec3 glintCol = sunTint * sunE * (sharp * 0.40 * sparkle + broad * 0.05
+                                    + pathGlow) * shadow;
+    glintCol = min(glintCol, vec3(1.6));
+
+    // ---- foam: only where crests really break ------------------------------
+    // A whitecap is the tip of a sharp crest, not a wash over a whole face:
+    // require a high crest AND a steep face, then let the noise thin it to
+    // patches, which is what keeps this from painting the swell.
+    float crest = smoothstep(3.95, 4.75, hC);
+    float steep = smoothstep(0.85, 1.45, length(grad));
+    float chaos = texture(uRippleTex, vUV * 640.0 + vec2(uTime * 0.011, -uTime * 0.007)).g;
+    float foamTex = texture(uFoamTex, vUV * 31.0 + vec2(uTime * 0.010, 0.0)).r;
+    foamTex *= texture(uFoamTex, vUV * 53.0 - vec2(0.0, uTime * 0.013)).g;
+    float foam = crest * steep * smoothstep(0.20, 0.85, NoL)
+               * (0.15 + 0.85 * chaos) * foamTex;
+    foam *= mix(0.45, 1.0, shadow) * exp(-dist * 0.0013);
+    vec3 foamColor = vec3(0.55, 0.52, 0.52) * (0.20 + 0.80 * NoL)
+                   + sunTint * 0.06 * NoL;
+    body = mix(body, foamColor, clamp(foam * 0.30, 0.0, 0.20));
+
+    // ---- combine -----------------------------------------------------------
+    vec3 color = mix(body, reflColor, fresnel) + glintCol;
+
+    // ---- aerial perspective: melt into the sky's own horizon radiance ------
+    vec3 horizonDir = normalize(vec3(vWorld.x - uEyePos.x, 0.020,
+                                     vWorld.z - uEyePos.z));
+    vec3 skyAtHorizon = textureLod(uSkyEnvTex, horizonDir, 3.0).rgb;
+    float haze = 1.0 - exp(-dist * 0.00115);
+    color = mix(color, skyAtHorizon, haze * (0.22 + 0.78 * haze));
+
+    color = min(color, vec3(4.0));
     if (uHdrOut > 0.5) {
-        // Linear HDR. The glitter path is the reason this matters: its tight
-        // 520-exponent lobe is many times the water's radiance, and clipping
-        // it to 1.0 here is what made the sparkles read as white pixels
-        // instead of as light the lens can flare around.
         fragColor = vec4(max(color, vec3(0.0)), 1.0);
         return;
     }
-
-    // HDR tone map + gamma (fallback path)
     color = color / (color + vec3(1.0));
     color = pow(color, vec3(1.0 / 2.2));
     fragColor = vec4(color, 1.0);

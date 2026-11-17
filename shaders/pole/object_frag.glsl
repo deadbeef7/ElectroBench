@@ -1,5 +1,21 @@
 #version 330 core
 
+// Materials for the power-line corridor.
+//
+// Rebuilt around a physically based shading model:
+//   * direct sun is a GGX microfacet lobe with the correct Smith visibility
+//     (k = alpha/2, where alpha = roughness^2) and a Schlick Fresnel whose F0
+//     is the material's; the old code squared alpha twice and used alpha^2 for
+//     the visibility term, which made every rough surface's highlight too
+//     broad and too dim;
+//   * ambient light comes from the scene's own sky cubemap (the same pass the
+//     screen sky is drawn from), so a galvanised pole reflects the actual
+//     orange horizon instead of a hand-picked constant;
+//   * the sun casts a real shadow map: poles, crossarms, transformers and the
+//     cable web occlude the road, with a normal-offset bias and PCF;
+//   * wet asphalt uses a water Fresnel (F0 = 0.02) and a roughness-driven sky
+//     reflection, and aerial perspective converges distant geometry into the
+//     sky colour at that azimuth.
 
 in vec3 vWorld;
 in vec3 vNormal;
@@ -13,33 +29,38 @@ uniform vec3  uEyePos;
 uniform vec3  uSunDir;
 uniform float uTime;
 uniform float uRoadX;
-// 1.0 when the scene is rendering into the camera pipeline's half-float
-// target: the shader then stops at linear radiance and leaves exposure, the
-// film curve and the display transfer to the composite pass, which every
-// scene shares. 0.0 keeps the old self-contained look (direct-to-window
-// fallback when the HDR target cannot be created).
 uniform float uHdrOut;
 
+uniform samplerCube uSkyEnvTex;
+uniform float uEnvMaxLod;
 
-const float kMatPaint  = 0.0;
-const float kMatWood   = 1.0;
-const float kMatGround = 2.0;
-const float kMatRoad   = 3.0;
-const float kMatLine   = 4.0;
-const float kMatCable  = 5.0;
-const float kMatCeramic= 6.0;
-const float kMatMetal  = 7.0;
-const float kMatWall   = 8.0;
-const float kMatRoof   = 9.0;
-const float kMatGlass  = 10.0;
-const float kMatLeaf   = 11.0;
-const float kMatShadow = 12.0;
-const float kMatGlow   = 13.0;
-const float kMatSteel  = 14.0;
-const float kMatKerb   = 15.0;
-const float kMatConcrete = 16.0;
+uniform sampler2D uShadowMap;
+uniform mat4  uLightVP;
+uniform vec2  uShadowTexel;
+uniform float uShadowEnabled;
+uniform float uShadowStrength;
 
+const float kMatPaint     = 0.0;
+const float kMatWood      = 1.0;
+const float kMatGround    = 2.0;
+const float kMatRoad      = 3.0;
+const float kMatLine      = 4.0;
+const float kMatCable     = 5.0;
+const float kMatCeramic   = 6.0;
+const float kMatMetal     = 7.0;
+const float kMatWall      = 8.0;
+const float kMatRoof      = 9.0;
+const float kMatGlass     = 10.0;
+const float kMatLeaf      = 11.0;
+const float kMatShadow    = 12.0;
+const float kMatGlow      = 13.0;
+const float kMatSteel     = 14.0;
+const float kMatKerb      = 15.0;
+const float kMatConcrete  = 16.0;
 
+const float PI = 3.14159265359;
+
+// --------------------------------------------------------------------- noise
 float hash21(vec2 p) {
     vec3 q = fract(vec3(p.x, p.y, p.x) * 0.1031);
     q += dot(q, q.yzx + 33.33);
@@ -55,51 +76,220 @@ float vnoise(vec2 p) {
     float d = hash21(i + vec2(1.0, 1.0));
     return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
-
-
-vec3 hazeColFor(vec3 base, vec3 L, vec3 V) {
-    float toSun = max(dot(-V, L), 0.0);
-
-
-    float t3 = toSun * toSun * toSun;
-    return mix(vec3(0.70, 0.52, 0.37), vec3(0.98, 0.75, 0.50), t3);
-}
-
-
 float octaveRes(float foot, float freq) {
     return 1.0 - smoothstep(0.35, 1.10, foot * freq);
 }
 
+// ------------------------------------------------------------------ shadowing
+float shadowFactor(vec3 P, vec3 N, float NoL) {
+    if (uShadowEnabled < 0.5) return 1.0;
+    // Normal offset in world units: moves the sample off the geometric
+    // surface so a depth-map texel cannot shadow itself at grazing angles.
+    vec3 offsetP = P + N * 0.001;
+    vec4 lp = uLightVP * vec4(offsetP, 1.0);
+    vec3 sc = lp.xyz / max(lp.w, 1e-5);
+    sc = sc * 0.5 + 0.5;
+    if (sc.x < 0.005 || sc.x > 0.995 || sc.y < 0.005 || sc.y > 0.995
+        || sc.z > 1.0) return 1.0;
 
-const vec3  kBetaR = vec3(0.058, 0.135, 0.331);
-const float kBetaM = 0.0092;
-const float kSunI  = 330.0;
-
-
-const float kSunPath = 14.0;
-const float kRayGain = 13.0;
-
-vec3 atmosphere(vec3 dir, vec3 sun) {
-    float h = dir.y;
-    float mu = dot(dir, sun);
-    float mView = 1.0 / (max(h, 0.0) + 0.14);
-    float mSun  = 1.0 / (max(sun.y, 0.0) + 0.14);
-    vec3 Tview = exp(-(kBetaR + vec3(kBetaM)) * mView * 0.92);
-    vec3 Tsun  = exp(-kBetaR * mSun * kSunPath - vec3(kBetaM * mSun * 1.15));
-    float phR = 0.0596831 * (1.0 + mu * mu);
-    const float g = 0.76, gg = g * g;
-    float phM = 0.0795775 * (1.0 - gg)
-              / max(pow(1.0 + gg - 2.0 * g * mu, 1.5), 1e-3);
-    vec3 single = kBetaR * phR * kRayGain * Tview * Tsun;
-    vec3 mie    = vec3(kBetaM * phM * 0.25) * Tview * Tsun;
-    float multiK = 0.005 + 0.30 * smoothstep(0.78, 1.06, h);
-    vec3 multi  = kBetaR * phR * 0.80 * Tview * multiK;
-    return (single + mie + multi) * kSunI;
+    // Slope-scaled bias plus a 3x3 PCF footprint. The map is 3072^2 over a
+    // 120 m corridor, so a few centimetres of bias is plenty.
+    // Depth bias over 230 m is huge in world space at a low sun; keep it at
+    // a few centimetres and let the shadow-pass polygon offset handle acne.
+    float bias = 0.000015;
+    float sum = 0.0;
+    for (int y = -1; y <= 1; y++) {
+        for (int x = -1; x <= 1; x++) {
+            float d = texture(uShadowMap,
+                              sc.xy + vec2(float(x), float(y)) * uShadowTexel).r;
+            sum += step(sc.z - bias, d);
+        }
+    }
+    float sh = sum / 9.0;
+    return mix(1.0, sh, uShadowStrength);
 }
 
+// ------------------------------------------------------------------ materials
+struct Surface {
+    vec3  albedo;
+    float rough;
+    float metal;
+    vec3  f0;
+    vec3  emission;
+};
+
+Surface makeSurface(float m, vec3 P, float foot) {
+    Surface s;
+    s.albedo = vColor;
+    s.rough = 0.82;
+    s.metal = 0.0;
+    s.f0 = vec3(0.04);
+    s.emission = vec3(0.0);
+
+    if (m == kMatGround) {
+        float n1 = vnoise(P.xz * 0.42);
+        float n2 = vnoise(P.xz * 2.10);
+        float gMid = octaveRes(foot, 4.0);
+        float nMid = gMid > 0.02 ? vnoise(P.xz * 4.0 + 3.0) : 0.5;
+        float n0 = vnoise(P.xz * 0.135 + 3.7);
+        float g3 = octaveRes(foot, 7.5);
+        float n3 = g3 > 0.02 ? vnoise(P.xz * 7.5) : 0.5;
+
+        s.albedo *= 0.46 + 0.32 * n0 + 0.44 * n1 + 0.38 * n2
+                  + 0.22 * nMid * gMid + 0.22 * n3 * g3;
+        s.albedo = mix(s.albedo, vec3(0.150, 0.155, 0.082),
+                       smoothstep(0.48, 0.95, n1) * 0.55);
+        s.albedo *= vec3(0.66, 0.60, 0.53);
+
+        float nearRoad = exp(-pow((abs(P.x - uRoadX) - 3.6) / 1.5, 2.0));
+        s.albedo = mix(s.albedo, s.albedo * 1.22 + vec3(0.020, 0.016, 0.010),
+                       nearRoad * 0.55);
+        s.rough = 0.96;
+    } else if (m == kMatRoad) {
+        float rx = P.x - uRoadX;
+        float n = vnoise(P.xz * 1.30);
+        s.albedo *= 0.66 + 0.62 * n;
+
+        float gLong = octaveRes(foot, 2.6);
+        float nLong = gLong > 0.02
+                          ? vnoise(vec2(P.x * 2.6, P.z * 0.16 + 5.0)) : 0.5;
+        s.albedo *= mix(1.0, 0.70 + 0.60 * nLong, gLong);
+
+        float joint = 1.0 - 0.16 * exp(-pow(fract(P.z * 0.238) / 0.06, 2.0));
+        s.albedo *= joint;
+
+        float wp = exp(-pow((abs(rx) - 1.05) / 0.44, 2.0));
+        float wpHalo = exp(-pow((abs(rx) - 1.05) / 0.95, 2.0));
+        s.albedo = mix(s.albedo, s.albedo * 1.42 + vec3(0.010), wp * 0.62);
+        s.albedo = mix(s.albedo, s.albedo * 1.12, wpHalo * 0.20);
+
+        float gRoad = octaveRes(foot, 11.0);
+        if (gRoad > 0.02)
+            s.albedo += (vnoise(P.xz * 11.0) - 0.5) * 0.20 * gRoad;
+
+        s.albedo *= 1.0 - 0.18 * exp(-pow(rx / 0.55, 2.0));
+
+        // Damp patches and standing water. Water darkens the substrate and
+        // drops the roughness; it is not a separate additive sheen.
+        float damp = smoothstep(0.52, 0.86, vnoise(P.xz * 0.30 + 11.0));
+        damp = clamp(damp * 0.62 + wpHalo * 0.44, 0.0, 1.0);
+        damp = clamp(damp + 0.55 * exp(-pow((abs(rx) - 2.45) / 0.38, 2.0)), 0.0, 1.0);
+        s.albedo *= mix(1.0, 0.46, damp);
+        s.rough = mix(0.92, 0.055, damp);
+        s.f0 = mix(vec3(0.04), vec3(0.020), damp);   // wet = water interface
+    } else if (m == kMatLine) {
+        float wear = octaveRes(foot, 6.0);
+        float wearN = wear > 0.02 ? vnoise(P.xz * 6.0) : 0.5;
+        s.albedo *= 0.78 + 0.34 * wearN * wear;
+        s.rough = 0.72;
+    } else if (m == kMatWood) {
+        float along = P.y * 1.15 + (P.x + P.z) * 0.06;
+        float g1 = vnoise(vec2((P.x + P.z) * 6.5, along));
+        float gGrain = octaveRes(foot, 19.0);
+        float g2 = gGrain > 0.02 ? vnoise(vec2((P.x + P.z) * 19.0, along * 2.6)) : 0.5;
+        s.albedo *= 0.80 + 0.28 * g1 + 0.16 * g2 * gGrain;
+        s.albedo *= mix(0.70, 1.0, smoothstep(0.0, 1.20, P.y));
+        s.rough = 0.88;
+    } else if (m == kMatWall) {
+        float seam = abs(fract(P.y * 1.25) - 0.5) * 2.0;
+        s.albedo *= mix(0.70, 1.10, smoothstep(0.06, 0.34, seam));
+        s.albedo *= 0.88 + 0.24 * vnoise(vec2((P.x + P.z) * 2.2, P.y * 0.9));
+        s.albedo *= 0.62;
+        s.albedo *= mix(0.55, 1.0, smoothstep(0.0, 0.55, P.y));
+        s.rough = 0.90;
+    } else if (m == kMatRoof) {
+        float course = abs(fract(P.z * 0.85) - 0.5) * 2.0;
+        s.albedo *= mix(0.70, 1.12, smoothstep(0.12, 0.55, course));
+        s.albedo *= 0.84 + 0.32 * vnoise(P.xz * 1.7);
+        s.rough = 0.80;
+    } else if (m == kMatGlass) {
+        s.albedo *= 0.35;
+        s.rough = 0.045;
+        s.f0 = vec3(0.05);
+    } else if (m == kMatKerb) {
+        float agg = vnoise(vec2(P.x * 41.0, P.z * 9.0));
+        float cement = vnoise(vec2(P.x * 3.1, P.z * 0.85));
+        s.albedo *= 0.80 + 0.30 * cement;
+        float gKerb = octaveRes(foot, 41.0);
+        if (gKerb > 0.02) {
+            float stones = smoothstep(0.62, 0.86, agg);
+            s.albedo = mix(s.albedo, s.albedo * 1.85 + vec3(0.020),
+                           stones * gKerb * 0.75);
+        }
+        float gz = 1.0 - clamp(P.y / 0.16, 0.0, 1.0);
+        s.albedo = mix(s.albedo, vec3(0.115, 0.098, 0.078),
+                       smoothstep(0.35, 1.0, gz) * 0.60);
+        float wet = 0.40 * smoothstep(0.55, 0.95, gz);
+        s.albedo *= mix(1.0, 0.55, wet);
+        s.rough = mix(0.86, 0.10, wet);
+        s.f0 = mix(vec3(0.04), vec3(0.020), wet);
+    } else if (m == kMatLeaf) {
+        float n = vnoise(P.xz * 0.85 + P.y * 0.35);
+        s.albedo *= 0.72 + 0.46 * n;
+        s.rough = 0.92;
+    } else if (m == kMatCable) {
+        // Rubber/PVC sheath: dark dielectric, fairly rough.
+        s.rough = 0.68;
+        s.f0 = vec3(0.035);
+    } else if (m == kMatCeramic) {
+        s.rough = 0.13;
+        s.f0 = vec3(0.045);
+    } else if (m == kMatMetal) {
+        s.rough = 0.52;
+        s.metal = 0.9;
+        s.f0 = s.albedo;
+    } else if (m == kMatSteel) {
+        float streak = vnoise(vec2((P.x + P.z * 0.35) * 1.60, P.y * 0.22));
+        float gSpangle = octaveRes(foot, 26.0);
+        float spangle = gSpangle > 0.02
+                            ? vnoise(vec2((P.x + P.z) * 26.0, P.y * 3.0)) : 0.5;
+        s.albedo *= 0.80 + 0.30 * streak + 0.20 * spangle * gSpangle;
+        s.albedo = mix(s.albedo, s.albedo * 1.24 + vec3(0.028, 0.029, 0.029),
+                       smoothstep(0.55, 1.0, streak) * 0.55);
+
+        // Creosote/rust is a dielectric coating: keep it out of the metal F0
+        // and raise its roughness so it does not mirror like bare zinc.
+        float rustN = vnoise(vec2((P.x + P.z) * 2.60, P.y * 0.90));
+        float rust = (1.0 - smoothstep(0.25, 1.80, P.y)) * smoothstep(0.42, 0.86, rustN);
+        s.albedo = mix(s.albedo, vec3(0.135, 0.060, 0.030), rust * 0.70);
+        s.metal = mix(1.0, 0.0, rust * 0.75);
+        s.f0 = mix(s.albedo, vec3(0.05), rust * 0.75);
+        s.rough = mix(0.55, 0.88, rust) + 0.10 * (1.0 - smoothstep(0.25, 0.85, streak));
+    } else if (m == kMatConcrete) {
+        float streak = vnoise(vec2((P.x + P.z * 0.45) * 2.10, P.y * 0.10));
+        float band = vnoise(vec2((P.x + P.z * 0.45) * 0.35, P.y * 0.045));
+        s.albedo *= 0.62 + 0.52 * streak;
+        s.albedo *= 0.80 + 0.34 * band;
+
+        float board = abs(fract(P.y * 1.62) - 0.5) * 2.0;
+        s.albedo *= mix(0.94, 1.05, smoothstep(0.04, 0.26, board));
+
+        float gSpall = octaveRes(foot, 7.5);
+        if (gSpall > 0.02) {
+            float spall = smoothstep(0.70, 0.93,
+                                     vnoise(vec2((P.x + P.z) * 7.5, P.y * 1.7)));
+            s.albedo = mix(s.albedo, vec3(0.180, 0.172, 0.162), spall * 0.55 * gSpall);
+        }
+
+        s.albedo = mix(s.albedo, vec3(0.168, 0.158, 0.140),
+                       (1.0 - smoothstep(0.10, 2.4, P.y)) * 0.42);
+        s.albedo = mix(s.albedo, s.albedo * 0.82,
+                       smoothstep(0.55, 0.95, streak) * 0.30);
+
+        float board2 = abs(fract(P.y * 1.62 + band * 0.35) - 0.5) * 2.0;
+        s.albedo *= mix(0.95, 1.04, smoothstep(0.04, 0.26, board2));
+        s.rough = 0.88 - 0.10 * streak;
+    } else if (m == kMatGlow) {
+        s.albedo *= 0.9;
+        s.emission = vColor * 5.0;
+        s.rough = 0.35;
+    }
+    return s;
+}
+
+// ------------------------------------------------------------------ lighting
 void main() {
     float m = vMat;
-
 
     if (m == kMatShadow) {
         fragColor = vec4(0.0, 0.0, 0.0, vAlpha);
@@ -110,328 +300,118 @@ void main() {
     vec3 toEye = uEyePos - vWorld;
     float dist = length(toEye);
     vec3 V = toEye / max(dist, 1e-4);
-
+    // Double-sided thin geometry (wires, leaves, roof planes): face the eye.
     if (dot(N, V) < 0.0) N = -N;
 
     vec3 L = normalize(uSunDir);
     vec3 P = vWorld;
-    float near = 1.0 - smoothstep(16.0, 64.0, dist);
-
-
     float foot = fwidth(P.x) + fwidth(P.z) + 0.0015;
 
-    vec3 base = vColor;
-    float rough = 0.85;
-    float sheen = 0.0;
-    float wet = 0.0;
-
-    if (m == kMatGround) {
-
-
-        float n1 = vnoise(P.xz * 0.42);
-        float n2 = vnoise(P.xz * 2.10);
-
-
-        float gMid = octaveRes(foot, 4.0);
-        float nMid = gMid > 0.02 ? vnoise(P.xz * 4.0 + 3.0) : 0.5;
-
-
-        float n0 = vnoise(P.xz * 0.135 + 3.7);
-        float g3 = octaveRes(foot, 7.5);
-        float n3 = g3 > 0.02 ? vnoise(P.xz * 7.5) : 0.5;
-        base *= 0.46 + 0.32 * n0 + 0.44 * n1 + 0.38 * n2 + 0.22 * nMid * gMid
-                + 0.22 * n3 * g3;
-        base = mix(base, vec3(0.150, 0.155, 0.082),
-                   smoothstep(0.48, 0.95, n1) * 0.55);
-
-        float nearRoad = exp(-pow((abs(P.x - uRoadX) - 3.6) / 1.5, 2.0));
-        base = mix(base, base * 1.22 + vec3(0.020, 0.016, 0.010),
-                   nearRoad * 0.55);
-        rough = 1.0;
-    } else if (m == kMatRoad) {
-        float rx = P.x - uRoadX;
-        float n = vnoise(P.xz * 1.30);
-
-
-        base *= 0.66 + 0.62 * n;
-
-
-        float gLong = octaveRes(foot, 2.6);
-        float nLong = gLong > 0.02
-                          ? vnoise(vec2(P.x * 2.6, P.z * 0.16 + 5.0))
-                          : 0.5;
-        base *= mix(1.0, 0.70 + 0.60 * nLong, gLong);
-
-
-        float joint = 1.0 - 0.16 * exp(-pow(fract(P.z * 0.238) / 0.06, 2.0));
-        base *= joint;
-
-
-        float wp = exp(-pow((abs(rx) - 1.05) / 0.44, 2.0));
-        float wpHalo = exp(-pow((abs(rx) - 1.05) / 0.95, 2.0));
-        base = mix(base, base * 1.42 + vec3(0.010), wp * 0.62);
-        base = mix(base, base * 1.12, wpHalo * 0.20);
-
-
-        float gRoad = octaveRes(foot, 11.0);
-        if (gRoad > 0.02)
-            base += (vnoise(P.xz * 11.0) - 0.5) * 0.20 * gRoad;
-
-        base *= 1.0 - 0.18 * exp(-pow(rx / 0.55, 2.0));
-        rough = mix(0.95, 0.62, wp);
-
-
-        float damp = smoothstep(0.52, 0.86, vnoise(P.xz * 0.30 + 11.0));
-
-
-        damp = clamp(damp * 0.62 + wpHalo * 0.44, 0.0, 1.0);
-
-        damp = clamp(damp + 0.55 * exp(-pow((abs(rx) - 2.45) / 0.38, 2.0)), 0.0, 1.0);
-        base *= mix(1.0, 0.55, damp);
-        rough = mix(rough, 0.20, damp);
-        wet = damp;
-    } else if (m == kMatLine) {
-
-        float wear = octaveRes(foot, 6.0);
-        float wearN = wear > 0.02 ? vnoise(P.xz * 6.0) : 0.5;
-        base *= 0.78 + 0.34 * wearN * wear + 0.18 * (1.0 - near);
-        rough = 0.85;
-    } else if (m == kMatWood) {
-
-        float along = P.y * 1.15 + (P.x + P.z) * 0.06;
-        float g1 = vnoise(vec2((P.x + P.z) * 6.5, along));
-        float gGrain = octaveRes(foot, 19.0);
-        float g2 = gGrain > 0.02 ? vnoise(vec2((P.x + P.z) * 19.0, along * 2.6))
-                                 : 0.5;
-        base *= 0.80 + 0.28 * g1 + 0.16 * g2 * gGrain;
-
-        base *= mix(0.70, 1.0, smoothstep(0.0, 1.20, P.y));
-        rough = 0.95;
-    } else if (m == kMatWall) {
-
-        float seam = abs(fract(P.y * 1.25) - 0.5) * 2.0;
-        base *= mix(0.70, 1.10, smoothstep(0.06, 0.34, seam));
-        base *= 0.88 + 0.24 * vnoise(vec2((P.x + P.z) * 2.2, P.y * 0.9));
-
-        base *= mix(0.55, 1.0, smoothstep(0.0, 0.55, P.y));
-        rough = 0.9;
-    } else if (m == kMatRoof) {
-
-        float course = abs(fract(P.z * 0.85 + P.x * 0.0) - 0.5) * 2.0;
-        base *= mix(0.70, 1.12, smoothstep(0.12, 0.55, course));
-        base *= 0.84 + 0.32 * vnoise(P.xz * 1.7);
-        rough = 0.85;
-    } else if (m == kMatGlass) {
-
-        base *= 0.42;
-        rough = 0.06;
-        sheen = 0.55;
-    } else if (m == kMatKerb) {
-
-
-        float agg = vnoise(vec2(P.x * 41.0, P.z * 9.0));
-        float cement = vnoise(vec2(P.x * 3.1, P.z * 0.85));
-        base *= 0.80 + 0.30 * cement;
-        float gKerb = octaveRes(foot, 41.0);
-        if (gKerb > 0.02) {
-
-
-            float stones = smoothstep(0.62, 0.86, agg);
-            base = mix(base, base * 1.85 + vec3(0.020), stones * gKerb * 0.75);
-        }
-
-        float gz = 1.0 - clamp(P.y / 0.16, 0.0, 1.0);
-        base = mix(base, vec3(0.115, 0.098, 0.078), smoothstep(0.35, 1.0, gz) * 0.60);
-
-        wet = 0.40 * smoothstep(0.55, 0.95, gz);
-        base *= mix(1.0, 0.55, wet);
-        rough = mix(0.88, 0.30, wet);
-        sheen = 0.10;
-    } else if (m == kMatLeaf) {
-
-        float n = vnoise(P.xz * 0.85 + P.y * 0.35);
-        base *= 0.72 + 0.46 * n;
-        rough = 1.0;
-    } else if (m == kMatCable) {
-
-
-        rough = 0.33;
-        sheen = 0.48;
-    } else if (m == kMatCeramic) {
-        rough = 0.22;
-        sheen = 0.30;
-    } else if (m == kMatMetal) {
-        rough = 0.38;
-        sheen = 0.22;
-    } else if (m == kMatSteel) {
-
-
-        float streak = vnoise(vec2((P.x + P.z * 0.35) * 1.60, P.y * 0.22));
-
-
-        float gSpangle = octaveRes(foot, 26.0);
-        float spangle = gSpangle > 0.02
-                            ? vnoise(vec2((P.x + P.z) * 26.0, P.y * 3.0))
-                            : 0.5;
-        base *= 0.80 + 0.30 * streak + 0.20 * spangle * gSpangle;
-        base = mix(base, base * 1.24 + vec3(0.028, 0.029, 0.029),
-                   smoothstep(0.55, 1.0, streak) * 0.55);
-        float rustN = vnoise(vec2((P.x + P.z) * 2.60, P.y * 0.90));
-        float rust = smoothstep(1.80, 0.25, P.y) * smoothstep(0.42, 0.86, rustN);
-        base = mix(base, vec3(0.135, 0.060, 0.030), rust * 0.70);
-        rough = mix(0.62, 0.34, smoothstep(0.25, 0.85, streak)) + rust * 0.25;
-
-
-        sheen = 0.24;
-    } else if (m == kMatConcrete) {
-
-
-        float streak = vnoise(vec2((P.x + P.z * 0.45) * 2.10, P.y * 0.10));
-
-
-        float band = vnoise(vec2((P.x + P.z * 0.45) * 0.35, P.y * 0.045));
-        base *= 0.62 + 0.52 * streak;
-        base *= 0.80 + 0.34 * band;
-
-
-        float board = abs(fract(P.y * 1.62) - 0.5) * 2.0;
-        base *= mix(0.94, 1.05, smoothstep(0.04, 0.26, board));
-
-
-        float gSpall = octaveRes(foot, 7.5);
-        if (gSpall > 0.02) {
-            float spall = smoothstep(0.70, 0.93,
-                                     vnoise(vec2((P.x + P.z) * 7.5, P.y * 1.7)));
-            base = mix(base, vec3(0.180, 0.172, 0.162), spall * 0.55 * gSpall);
-        }
-
-
-        base = mix(base, vec3(0.168, 0.158, 0.140),
-                   smoothstep(2.4, 0.10, P.y) * 0.42);
-        base = mix(base, base * 0.82,
-                   smoothstep(0.55, 0.95, streak) * 0.30);
-
-
-        float board2 = abs(fract(P.y * 1.62 + band * 0.35) - 0.5) * 2.0;
-        base *= mix(0.95, 1.04, smoothstep(0.04, 0.26, board2));
-        rough = 0.90 - 0.10 * streak;
-        sheen = 0.06;
-    } else if (m == kMatGlow) {
-
-
-        float distG = dist;
-        float hz = 1.0 - exp(-distG * 0.0016);
-        vec3 g = base * 1.05;
-        g = mix(g, hazeColFor(g, L, V), clamp(hz, 0.0, 0.45));
-        if (uHdrOut > 0.5) {
-            fragColor = vec4(max(g, vec3(0.0)), 1.0);
-            return;
-        }
-        fragColor = vec4(pow(max(g, vec3(0.0)), vec3(1.0 / 2.2)), 1.0);
-        return;
-    }
-
-
-    float up = N.y * 0.5 + 0.5;
-    vec3 ambGround = vec3(0.125, 0.086, 0.064);
-    vec3 ambSky    = vec3(0.395, 0.340, 0.360);
-    vec3 amb = mix(ambGround, ambSky, up);
-
-
-    float wrap = (m == kMatCable) ? 0.35 : 0.0;
-
-
-    if (m == kMatSteel) wrap = 0.13;
-    float diff = clamp((dot(N, L) + wrap) / (1.0 + wrap), 0.0, 1.0);
-    vec3 sunTint = vec3(1.00, 0.66, 0.34);
-
-
-    vec3 H = normalize(L + V);
-    float NoV = clamp(dot(N, V), 1e-3, 1.0);
+    Surface s = makeSurface(m, P, foot);
+    vec3 albedo = s.albedo;
+    float rough = clamp(s.rough, 0.03, 1.0);
+    float metal = clamp(s.metal, 0.0, 1.0);
+    vec3 f0 = s.f0;
+
+    float NoV = clamp(dot(N, V), 1e-4, 1.0);
     float NoL = max(dot(N, L), 0.0);
+
+    float shadow = shadowFactor(P, N, NoL);
+
+    // Sun irradiance: the same extinction the sky shader uses, evaluated for
+    // the local surface normal's altitude. Warm at this sun elevation.
+    vec3 sunT = vec3(1.0, 0.58, 0.30);       // dusk transmittance, matches sky
+    vec3 sunIrr = sunT * 7.2;                // brighter direct pools
+
+    // ---- GGX specular ----
+    vec3 H = normalize(L + V);
     float NoH = max(dot(N, H), 0.0);
     float VoH = max(dot(V, H), 0.0);
-    float a2 = max(rough * rough, 0.0025);
-    a2 = a2 * a2;
+    float alpha = rough * rough;
+    float a2 = alpha * alpha;
     float dd = NoH * NoH * (a2 - 1.0) + 1.0;
-    float D = a2 / (3.14159265 * dd * dd);
-    float kg = a2 * 0.5;
-    float G = 0.25 / (max(NoV * (1.0 - kg) + kg, 1e-4)
-                      * max(NoL * (1.0 - kg) + kg, 1e-4));
+    float D = a2 / (PI * dd * dd);
+    float k = alpha * 0.5;                   // Smith-Schlick, correct k
+    float G = 0.25 / ((NoV * (1.0 - k) + k) * (NoL * (1.0 - k) + k));
+    vec3 F = f0 + (1.0 - f0) * pow(1.0 - VoH, 5.0);
+    vec3 specSun = D * G * F / (4.0 * NoV) * NoL * sunIrr * shadow;
 
+    // ---- diffuse ----
+    vec3 kd = (1.0 - F) * (1.0 - metal);
+    vec3 diffuse = kd * albedo / PI * NoL * sunIrr * shadow;
 
-    float fu = 1.0 - VoH;
-    float fu2 = fu * fu;
-    float Fs = 0.045 + 0.955 * (fu2 * fu2 * fu);
+    // ---- ambient from the scene's own sky cubemap ----
+    // High mip = cosine-convolved irradiance. The lower hemisphere gets a
+    // ground bounce tint so undersides do not go flat black.
+    vec3 skyAmb = textureLod(uSkyEnvTex, N, max(uEnvMaxLod - 2.0, 0.0)).rgb;
+    vec3 groundAmb = textureLod(uSkyEnvTex,
+                                normalize(vec3(N.x, -0.35, N.z)),
+                                max(uEnvMaxLod - 2.0, 0.0)).rgb * vec3(0.30, 0.24, 0.18);
+    vec3 ambient = mix(groundAmb, skyAmb, 0.5 + 0.5 * N.y);
+    ambient = mix(ambient, ambient * vec3(1.22, 1.02, 0.78), 0.45);
+    ambient *= mix(1.0, 0.55 + 0.45 * shadow, 0.55); // shadowed areas see less sky
 
+    // ---- sky reflection (roughness-matched) ----
+    vec3 Nr = N;
+    float wet = 0.0;
+    if (m == kMatRoad)
+        wet = clamp((0.92 - rough) / 0.87, 0.0, 1.0);
+    else if (m == kMatKerb)
+        wet = clamp((0.86 - rough) / 0.76, 0.0, 1.0);
+    else
+        wet = 0.0;
 
-    float spR = D * G * Fs / (4.0 * NoV) * NoL;
-    float sp = 1.35 * spR / (1.0 + spR * 0.2470);
-
-
-    vec3 skyRefl = vec3(0.0);
-    float wetF = 0.0;
     if (wet > 0.01) {
-        vec3 Np = N;
-        float rip = vnoise(P.xz * 2.7) - 0.5;
-        float rip2 = vnoise(P.xz * 2.7 + 19.0) - 0.5;
-        Np = normalize(N + vec3(rip, 0.0, rip2) * (0.16 * wet));
-        vec3 R = reflect(-V, Np);
-        R.y = abs(R.y);
-        skyRefl = atmosphere(normalize(R), L);
+        // Small ripples in standing water; their amplitude is only enough to
+        // break up the reflection, not to invent a normal map.
+        float r1 = sin(P.x * 5.1 + P.z * 1.7 + uTime * 0.45);
+        float r2 = sin(P.x * 2.3 - P.z * 6.2 + uTime * 0.31);
+        Nr = normalize(N + vec3(r1, 0.0, r2) * 0.045 * wet);
+    }
+    vec3 R = reflect(-V, Nr);
+    R.y = abs(R.y);
+    vec3 reflCol = textureLod(uSkyEnvTex, R, clamp(rough * uEnvMaxLod, 0.0, uEnvMaxLod)).rgb;
+    vec3 fresV = f0 + (1.0 - f0) * pow(1.0 - NoV, 5.0);
+    if (wet > 0.01)
+        fresV = mix(fresV, vec3(0.020 + 0.98 * pow(1.0 - NoV, 5.0)), wet);
+    vec3 specEnv = reflCol * fresV * mix(1.0, 0.62, wet);
 
+    vec3 col = diffuse + specSun + specEnv + s.emission;
+    col += ambient * albedo * (1.0 - metal) * (0.55 + 0.45 * NoV);
 
-        wetF = (0.030 + 0.970 * fu * fu * fu * fu * fu) * wet * 0.62;
-
-        diff *= mix(1.0, 0.55, wet);
+    // Metal reflections also carry the sky, tinted by albedo.
+    if (metal > 0.01) {
+        col += reflCol * albedo * (0.35 + 0.65 * fresV) * metal * 0.65;
     }
 
+    // ---- ambient occlusion from contact with the ground ----
+    float groundAO = mix(0.72, 1.0, smoothstep(0.0, 1.4, P.y));
+    if (m == kMatGround || m == kMatRoad || m == kMatKerb) groundAO = 1.0;
+    col *= groundAO;
 
-    float edge = 1.0 - abs(dot(N, V));
-    float e2 = edge * edge;
-    float e3 = e2 * edge;
-    float rim = e3 * e3 * sheen;
+    // ---- aerial perspective ----
+    // Distant geometry dissolves into the sky colour in its own azimuth, with
+    // the same warm transmittance the atmosphere uses. Height falloff keeps
+    // the near road crisp while the far poles fade into the sunset.
+    float hFall = exp(-max(P.y, 0.0) * 0.075);
+    float fog = 1.0 - exp(-dist * 0.0016 * hFall);
+    fog += 0.05 * (1.0 - exp(-dist * 0.012));
+    vec3 hazeDir = normalize(vec3(-V.x, 0.020, -V.z));
+    vec3 hazeCol = textureLod(uSkyEnvTex, hazeDir, max(uEnvMaxLod - 3.0, 0.0)).rgb;
+    col = mix(col, hazeCol, clamp(fog * 0.72, 0.0, 0.78));
 
-    vec3 col = base * (amb + sunTint * diff * 1.15) + sunTint * (sp + rim)
-             + skyRefl * wetF;
+    // Slight silhouette warmth from the low sun behind the corridor.
+    float silh = clamp(1.0 - dot(albedo, vec3(0.333)) * 2.6, 0.0, 1.0);
+    col = mix(col, vec3(0.30, 0.16, 0.075), silh * 0.10);
 
-
-    if (m == kMatKerb)
-        col *= mix(0.80, 1.0, smoothstep(0.0, 0.16, P.y));
-    else if (m != kMatGround && m != kMatRoad && m != kMatLine)
-        col *= mix(0.60, 1.0, smoothstep(0.0, 1.30, P.y));
-
-
-    float hFall = exp(-max(P.y, 0.0) * 0.11);
-    float fog = 1.0 - exp(-dist * 0.0018 * hFall);
-    fog += 0.09 * (1.0 - exp(-dist * 0.020));
-    float toSun = max(dot(-V, L), 0.0);
-    vec3 hazeCol = hazeColFor(base, L, V);
-    col = mix(col, hazeCol, clamp(fog, 0.0, 0.70));    float silh = clamp(1.0 - dot(base, vec3(0.333)) * 2.6, 0.0, 1.0);
-    col = mix(col, vec3(0.52, 0.30, 0.14), silh * 0.16);
-
-    // Linear radiance for the camera pipeline. A late sun is far above 1.0 at
-    // the speculars; clamping here is what used to turn every wet highlight
-    // into the same flat white before the grain and the gamma curve ran.
+    col = min(col, vec3(4.0));
     if (uHdrOut > 0.5) {
-        fragColor = vec4(max(col, vec3(0.0)), 1.0);
+        fragColor = vec4(max(col, vec3(0.0)), 1.0 * vAlpha);
         return;
     }
 
     col = clamp(col, 0.0, 4.0);
     col = col / (col * 0.35 + vec3(0.72));
-
-
-    float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
-    col = mix(col, col * vec3(0.93, 0.98, 1.13),
-              (1.0 - smoothstep(0.02, 0.34, lum)) * 0.50);
-    col = mix(col, col * vec3(1.07, 1.01, 0.92),
-              smoothstep(0.52, 1.00, lum) * 0.45);
-    col = clamp(mix(vec3(lum), col, 1.12), 0.0, 1.0);
-
-
-    col += (hash21(gl_FragCoord.xy + fract(uTime) * 13.0)
-            + hash21(gl_FragCoord.xy * 1.7 + 41.0) - 1.0) * (1.5 / 255.0);
     col = pow(max(col, vec3(0.0)), vec3(1.0 / 2.2));
-    fragColor = vec4(col, 1.0);
+    fragColor = vec4(col, vAlpha);
 }

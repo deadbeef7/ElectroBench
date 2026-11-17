@@ -34,8 +34,9 @@ extern bool gWindowedMode;
 #define HEIGHT 768
 #define BENCH_MILLISECONDS 45000 // 45 s like the original ElectroBench
 
-static const int kSeaResolution = 384;   // vertices per side of the ocean grid (2.25x the
-                                         // vertex count of 256 — pushed for realism)
+static const int kSeaResolution = 2048;  // vertices per side (2 m quads). Coarser grids
+                                         // undersample the 16-37 m chop into flat
+                                         // reflective plates that read as faceting.
 static const float kSeaSize = 4096.0f;   // world size of the ocean patch: reaches past the
                                          // visible horizon in every direction the camera can look
 static const int kEnvMapSize = 768;      // cubemap face resolution — higher fidelity reflections
@@ -721,7 +722,7 @@ static void Setup() {
   // bright band over a nearly black sea, so the threshold sits above the sky's
   // midtones and only the sun, its halo and the glitter path seed the bloom.
   gPostSettings.exposure = 1.00f;
-  gPostSettings.bloom = 0.095f;
+  gPostSettings.bloom = 0.055f;
   gPostSettings.threshold = 1.35f;
   gPostSettings.knee = 0.75f;
   gPostSettings.aberration = 0.0090f;
@@ -750,8 +751,10 @@ static void DrawSea(const Mat4 &view, double timeSec, const Vec3 &eye) {
   glUniformMatrix4fv(gSeaProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
   glUniform1f(gSeaProg.loc("uTime"), (float)timeSec);
   glUniform3f(gSeaProg.loc("uEyePos"), eye.x, eye.y, eye.z);
+  // The vertex stage band-limits its displacement against the same eye the
+  // fragment stage shades from, so the drawn surface and its normals agree.
+  glUniform1f(gSeaProg.loc("uGridCell"), kSeaSize / (float)(kSeaResolution - 1));
   glUniform3f(gSeaProg.loc("uSunDir"), gSunDir.x, gSunDir.y, gSunDir.z);
-  glUniform3f(gSeaProg.loc("uHorizonColor"), 0.10f, 0.052f, 0.062f); // dark maroon haze, melts into the sky band
   glUniform3f(gSeaProg.loc("uWaterColor"), 0.034f, 0.020f, 0.052f); // near-black indigo body like the dusk reference
   glUniform1f(gSeaProg.loc("uHdrOut"), gPost.ready ? 1.0f : 0.0f);
   glActiveTexture(GL_TEXTURE0);
