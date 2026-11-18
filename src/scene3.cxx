@@ -678,14 +678,16 @@ static void SpawnSplash(int pot, float x, float z, float impactSpeed, float scal
   crown.center = {x, kWaterLevel, z};
   crown.age = 0.0f;
   crown.scale = scale;
-  crown.radius = 0.68f * scale;  
-  crown.height0 = std::fmin((0.85f + 1.20f * s) * scale * (waveTwo ? 1.10f : 1.0f),
-                            3.6f);
+  // A real crown spreads as much as it rises; the old wall was three times
+  // taller than it was wide, which read as a row of glass needles.
+  crown.radius = 0.82f * scale;
+  crown.height0 = std::fmin((0.70f + 0.85f * s) * scale * (waveTwo ? 1.10f : 1.0f),
+                            2.1f);
   crown.height = crown.height0;
   crown.spike0 = std::fmin(1.0f, 0.45f + 0.4f * s);
   crown.spike = 0.0f;  
   crown.life = waveTwo ? 1.1f : 1.0f;
-  int n = (86 + (int)(46.0f * s)) * (waveTwo ? 2 : 1);
+  int n = (110 + (int)(60.0f * s)) * (waveTwo ? 2 : 1);
   for (int i = 0; i < n; i++) {
     float a = (float)((i * 137 + pot * 61) % 360) * 3.14159265f / 180.0f;
     float r01 = ((i * 89 + pot * 37) % 100) / 100.0f;
@@ -701,13 +703,35 @@ static void SpawnSplash(int pot, float x, float z, float impactSpeed, float scal
     float out = (0.45f + 0.80f * s * (0.30f + 0.70f * r01)) * scale;
     float up = (3.2f + 4.6f * s * (0.35f + 0.65f * onSheet));
     d.vel = {std::cos(a) * out, up, std::sin(a) * out};
-    float sz = 0.0050f + 0.0210f * (u01 * u01 * u01);
+    // Most of the sheet breaks into fine mist; a few drops stay large enough
+    // to read as individual beads.
+    float sz = 0.0035f + 0.0225f * (u01 * u01 * u01 * u01);
     sz *= 0.72f + 0.85f * onSheet;
-    d.radius = sz * scale;
+    // Real crown fragments are 3-20 mm across; at the old size each drop was
+    // ~20 px and the rim read as a cotton halo instead of droplets.
+    d.radius = sz * scale * 0.55f;
     if (fragment) d.radius *= 1.6f; 
     d.maxLife = d.life = (0.62f + 0.52f * ((i * 29) % 5) / 5.0f) *
                          (waveTwo ? 1.10f : 1.0f);
     d.delay = 0.11f + 0.30f * onSheet + 0.05f * u01;
+    gDroplets.push_back(d);
+  }
+  // Rim beads: the crown's edge collects into larger drops before it breaks,
+  // and those beads are what the eye reads as the splash's outline.
+  const int kRimBeads = 72;
+  for (int i = 0; i < kRimBeads; i++) {
+    float a = (float)((i * 211 + pot * 97) % 360) * 3.14159265f / 180.0f;
+    float r01 = ((i * 71 + pot * 23) % 100) / 100.0f;
+    Droplet d;
+    d.owner = pot;
+    d.pos = {x + std::cos(a) * crown.radius * 1.02f,
+             kWaterLevel + crown.height0 * (0.58f + 0.36f * r01),
+             z + std::sin(a) * crown.radius * 1.02f};
+    float out = (0.25f + 0.45f * r01) * scale;
+    d.vel = {std::cos(a) * out, 1.2f + 1.8f * r01, std::sin(a) * out};
+    d.radius = (0.007f + 0.016f * (float)((i * 37 + pot * 13) % 10) / 10.0f) * scale;
+    d.maxLife = d.life = 0.80f + 0.40f * r01;
+    d.delay = 0.02f + 0.10f * r01;
     gDroplets.push_back(d);
   }
   JetColumn &jet = gJets[pot];
@@ -849,7 +873,7 @@ static void UpdatePhysicsStep(double now, float dt) {
       if (d.radius > kRingDrop)
         SpawnRing(d.owner, d.pos.x, d.pos.z,
                   0.14f + 0.3f * std::fmin(-d.vel.y / 6.0f, 1.0f));
-      if (d.radius > kRingDrop && gDroplets.size() + pending.size() < 4200 &&
+      if (d.radius > kRingDrop && gDroplets.size() + pending.size() < 6000 &&
           ((d.owner * 7 + (int)(d.pos.x * 13.0f)) % 2) == 0) {
         for (int k = 0; k < 2; k++) {
           Droplet s;
@@ -1123,7 +1147,7 @@ static void RenderText(float x, float y, const char *text, float scale = 2.0f) {
 
 static void RenderHUD() {
   char line1[128];
-  std::snprintf(line1, sizeof(line1), "FPS: %d   Scene 3   release 0.5", gFps);
+  std::snprintf(line1, sizeof(line1), "FPS: %d   Scene 3   release 0.6", gFps);
   RenderText(16.0f, 16.0f, line1);
 }
 
@@ -1679,7 +1703,9 @@ static void Setup() {
   glBindVertexArray(0);
 
   {
-    const int kSeg = 96, kRows = 5;
+    // 192 segments (2 degrees) and 8 rows: the crown's rim is a noise field,
+    // and a coarse ring aliased it into triangular glass needles.
+    const int kSeg = 192, kRows = 8;
     std::vector<float> ring;
     std::vector<unsigned> ridx;
     for (int r = 0; r <= kRows; r++) {

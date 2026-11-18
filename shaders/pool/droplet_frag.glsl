@@ -1,5 +1,11 @@
 #version 330 core
 
+// Spray droplet (scene 3).
+//
+// Each sprite is shaded as a tiny sphere of water: a dark refracted core, a
+// bright Fresnel limb, one hard specular from the ceiling panel (smeared along
+// the motion streak) and a small secondary glint. The old version used a soft
+// radial blob with a painted highlight, which is what read as "foam puffs".
 
 in vec2 vUV;
 in float vBright;
@@ -15,32 +21,30 @@ void main() {
     float r = length(vUV);
     if (r > 1.0) discard;
 
-    float core = 1.0 - smoothstep(0.0, 1.0, r);
+    vec3 N = vec3(vUV, sqrt(max(1.0 - r * r, 0.0)));
+    float NoV = clamp(N.z, 0.0, 1.0);
+    float fres = clamp(0.02 + 0.98 * pow(1.0 - NoV, 5.0), 0.02, 0.95);
 
+    // Light passing through the drop: mostly the bright room behind it, tinted
+    // by the short water path. A dark drop against a white tile is the one
+    // thing that makes spray read as dirt.
+    vec3 refr = mix(uWaterA * 0.85, vec3(0.88, 0.93, 0.96), 0.55 + 0.30 * NoV);
+    refr = mix(refr, uWaterB, 0.06 * (1.0 - NoV));
 
-    float smear = 1.0 / vStretch;
-    float alpha = (core * core * 0.40 + 0.03) * vBright * smear;
+    float smear = clamp(1.0 / vStretch, 0.25, 1.0);
+    vec2 hp = vUV - vec2(-0.34, 0.36);
+    hp.y *= mix(1.0, 1.0 / smear, 0.75);
+    float spec = exp(-dot(hp, hp) * 42.0);
 
-    vec3 body = mix(vec3(0.62, 0.68, 0.70), uWaterB, core * 0.35);
-    vec3 col = mix(body, vec3(0.90, 0.94, 0.96), core * 0.55)
-             + uLightTint * (0.10 + core * 0.10);
-    col *= mix(0.62, 1.0, sqrt(smear));
+    vec2 gp = vUV - vec2(0.30, -0.24);
+    float glint2 = exp(-dot(gp, gp) * 90.0);
 
-
-    float limb = smoothstep(0.55, 0.98, r) * (1.0 - smoothstep(0.98, 1.0, r));
-    col *= 1.0 - 0.42 * limb;
-
-
-    float hx = vUV.x * 0.55 + 0.42, hy = vUV.y * 0.55 - 0.40;
-    float glint = exp(-dot(vec2(hx, hy), vec2(hx, hy)) * 26.0);
-
-
-    float gl2 = exp(-dot(vec2(hx, hy), vec2(hx, hy)) * (26.0 / vStretch));
-    glint = mix(glint, gl2, 0.6);
-    col += uLightTint * glint * 0.85 * vBright * mix(0.55, 1.0, sqrt(smear));
-    alpha += glint * 0.35 * vBright * smear;
-
-
+    vec3 col = mix(refr, vec3(0.90, 0.95, 0.99), fres * 0.80);
+    col += uLightTint * spec * 1.5;
+    col += vec3(0.92, 0.96, 1.0) * glint2 * 0.35;
     col = min(col, vec3(0.97, 0.96, 0.95));
-    fragColor = vec4(col, clamp(alpha, 0.0, 1.0));
+
+    float alpha = clamp((0.46 + 0.45 * fres) * vBright, 0.0, 0.95);
+    alpha *= smoothstep(1.0, 0.82, r);
+    fragColor = vec4(col, alpha);
 }

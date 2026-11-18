@@ -90,9 +90,13 @@ void initialiseWindow() {
     std::exit(EXIT_FAILURE);
   }
 
+  // GL 2.1 has no core profile. Asking for one makes macOS hand back a 3.2+
+  // core context, which rejects this scene's GLSL 1.20 shaders ("varying" is
+  // not core syntax) and its fixed-function drawing. Compatibility gets the
+  // 2.1 context this scene was written for on every platform.
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
-  SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+  SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_COMPATIBILITY);
   SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
   SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
 
@@ -1298,7 +1302,7 @@ int main(int argc, char **argv) {
     PoleSceneSetShotTime(gShotTime);
   }
 
-  printf("ElectroBench version 0.5 build R1 (Release) (2026-10-26)\n");
+  printf("ElectroBench version 0.6 build R1 (Release) (2026-10-26)\n");
 
   {
     static const char *kKey[] = {

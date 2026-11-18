@@ -11,8 +11,9 @@
 //   * extinction reddens the sun correctly as it approaches the horizon;
 //   * the sky, the horizon band and the sun's colour all come from the same
 //     coefficients, so the sea's cubemap reflection cannot drift from the sky;
-//   * the sun disc uses the real 0.266-degree angular radius with limb
-//     darkening, and is attenuated by the same transmittance.
+//   * the sun disc is drawn a little larger than the real 0.266 degrees (a
+//     0.72-degree disc, chosen for the scene's readability) with limb darkening,
+//     and is attenuated by the same transmittance.
 //
 // Clouds are a single procedural deck projected onto the plane at 1.5 km,
 // lit with Beer-Lambert extinction, powder and a forward-scattering silver
@@ -59,7 +60,8 @@ const float kBetaMExt = 4.44e-6;
 // Radiance scale. The integral below is in physical units; this converts it to
 // the scene's linear HDR units, which the shared ACES composite then maps.
 const float kSunI = 1.4;
-const float kSunAngularRadius = 0.00465; // 0.266 degrees, the real sun
+const float kSunAngularRadius = 0.01250; // 0.72 degrees: deliberately larger
+                                         // than the real 0.266-degree disc
 
 // Distance from the camera (inside the atmosphere) to the top of the
 // atmosphere along dir. Returns -1 when the ray never leaves.
@@ -301,6 +303,12 @@ void main() {
                smoothstep(0.18, 0.85, h) * 0.55);
     sky *= mix(vec3(1.0), uHorizonColor / max(vec3(dot(uHorizonColor, vec3(0.333))), vec3(1e-4)),
                (1.0 - smoothstep(0.02, 0.22, h)) * 0.30);
+
+    // Deep dusk blue. The palette tints above preserve luminance, so darkening
+    // the upper sky needs its own term; it also keeps the sea's cubemap
+    // reflection in step with what is on screen.
+    float deep = smoothstep(0.05, 0.70, h);
+    sky *= mix(vec3(1.0), vec3(0.52, 0.66, 0.96), deep * 0.75);
 
     // Warm horizon band under the low sun: the direct signal the palette wants,
     // tied to the sun azimuth so it never paints the whole horizon flat.

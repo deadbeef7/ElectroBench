@@ -287,7 +287,7 @@ void main() {
     foam *= mix(0.45, 1.0, shadow) * exp(-dist * 0.0013);
     vec3 foamColor = vec3(0.55, 0.52, 0.52) * (0.20 + 0.80 * NoL)
                    + sunTint * 0.06 * NoL;
-    body = mix(body, foamColor, clamp(foam * 0.30, 0.0, 0.20));
+    body = mix(body, foamColor, clamp(foam * 0.42, 0.0, 0.30));
 
     // ---- combine -----------------------------------------------------------
     vec3 color = mix(body, reflColor, fresnel) + glintCol;

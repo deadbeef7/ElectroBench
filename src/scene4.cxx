@@ -1201,7 +1201,7 @@ static void AddTreeline() {
     const float z0 = -200.0f, z1 = 520.0f;
     Vec3 road{0.195f, 0.190f, 0.198f};
     Vec3 edge{0.235f, 0.215f, 0.190f};
-    Vec3 paint{0.520f, 0.480f, 0.420f};
+    Vec3 paint{0.880f, 0.884f, 0.860f};   // white thermoplastic, not bone
     unsigned int s = (unsigned int)gVerts.size();
     PushVert({kRoadX - kRoadHalf, kRoadY, z0}, n, road, kMatRoad);
     PushVert({kRoadX + kRoadHalf, kRoadY, z0}, n, road, kMatRoad);
@@ -1366,7 +1366,7 @@ static void RenderText(float x, float y, const char *text, float scale = 2.0f) {
 
 static void RenderHUD() {
   char line1[128];
-  std::snprintf(line1, sizeof(line1), "FPS: %d   Scene 4   Release 1 v0.4", gFps);
+  std::snprintf(line1, sizeof(line1), "FPS: %d   Scene 4   Release 1 v0.6", gFps);
   RenderText(16.0f, 16.0f, line1);
 }
 
@@ -1859,9 +1859,11 @@ static void Setup() {
   // scenes; scene 4 is a bright low sun, so it sits a little under 1.0. The
   // threshold at 1.0 means only genuine highlights (sun disc, speculars,
   // glazed insulators) seed the bloom, not the whole orange sky.
-  gPostSettings.exposure = 0.97f;
-  gPostSettings.bloom = 0.050f;
-  gPostSettings.threshold = 1.15f;
+  // The cables' sun glints were blooming into glowing tubes; a tighter
+  // threshold and a lighter bloom keep the glare while staying photographic.
+  gPostSettings.exposure = 0.95f;
+  gPostSettings.bloom = 0.034f;
+  gPostSettings.threshold = 1.28f;
   gPostSettings.knee = 0.60f;
   gPostSettings.aberration = 0.0090f;
   gPostSettings.vignette = 0.20f;

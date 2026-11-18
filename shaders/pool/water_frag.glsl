@@ -60,6 +60,17 @@ float hash21(vec2 p) {
     return fract((p3.x + p3.y) * p3.z);
 }
 
+float vnoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = hash21(i);
+    float b = hash21(i + vec2(1.0, 0.0));
+    float c = hash21(i + vec2(0.0, 1.0));
+    float d = hash21(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
 
 float octaveRes(float foot, float freq) {
     return 1.0 - smoothstep(0.35, 1.10, foot * freq);
@@ -164,6 +175,7 @@ void main() {
     float hullFoam = 0.0;
     float hullGhost = 0.0;
     float splashGlow = 0.0;
+    float collarFoam = 0.0;   // dense broken whitewater at the contact ring
     float viewDist = length(uEyePos - vWorld);
 
 
@@ -199,6 +211,13 @@ void main() {
 
             float g = exp(-pow((d - sp.z) * (2.2 / max(sp.z, 0.1)), 2.0));
             splashGlow += g * sp.w;
+
+            // A crown is anchored by a collar of aerated water where it meets
+            // the pool: a tight, bright ring with a turbulent broken edge.
+            float rr = max(sp.z, 0.15);
+            float band = exp(-pow((d - rr * 0.95) / (rr * 0.34 + 0.05), 2.0));
+            float halo = exp(-pow((d - rr * 1.05) / (rr * 1.15 + 0.20), 2.0));
+            collarFoam += (band + 0.35 * halo) * sp.w;
         }
     }
     bump = clamp(bump, 0.0, 1.0);
@@ -300,7 +319,8 @@ void main() {
 
     col = mix(col, vec3(0.010, 0.014, 0.022), clamp(hullGhost * 1.3, 0.0, 1.0));
     col += vec3(0.90, 0.94, 1.0) * hullFoam * 0.22;
-    col += uLightTint * splashGlow * 0.28;
+    // Aerated water thrown up by an impact reads whiter than the pool around it.
+    col += vec3(0.90, 0.94, 0.98) * splashGlow * 0.34;
 
 
     col *= vec3(0.97, 1.0, 1.02);
@@ -309,7 +329,12 @@ void main() {
 
     float foamLit = foam * (0.55 + 0.45 * (0.5 + 0.5 * dot(V, normalize(uLightDir))));
     col += uLightTint * foamLit * 0.13;
-    col += vec3(0.90, 0.94, 1.0) * foamCrest * 0.20;
+    col += vec3(0.90, 0.94, 1.0) * foamCrest * 0.26;
+
+    // Aerated collar: dense, broken whitewater right where the crown rises.
+    float collarTex = 0.55 + 0.45 * vnoise(vWorld.xz * 15.0 + uTime * 0.35);
+    collarFoam = clamp(collarFoam * collarTex, 0.0, 1.0);
+    col = mix(col, vec3(0.93, 0.96, 1.0), collarFoam * 0.85);
 
     col += vec3(0.05, 0.004, 0.005);
 
