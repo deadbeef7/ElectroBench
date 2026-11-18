@@ -29,7 +29,7 @@ void main() {
     vec2 ortho = vec2(-dir.y, dir.x);
 
 
-    float stretch = 1.0 + min(speed * 0.85, 4.0);
+    float stretch = 1.0 + min(speed * 0.30, 1.50);
     vec2 offset = dir * (aUV.y * aSize.x * stretch)
                 + ortho * (aUV.x * aSize.x);
     gl_Position = vec4((s0 + offset) * c0.w, c0.z, c0.w);

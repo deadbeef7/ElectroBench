@@ -157,9 +157,9 @@ void main() {
         float band = d - r.z;
 
 
-        float width = 0.26 + r.z * 0.032;
+        float width = 0.30 + r.z * 0.040;
         float ring = exp(-band * band / (width * width));
-        bump += ring * r.w * 0.38;
+        bump += ring * r.w * 0.55;
         foam  += ring * r.w;
 
 
@@ -176,6 +176,7 @@ void main() {
     float hullGhost = 0.0;
     float splashGlow = 0.0;
     float collarFoam = 0.0;   // dense broken whitewater at the contact ring
+    float impactFoam = 0.0;   // the churned disc under a crown
     float viewDist = length(uEyePos - vWorld);
 
 
@@ -214,10 +215,19 @@ void main() {
 
             // A crown is anchored by a collar of aerated water where it meets
             // the pool: a tight, bright ring with a turbulent broken edge.
+            // Keep it tight - a wide halo made the crown look like it was
+            // standing in a saucer of fog.
             float rr = max(sp.z, 0.15);
-            float band = exp(-pow((d - rr * 0.95) / (rr * 0.34 + 0.05), 2.0));
-            float halo = exp(-pow((d - rr * 1.05) / (rr * 1.15 + 0.20), 2.0));
-            collarFoam += (band + 0.35 * halo) * sp.w;
+            float band = exp(-pow((d - rr * 0.92) / (rr * 0.14 + 0.026), 2.0));
+            float halo = exp(-pow((d - rr * 1.02) / (rr * 0.38 + 0.060), 2.0));
+            collarFoam += (band + 0.30 * halo) * sp.w;
+            // Inside the crown the surface is not a mirror: it is aerated,
+            // boiling water. Leaving it mirror-flat under a crown is what made
+            // the crown look set down on top of the pool.
+            float inside = 1.0 - smoothstep(rr * 0.25, rr * 0.98, d);
+            float churned = vnoise(vWorld.xz * 26.0 + uTime * 1.1) * 0.6
+                          + vnoise(vWorld.xz * 61.0 - uTime * 1.8) * 0.4;
+            impactFoam += inside * sp.w * (0.30 + 0.70 * smoothstep(0.25, 0.80, churned));
         }
     }
     bump = clamp(bump, 0.0, 1.0);
@@ -320,7 +330,7 @@ void main() {
     col = mix(col, vec3(0.010, 0.014, 0.022), clamp(hullGhost * 1.3, 0.0, 1.0));
     col += vec3(0.90, 0.94, 1.0) * hullFoam * 0.22;
     // Aerated water thrown up by an impact reads whiter than the pool around it.
-    col += vec3(0.90, 0.94, 0.98) * splashGlow * 0.34;
+    col += vec3(0.90, 0.94, 0.98) * splashGlow * 0.50;
 
 
     col *= vec3(0.97, 1.0, 1.02);
@@ -332,9 +342,16 @@ void main() {
     col += vec3(0.90, 0.94, 1.0) * foamCrest * 0.26;
 
     // Aerated collar: dense, broken whitewater right where the crown rises.
-    float collarTex = 0.55 + 0.45 * vnoise(vWorld.xz * 15.0 + uTime * 0.35);
-    collarFoam = clamp(collarFoam * collarTex, 0.0, 1.0);
-    col = mix(col, vec3(0.93, 0.96, 1.0), collarFoam * 0.85);
+    // Broken, dense whitewater. Bubbles, not a smooth ring: a soft ring reads
+    // as a painted saucer under the crown.
+    float bubA = vnoise(vWorld.xz * 58.0 + uTime * 1.7);
+    float bubB = vnoise(vWorld.xz * 24.0 - uTime * 0.9);
+    float collarTex = smoothstep(0.28, 0.80, bubA * 0.62 + bubB * 0.38);
+    collarFoam = clamp(collarFoam * (0.25 + 1.1 * collarTex), 0.0, 1.0);
+    vec3 foamCol = mix(vec3(0.86, 0.91, 0.95), vec3(1.0), collarTex);
+    col = mix(col, foamCol, clamp(collarFoam * 1.15, 0.0, 1.0));
+    col = mix(col, mix(vec3(0.92, 0.96, 1.0), vec3(1.55, 1.60, 1.66), collarTex),
+              clamp(impactFoam * 0.90, 0.0, 0.95));
 
     col += vec3(0.05, 0.004, 0.005);
 

@@ -28,7 +28,7 @@ void main() {
     // Light passing through the drop: mostly the bright room behind it, tinted
     // by the short water path. A dark drop against a white tile is the one
     // thing that makes spray read as dirt.
-    vec3 refr = mix(uWaterA * 0.85, vec3(0.88, 0.93, 0.96), 0.55 + 0.30 * NoV);
+    vec3 refr = mix(uWaterA * 0.60, vec3(1.16, 1.22, 1.28), 0.70 + 0.25 * NoV);
     refr = mix(refr, uWaterB, 0.06 * (1.0 - NoV));
 
     float smear = clamp(1.0 / vStretch, 0.25, 1.0);
@@ -40,11 +40,14 @@ void main() {
     float glint2 = exp(-dot(gp, gp) * 90.0);
 
     vec3 col = mix(refr, vec3(0.90, 0.95, 0.99), fres * 0.80);
-    col += uLightTint * spec * 1.5;
-    col += vec3(0.92, 0.96, 1.0) * glint2 * 0.35;
+    col += uLightTint * spec * 2.2;
+    col += vec3(0.92, 0.96, 1.0) * glint2 * 0.40;
     col = min(col, vec3(0.97, 0.96, 0.95));
 
-    float alpha = clamp((0.46 + 0.45 * fres) * vBright, 0.0, 0.95);
-    alpha *= smoothstep(1.0, 0.82, r);
+    // A fine mist drop transmits almost everything; only its rim and its
+    // specular read. Keeping the alpha low is what stops hundreds of overlapping
+    // sprites from turning into a grey cloud around the crown.
+    float alpha = clamp((0.36 + 0.38 * fres) * vBright, 0.0, 0.90);
+    alpha *= smoothstep(1.0, 0.88, r);
     fragColor = vec4(col, alpha);
 }

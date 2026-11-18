@@ -34,7 +34,7 @@ else
     OBJDIR := $(BUILD)
 endif
 
-OBJS := $(OBJDIR)/main.o $(OBJDIR)/scene2.o $(OBJDIR)/scene3.o $(OBJDIR)/scene4.o
+OBJS := $(OBJDIR)/main.o $(OBJDIR)/scene1.o $(OBJDIR)/scene2.o $(OBJDIR)/scene3.o $(OBJDIR)/scene4.o
 
 BIN = $(BUILD)/ElectroBench$(STATIC_SUFFIX)
 
@@ -167,11 +167,14 @@ $(OBJDIR):
 $(OBJDIR)/main.o: src/main.cxx src/font_atlas.hxx | $(OBJDIR)
 	$(CXX) $(CPPFLAGS) $(PKG_CFLAGS) $(GLEW_CFLAGS) $(CXXFLAGS) -c $< -o $@
 
-# The three GL 3.3 scenes all include src/post.hxx (the shared HDR camera
+# The four GL 3.3 scenes all include src/post.hxx (the shared HDR camera
 # pipeline), so it is a prerequisite of each object file. Without it, editing
 # the pipeline's shaders relinks the executable from stale objects and the
 # scenes keep running the previous revision of the composite - which looks
 # exactly like the change having no effect.
+$(OBJDIR)/scene1.o: src/scene1.cxx src/font_atlas.hxx src/post.hxx | $(OBJDIR)
+	$(CXX) $(CPPFLAGS) $(PKG_CFLAGS) $(GLEW_CFLAGS) $(CXXFLAGS) -c $< -o $@
+
 $(OBJDIR)/scene2.o: src/scene2.cxx src/font_atlas.hxx src/post.hxx | $(OBJDIR)
 	$(CXX) $(CPPFLAGS) $(PKG_CFLAGS) $(GLEW_CFLAGS) $(CXXFLAGS) -c $< -o $@
 

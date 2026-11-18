@@ -678,16 +678,19 @@ static void SpawnSplash(int pot, float x, float z, float impactSpeed, float scal
   crown.center = {x, kWaterLevel, z};
   crown.age = 0.0f;
   crown.scale = scale;
-  // A real crown spreads as much as it rises; the old wall was three times
-  // taller than it was wide, which read as a row of glass needles.
-  crown.radius = 0.82f * scale;
-  crown.height0 = std::fmin((0.70f + 0.85f * s) * scale * (waveTwo ? 1.10f : 1.0f),
-                            2.1f);
+  // A crown spreads at least as much as it rises: a tall thin wall reads as a
+  // glass bowl standing on the pool, not as water thrown up by an impact.
+  crown.radius = 0.56f * scale;
+  crown.height0 = std::fmin((0.66f + 0.70f * s) * scale * (waveTwo ? 1.08f : 1.0f),
+                            1.70f);
   crown.height = crown.height0;
   crown.spike0 = std::fmin(1.0f, 0.45f + 0.4f * s);
   crown.spike = 0.0f;  
   crown.life = waveTwo ? 1.1f : 1.0f;
-  int n = (110 + (int)(60.0f * s)) * (waveTwo ? 2 : 1);
+  // Spray that hangs in a shell around the sheet reads as fur on the rim, and
+  // overlapping sprites read as fog. Few, distinct drops thrown outward read as
+  // water, so the count stays low and the drops stay big.
+  int n = (26 + (int)(16.0f * s)) * (waveTwo ? 2 : 1);
   for (int i = 0; i < n; i++) {
     float a = (float)((i * 137 + pot * 61) % 360) * 3.14159265f / 180.0f;
     float r01 = ((i * 89 + pot * 37) % 100) / 100.0f;
@@ -695,20 +698,21 @@ static void SpawnSplash(int pot, float x, float z, float impactSpeed, float scal
     bool fragment = waveTwo && ((i * 31 + pot * 17) % 7) == 0; 
     Droplet d;
     d.owner = pot;
-    float rimR = crown.radius + 0.06f + 0.07f * r01;   
-    float onSheet = 0.18f + 0.78f * r01;
-    d.pos = {x + std::cos(a) * rimR * (1.0f - 0.22f * onSheet),
-             kWaterLevel + 0.10f + onSheet * crown.height0 * 0.92f,
-             z + std::sin(a) * rimR * (1.0f - 0.22f * onSheet)};
-    float out = (0.45f + 0.80f * s * (0.30f + 0.70f * r01)) * scale;
-    float up = (3.2f + 4.6f * s * (0.35f + 0.65f * onSheet));
+    float rimR = crown.radius * (0.50f + 0.55f * r01);
+    float onSheet = 0.12f + 0.84f * r01;
+    d.pos = {x + std::cos(a) * rimR,
+             kWaterLevel + 0.06f + onSheet * crown.height0 * 0.92f,
+             z + std::sin(a) * rimR};
+    float out = (0.75f + 1.10f * s * (0.35f + 0.65f * r01)) * scale;
+    float up = (2.4f + 4.0f * s * (0.30f + 0.70f * onSheet));
     d.vel = {std::cos(a) * out, up, std::sin(a) * out};
     // Most of the sheet breaks into fine mist; a few drops stay large enough
     // to read as individual beads.
-    float sz = 0.0035f + 0.0225f * (u01 * u01 * u01 * u01);
+    // A few big drops carry the eye; a cloud of identical small ones reads as
+    // mist. The cubic keeps most of the spray fine while letting a handful of
+    // 5-25 mm drops stand out against the tiles.
+    float sz = 0.0045f + 0.0300f * (u01 * u01 * u01);
     sz *= 0.72f + 0.85f * onSheet;
-    // Real crown fragments are 3-20 mm across; at the old size each drop was
-    // ~20 px and the rim read as a cotton halo instead of droplets.
     d.radius = sz * scale * 0.55f;
     if (fragment) d.radius *= 1.6f; 
     d.maxLife = d.life = (0.62f + 0.52f * ((i * 29) % 5) / 5.0f) *
@@ -718,18 +722,18 @@ static void SpawnSplash(int pot, float x, float z, float impactSpeed, float scal
   }
   // Rim beads: the crown's edge collects into larger drops before it breaks,
   // and those beads are what the eye reads as the splash's outline.
-  const int kRimBeads = 72;
+  const int kRimBeads = 18;
   for (int i = 0; i < kRimBeads; i++) {
     float a = (float)((i * 211 + pot * 97) % 360) * 3.14159265f / 180.0f;
     float r01 = ((i * 71 + pot * 23) % 100) / 100.0f;
     Droplet d;
     d.owner = pot;
     d.pos = {x + std::cos(a) * crown.radius * 1.02f,
-             kWaterLevel + crown.height0 * (0.58f + 0.36f * r01),
+             kWaterLevel + crown.height0 * (0.55f + 0.40f * r01),
              z + std::sin(a) * crown.radius * 1.02f};
-    float out = (0.25f + 0.45f * r01) * scale;
+    float out = (0.45f + 0.65f * r01) * scale;
     d.vel = {std::cos(a) * out, 1.2f + 1.8f * r01, std::sin(a) * out};
-    d.radius = (0.007f + 0.016f * (float)((i * 37 + pot * 13) % 10) / 10.0f) * scale;
+    d.radius = (0.013f + 0.026f * (float)((i * 37 + pot * 13) % 10) / 10.0f) * scale;
     d.maxLife = d.life = 0.80f + 0.40f * r01;
     d.delay = 0.02f + 0.10f * r01;
     gDroplets.push_back(d);
@@ -978,7 +982,7 @@ static void UpdatePhysicsStep(double now, float dt) {
         p.splashTime = now;
         SpawnSplash(i, p.pos.x, p.pos.z, speed * (i >= 9 ? 1.15f : 1.0f),
                     kFleetScale[i]);
-        SpawnRing(i, p.pos.x, p.pos.z, 0.40f + 0.3f * std::fmin(speed / 9.0f, 1.0f));
+        SpawnRing(i, p.pos.x, p.pos.z, 0.75f + 0.45f * std::fmin(speed / 9.0f, 1.0f));
         p.vel.y = speed * kBounce;
         p.vel.x *= 0.4f; p.vel.z *= 0.4f;
         p.yawVel *= 0.25f;
@@ -1323,6 +1327,22 @@ static void DrawCrowns(const Mat4 &view, double now) {
   bool any = false;
   for (int i = 0; i < kFleetCount; i++) any = any || gCrowns[i].active || gJets[i].active;
   if (!any) return;
+
+  // Screen-space refraction for the crowns. Resolving the frame drawn so far
+  // (sky, pots, water) into the pipeline's sampleable texture lets the sheet
+  // bend the actual pool behind it. Refracting an analytic copy of the room
+  // never lined up with the water and is what made the crowns read as decals.
+  const bool refractScene = gPost.ready && gPost.msaaPath;
+  if (refractScene) {
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, gPost.msFbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, gPost.resolveFbo);
+    glBlitFramebuffer(0, 0, gWindowWidth, gWindowHeight,
+                      0, 0, gWindowWidth, gWindowHeight,
+                      GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glBindFramebuffer(GL_FRAMEBUFFER, gPost.msFbo);
+    glViewport(0, 0, gWindowWidth, gWindowHeight);
+  }
+
   Mat4 vp;
   Mat4Multiply(vp, gProj, view);
   glUseProgram(gSplashProg.handle);
@@ -1330,6 +1350,15 @@ static void DrawCrowns(const Mat4 &view, double now) {
   glUniformMatrix4fv(gSplashProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
   glUniform3f(gSplashProg.loc("uCamPos"), gCamPos.x, gCamPos.y, gCamPos.z);
   glUniform3f(gSplashProg.loc("uEyePos"), gCamPos.x, gCamPos.y, gCamPos.z);
+  glUniform1f(gSplashProg.loc("uHasScene"), refractScene ? 1.0f : 0.0f);
+  glUniform2f(gSplashProg.loc("uResolution"), (float)gWindowWidth,
+              (float)gWindowHeight);
+  if (refractScene) {
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, gPost.resolveTex);
+    glUniform1i(gSplashProg.loc("uScene"), 1);
+    glActiveTexture(GL_TEXTURE0);
+  }
   glUniform3f(gSplashProg.loc("uLightDir"), kLightDir[0], kLightDir[1], kLightDir[2]);
   glUniform3f(gSplashProg.loc("uLightTint"), kLightTint[0], kLightTint[1], kLightTint[2]);
   glUniform3f(gSplashProg.loc("uWaterA"), 0.30f, 0.62f, 0.86f);
@@ -1705,7 +1734,7 @@ static void Setup() {
   {
     // 192 segments (2 degrees) and 8 rows: the crown's rim is a noise field,
     // and a coarse ring aliased it into triangular glass needles.
-    const int kSeg = 192, kRows = 8;
+    const int kSeg = 192, kRows = 12;
     std::vector<float> ring;
     std::vector<unsigned> ridx;
     for (int r = 0; r <= kRows; r++) {

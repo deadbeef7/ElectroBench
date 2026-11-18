@@ -2,8 +2,8 @@
 
 **PS : For the Android, PSVITA and PSP versions check here : [ports repo](https://github.com/deadbeef7/ElectroBench-ports)**
 
-ElectroBench is a 45+60+45+45 second long four-scene benchmark specifically designed to run on old and modern PCs, don't critise it by it using OpenGL 2.1, and GLSL 1.2, Even office PCs have low scores at it.
-It uses OpenGL 2.1/3.3, and C++, and uses make for compilation. It is designed to be a replacement for glmark (even though it is great and I used it before) and maybe 3DMark.
+ElectroBench is a 45+60+45+45 second long four-scene benchmark specifically designed to run on old and modern PCs, don't critise it by it using OpenGL 3.3, Even office PCs have low scores at it.
+All four scenes use OpenGL 3.3 core, GLSL 3.30, and C++, and make for compilation. It is designed to be a replacement for glmark (even though it is great and I used it before) and maybe 3DMark.
 
 It ships **one** executable that contains **all four** scenes — no second binary, no child process:
 
@@ -13,7 +13,7 @@ headless capture pipeline can still pin the framebuffer exactly.
 
 | Scene | Renderer | Contents |
 |---|---|---|
-| **Scene 1 — ElectroBench** (the OG) | OpenGL 2.1 / GLSL 1.2, fixed-function pipeline | **110 UZIs** on a power-trowelled concrete floor under a generated dusk sky, lit by a warm sun, opened by a three-act **flyover camera** (approach, runway pass down the array, pull back) |
+| **Scene 1 — Electro Range** | OpenGL 3.3 core, GLSL 3.30 | **110 UZIs** standing in five rings on a polished, wet concrete carousel in a dark hangar: full PBR from the model's **six maps** (base colour, normal, metallic, height, AO, roughness), shadow-mapped key light, three moving colour-gelled light bars, real **planar reflections** in the slab, HDR bloom and a scripted crane/dolly camera |
 | **Scene 2** | OpenGL 3.3 core, pixel-shader workloads | An ocean under volumetric clouds (3DMark2001 SE "Pixel Shader" benchmark recreation) |
 | **Scene 3** | OpenGL 3.3 core, analytic shaders | A white-and-red checkerboard-sky pool room lit by a visible luminous ceiling panel (with its own reflection lying down the water), grouted tiles, projected caustics and two waves of falling, splashing teapots (18 total) |
 | **Scene 4** | OpenGL 3.3 core, analytic shaders | A utility corridor at amber dusk under a **physically-based atmosphere** (Rayleigh + Mie, limb-darkened sun disc, wind-blown cumulus): weathered **concrete** pole shafts carrying the hardware the reference photograph shows — three tiers of pin insulators, transformer, cut-out fuses, step bolts, guy wires into buried anchors — wrapped in a **dense web of 16 thin slack telecom cables per bay** plus **hanging slack coils and service loops**, two lattice cell masts for scale, a **damp asphalt road with cast concrete kerbs that mirrors the sunset**, houses with lit windows. 4x MSAA |
@@ -24,24 +24,20 @@ CPU : Any single core CPU @ 500 MHz or more.
 
 RAM : 128MB+
 
-GPU : Technically any GPU that has OpenGL 2.1 support or more, but GPUs that OpenGL 2.1-only will only run scene 1 and the HUD may or may not be available, but any OpenGL 3.3 GPU (2010 GPU onwards) will run it.
+GPU : Any GPU with OpenGL 3.3 core support (2010 onwards).
 
 OS : Any.
 
 
-# Screenshots (not updated to the latest release these are v0.4 screenshots, v0.5 has different screenshots)
+# Screenshots
 
-The 110 UZIs lying on the shadow-mapped concrete floor — every gun casts its own compact shadow anchored at its contact point (warm sun from the upper left). The floor is power-trowelled concrete: burnish sweeps, exposed aggregate, saw-cut control joints, a real sun specular lobe and aerial perspective out to the horizon:
+Scene 1, the electro range: 110 UZIs standing in five rings on a wet, polished carousel in a dark hangar. The wall's amber light slots mirror perfectly in the slab, thin inlay rings run between the gun rings, and the guns are shaded entirely from their six texture maps under the moving key light and the three colour-gelled bars overhead:
 
-![Original GL 2.1 benchmark: 110 UZIs on a shadow-mapped concrete floor](docs/screenshots/uzi_wide.png)
+![Scene 1: rings of 110 UZIs on a wet carousel slab with the hangar wall mirrored in the floor](docs/screenshots/uzi_range.png)
 
-Close-up — mags resting on the ground, shadows clearly visible under each gun:
+Looking down the rings — every gun casts its own shadow from the moving key light, and the pool of light from each bar falls across the slab:
 
-![Close-up: UZIs with mags on the ground and per-gun shadows](docs/screenshots/uzi_close.png)
-
-**The flyover** — the opening camera move, ten frames across the run: a high approach that reveals the whole 110-gun array, a low runway pass down its length, then a pull back to the orbit. It plays automatically from launch and nothing in the app can interrupt it:
-
-![ElectroBench flyover camera: high reveal, low runway pass and pull back over the 110-gun array](docs/screenshots/uzi_flyover.gif)
+![Scene 1 from above: concentric rings of UZIs, shadows and glowing inlay rings](docs/screenshots/uzi_range_top.png)
 
 The dusk ocean scene — long cloud banks with sunward silver linings, two thin cirrus wisps riding high above the sun, a narrow orange glitter path down the middle of the sea, dark blue-purple water either side, raised swell banks:
 
@@ -92,16 +88,24 @@ static build also defines `GLEW_STATIC` and uses the static GLEW archive, so its
 `pkg-config --static` dependency flags) — no DLLs are needed next to the exe. The static build keeps
 its objects under `build/static/`, separate from the normal DLL-linked objects.
 
-# The OG GL 2.1 benchmark (110 UZIs)
+# Scene 1 — the Electro Range (110 UZIs)
 
-Renders **110 UZIs** (10×11 grid) on a shadow-mapped concrete floor through the fixed-function
-pipeline, exactly like a 2001-era title: per-gun compact shadows anchored at each contact point,
-a warm directional sun, and a real-time **FPS + score HUD** drawn in a 5×7 bitmap font.
+Renders **110 UZIs** standing in five concentric rings on a polished concrete carousel inside a dark
+hangar, on **OpenGL 3.3 core**. The guns are the only assets in the scene and the only textures it
+uses: all six of the model's maps are used for what they are — base colour (sRGB), tangent-space
+normal, metallic, height (parallax), ambient occlusion and roughness — so the surface detail is what
+the frame is built around.
 
-Controls : the camera is a scripted flyover, automatic from launch; `ESC` quits. The FPS counter is a
-true frame-count average (SDL performance counter,
-every frame accounted) — the on-screen value is a smoothed window, the final score uses **all** frames
-of the run.
+The carousel turns slowly under three colour-gelled light bars, with a shadow-mapped key light that
+orbits on its own, wet patches on the slab that mirror the wall's amber slots and the guns through a
+real half-resolution **planar reflection pass**, thin glowing inlay rings running between the gun
+rings, HDR bloom and the shared ACES composite. Every frame is lit, shadowed, reflected and graded
+by hand-written GLSL 3.30; there is no fixed-function code left in the scene.
+
+Controls : the camera is a scripted crane/dolly — a low establishing move, a rising orbit, a high
+reveal, then a dive back onto the rings; automatic from launch, `ESC` quits. The FPS counter is a
+true frame-count average (SDL performance counter, every frame accounted) — the on-screen value is a
+smoothed window, the final score uses **all** frames of the run.
 
 # Scene 2
 
@@ -163,16 +167,13 @@ Benchmark Results - Time : 45.0s, Average FPS : 12.4, Score : 308
 
 # One executable, four scenes
 
-`build/ElectroBench` is the **only** binary, and it contains all four scenes. It runs the OG 60-second gun scene
-first, then probes an OpenGL 3.3 core context:
+`build/ElectroBench` is the **only** binary, and it contains all four scenes. It runs the 60-second
+Electro Range first, then the dusk ocean, the pool room and the power lines on the same session, and
+the final results screen shows **per-scene scores and the average of the four**. All four scenes need
+an OpenGL 3.3 core context; on a device without one the binary says so and exits instead of showing
+a broken frame.
 
-- **found** — the dusk ocean runs as scene 2, then the pool room as scene 3, then the power lines
-  as scene 4, on the same session, and the final results screen shows **per-scene scores and the
-  average of the scenes that ran**
-- **not found** (GL 2.1-only drivers, old iGPUs) — all three GL 3.3 scenes skip themselves cleanly
-  and the OG result stands, so the binary still runs on the ancient hardware it targets
-
-Scene selection flags: `--og-only` runs just the gun scene even on GL 3.3-capable devices,
+Scene selection flags: `--og-only` runs just the Electro Range,
 `--scene-only` runs just the ocean scene, `--pool-only` runs just the pool-room scene,
 `--pole-only` runs just the power-line scene.
 
