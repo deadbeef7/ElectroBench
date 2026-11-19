@@ -20,6 +20,10 @@ uniform vec3 uFillColor;
 uniform vec3 uSkyAmb;
 uniform vec3 uGlowAmb;
 uniform float uTime;
+// 1 while the slab's planar reflection pass draws this wall. The mirror only
+// needs the emissive light slots; the fog wash and the ambient lift are what
+// turned the wet floor into grey haze at grazing angles.
+uniform float uReflectPass;
 
 float Hash(float n) { return fract(sin(n) * 43758.5453); }
 
@@ -31,11 +35,12 @@ void main() {
     float ribs = 0.5 + 0.5 * sin(ang * 140.0);
     float ribEdge = pow(ribs, 6.0);
     vec3 base = vec3(0.020, 0.021, 0.025) * (0.45 + 0.85 * ribs);
+    float refl = clamp(uReflectPass, 0.0, 1.0);
 
     // ---- vertical light slots, brightest near the floor -------------------
     float slotMask = step(0.86, fract(ang * 46.0));
     float lower = smoothstep(3.30, 0.10, y) * smoothstep(0.05, 0.55, y);
-    vec3 col = base * (uSkyAmb * 0.55 + uGlowAmb * 0.25);
+    vec3 col = base * (uSkyAmb * mix(0.55, 0.05, refl) + uGlowAmb * mix(0.25, 0.0, refl));
     col += uKeyColor * base * 0.10 * max(dot(normalize(vNormal), uKeyDir), 0.0);
 
     vec3 slot = vec3(1.0, 0.47, 0.17);
@@ -52,7 +57,7 @@ void main() {
     col *= mix(1.0, 0.10, smoothstep(6.0, 17.0, y));
 
     // floor contact haze so the wall does not end in a hard line
-    col += uGlowAmb * 0.20 * exp(-y * 1.6);
+    col += uGlowAmb * 0.20 * exp(-y * 1.6) * (1.0 - refl);
 
     fragColor = vec4(max(col, vec3(0.0)), 1.0);
 }

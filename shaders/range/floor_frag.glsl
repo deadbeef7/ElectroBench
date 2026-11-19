@@ -108,10 +108,11 @@ void main() {
     float r = length(p);
     float ang = atan(p.y, p.x);
 
-    // ---- wetness: broad puddles plus a damp film over everything ----------
+    // ---- wetness: puddles with a crisp edge over a thin damp film ---------
     float puddle = Fbm(p * 0.55 + vec2(3.1, 9.4));
-    float wet = smoothstep(0.44, 0.68, puddle);
-    wet = max(wet, 0.28);
+    float film = Fbm(p * 2.3 + vec2(17.0, 4.0));
+    float wet = smoothstep(0.50, 0.60, puddle);
+    wet = max(wet, 0.10 + 0.12 * film);
 
     // ---- concrete base ----------------------------------------------------
     float grain = Noise(p * 34.0) * 0.5 + Noise(p * 90.0) * 0.5;
@@ -144,17 +145,27 @@ void main() {
     vec4 rp = uReflectVP * vec4(vWorldPos, 1.0);
     vec2 ruv = rp.xy / max(rp.w, 1e-4) * 0.5 + 0.5;
     ruv += vec2(ripple * 0.0018, ripple * 0.0011) * wet;
-    float rough = mix(0.42, 0.14, wet);
-    float spread = mix(0.0035, 0.0007, wet);
+    float rough = mix(0.40, 0.10, wet);
+    float spread = mix(0.0028, 0.00045, wet);
     vec3 mirror = vec3(0.0);
+    float wsum = 0.0;
     for (int i = 0; i < 7; i++) {
         float o = (float(i) / 6.0 - 0.5) * 2.0;
         vec2 off = vec2(o * spread * 0.65, o * spread * 1.1);
-        mirror += texture(uReflectTex, ruv + off).rgb;
+        float w = 1.0 + 2.0 * (1.0 - abs(o));
+        mirror += texture(uReflectTex, ruv + off).rgb * w;
+        wsum += w;
     }
-    // cap the mirror: the emissive bars reflected at grazing angles are far
-    // brighter than anything else in the reflection and read as fog otherwise
-    mirror = min(mirror / 7.0, vec3(1.10)) * 0.80;
+    mirror /= wsum;
+    // Nothing outside the captured mirrored view exists. Clamping those texels
+    // to the texture edge smeared the fogged wall across the puddles, which is
+    // what read as grey haze: fade the mirror out instead of inventing colour.
+    vec2 edge = smoothstep(vec2(0.0), vec2(0.05), ruv) *
+                smoothstep(vec2(1.0), vec2(0.95), ruv);
+    // bright sources reflected off the slab compress instead of flooding it, the
+    // way a wet surface rolls a highlight off instead of turning milky
+    mirror = mirror / (1.0 + mirror * 0.35);
+    mirror *= edge.x * edge.y * 0.92;
 
     // ---- lighting ---------------------------------------------------------
     float shadow = ShadowFactor(N);
@@ -173,9 +184,9 @@ void main() {
         float atten = 1.0 / (1.0 + 0.10 * dist + 0.075 * dist * dist);
         float pool = pow(max(L.y, 0.0), 3.0);
         col += diff * uBarColor[i] * atten * pool * 0.70;
-        // a broad, soft sheen only: a tight lobe from these big area lights
-        // broke up over the wet/dry normal into cloudy blotches
-        col += Spec(N, V, L, uBarColor[i] * atten * 0.35, 0.42, f0);
+        // a tight lobe on a slightly roughened surface: a broad one spread the
+        // bars into the cloudy patches that read as haze on the wet floor
+        col += Spec(N, V, L, uBarColor[i] * atten * 0.22, 0.22, f0);
     }
 
     col += Spec(N, V, uKeyDir, uKeyColor * shadow * 0.6, rough, f0);
@@ -192,9 +203,15 @@ void main() {
         col += Spec(N, V, d / max(dist, 1e-4), uFillColor * atten * 0.5, rough, f0);
     }
 
-    // Fresnel-weighted mirror over the diffuse base.
+    // ---- haze towards the wall, laid on the surface before the mirror -----
+    float fog = 1.0 - exp(-max(0.0, r - 5.0) * 0.075);
+    col = mix(col, uGlowAmb * 0.04, clamp(fog, 0.0, 0.70));
+
+    // Fresnel-weighted mirror over the diffuse base. The wet film only adds a
+    // small constant, so dry concrete stays concrete and puddles stay mirrors.
     float fres = 0.035 + 0.965 * pow(1.0 - NoV, 5.0);
-    float mixAmount = clamp(fres * 1.25 + wet * 0.32, 0.0, 0.90);
+    float mixAmount =
+        clamp(fres * 1.10 + wet * 0.30, 0.0, 0.88) * (0.10 + 0.90 * wet);
     col = mix(col, mirror, mixAmount);
 
     // ---- glowing inlay rings between the gun rings ------------------------
@@ -205,10 +222,6 @@ void main() {
     }
     inlay = clamp(inlay, 0.0, 1.0) * (0.75 + 0.25 * sin(ang * 6.0));
     col += vec3(1.0, 0.46, 0.16) * inlay * 1.0;
-
-    // ---- haze towards the wall -------------------------------------------
-    float fog = 1.0 - exp(-max(0.0, r - 5.0) * 0.075);
-    col = mix(col, uGlowAmb * 0.08, clamp(fog, 0.0, 0.85));
 
     fragColor = vec4(max(col, vec3(0.0)), 1.0);
 }

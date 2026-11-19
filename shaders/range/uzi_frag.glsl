@@ -72,7 +72,7 @@ vec3 BxDF(vec3 N, vec3 V, vec3 L, vec3 rad, vec3 diff, float rough, vec3 f0) {
     vec3 F = F_Schlick(f0, VoH);
     // clamp the GGX lobe: at a distance the normal map is minified far below
     // its texel size and unclamped NDF peaks turn into crawling fireflies
-    vec3 spec = min(vec3(D_GGX(NoH, a) * VisSmith(NoV, NoL, a)), vec3(3.5)) * F;
+    vec3 spec = min(vec3(D_GGX(NoH, a) * VisSmith(NoV, NoL, a)), vec3(1.6)) * F;
     vec3 kd = (1.0 - F) * diff / kPi;
     return (kd + spec) * rad * NoL;
 }
@@ -91,10 +91,11 @@ vec3 PointLight(vec3 N, vec3 V, vec3 pos, vec3 colour, vec3 diff, float rough, v
 vec3 StudioEnv(vec3 R, float rough) {
     float up = clamp(R.y * 0.5 + 0.5, 0.0, 1.0);
     vec3 col = mix(uGroundAmb * 0.75, uSkyAmb, smoothstep(0.34, 0.96, up));
-    float sharp = mix(11.0, 2.4, rough);
-    float strip = exp(-pow((R.y - 0.74) * sharp, 2.0)) * 1.4;
-    float horizon = exp(-pow((R.y - 0.02) * sharp * 1.4, 2.0)) * 0.45;
-    return col + uKeyColor * (strip + horizon) * 0.10 + uGlowAmb * horizon * 0.8;
+    float sharp = mix(7.0, 2.0, rough);
+    float strip = exp(-pow((R.y - 0.74) * sharp, 2.0)) * 0.35;
+    float horizon = exp(-pow((R.y - 0.02) * sharp * 1.4, 2.0)) * 0.20;
+    return col * 0.45 + uKeyColor * (strip + horizon) * 0.04 +
+           uGlowAmb * horizon * 0.25;
 }
 
 float ShadowFactor(vec3 N) {
@@ -126,16 +127,16 @@ void main() {
     vec2 uv = vUV;
     if (uReflect == 0) {
         vec3 Vt = vec3(dot(V, T), dot(V, B), dot(V, N));
-        float h = texture(uHeightMap, uv).r;
-        uv -= Vt.xy * (h * uParallax) / max(abs(Vt.z) + 0.35, 0.35);
+        float h = texture(uHeightMap, uv).r - 0.5;
+        uv -= Vt.xy * (h * uParallax) / max(abs(Vt.z) + 0.7, 0.7);
     }
 
     // The base colour is a very dark parkerised steel (mean ≈ 0.02 linear);
     // lift it so the shape and the normal/roughness detail are readable in a
     // night scene instead of collapsing to a silhouette.
-    vec3 albedo = texture(uBaseColor, uv).rgb * 2.4 + vec3(0.004);
-    float metal = clamp(texture(uMetallicMap, uv).r, 0.0, 1.0);
-    float rough = clamp(texture(uRoughnessMap, uv).r * 1.10 + 0.04, 0.16, 1.0);
+    vec3 albedo = texture(uBaseColor, uv).rgb * 1.6 + vec3(0.010);
+    float metal = clamp(texture(uMetallicMap, uv).r * 0.85, 0.0, 1.0);
+    float rough = clamp(texture(uRoughnessMap, uv).r * 0.80 + 0.24, 0.30, 0.95);
     // widen the lobe with distance so far rings do not sparkle
     float camDist = length(uEye - vWorldPos);
     rough = mix(rough, 0.58, smoothstep(2.5, 9.0, camDist));
@@ -143,9 +144,9 @@ void main() {
 
     // Blender exports OpenGL-style tangents (+Y up); green is used as-is.
     vec3 nTex = texture(uNormalMap, uv).rgb * 2.0 - 1.0;
-    // fade the normal detail out towards grazing views: a 2K normal map at a
-    // few dozen texels per pixel otherwise turns into salt-and-pepper lighting
-    nTex.xy *= mix(0.30, 0.85, NoV);
+    // keep the stamped detail, but a full-strength 2K normal map at close range
+    // breaks the receiver up into hard shards of light
+    nTex.xy *= mix(0.28, 0.70, NoV);
     N = normalize(T * nTex.x + B * nTex.y + N * nTex.z);
     NoV = max(dot(N, V), 1e-4);
 
@@ -166,7 +167,7 @@ void main() {
     // black between the direct highlights
     col += albedo * amb * metal * 1.4;
     vec3 R = reflect(-V, N);
-    col += StudioEnv(R, rough) * F_Schlick(f0, NoV) * ao;
+    col += StudioEnv(R, rough) * F_Schlick(f0, NoV) * ao * 0.55;
 
     // A touch of grazing sheen keeps the parkerised edges from disappearing at
     // the silhouettes when the key is behind the gun.

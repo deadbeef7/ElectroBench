@@ -277,9 +277,13 @@ struct Mesh {
 };
 
 // Interleaved: position(3), normal(3), tangent(4), uv(2) -- 12 floats.
+// The vertices are welded per (position, uv, normal) corner, so the mesh has to
+// be drawn through the index buffer built alongside them; drawing the array in
+// order would connect corners from unrelated triangles.
 struct GunMesh {
-  GLuint vao = 0, vbo = 0;
+  GLuint vao = 0, vbo = 0, ebo = 0;
   int vertexCount = 0;
+  int indexCount = 0;
   float length = 0.55f;
 };
 
@@ -350,18 +354,25 @@ static GunMesh LoadGunMesh(const char *path, float targetLength) {
   const float cy = (mn.y + mx.y) * 0.5f;
   const float scale = targetLength / std::fmax(mx.x - mn.x, 1e-5f);
 
-  // The OBJ is Y-up (X = length, Y = height, Z = width); only the depth axis is
-  // mirrored so the model ends up right-handed with its long axis on X.
+  // The OBJ is Y-up (X = length, Y = height, Z = width). It is only centred and
+  // scaled here -- never mirrored: the file's triangles are counter-clockwise
+  // around their outward normals, and a mirror would flip that winding and make
+  // back-face culling eat the outside of every gun.
   const float cz = (mn.z + mx.z) * 0.5f;
   auto xf = [&](const Vec3 &p) {
-    return V3((p.x - cx) * scale, (p.y - mn.y) * scale, -(p.z - cz) * scale);
+    return V3((p.x - cx) * scale, (p.y - mn.y) * scale, (p.z - cz) * scale);
   };
-  auto xfN = [](const Vec3 &n) { return V3Norm(V3(n.x, n.y, -n.z)); };
+  // The file's triangles wind clockwise around it and its stored normals face
+  // into the model, so neither side of the surface is usable as authored:
+  // negating the normals and flipping the winding below turns it into an
+  // ordinary counter-clockwise, outward-facing mesh.
+  auto xfN = [](const Vec3 &n) { return V3Norm(V3(-n.x, -n.y, -n.z)); };
 
   GunMesh mesh;
   mesh.length = (mx.x - mn.x) * scale;
 
   std::vector<float> out;
+  std::vector<unsigned int> indices;
   std::map<std::tuple<int, int, int>, int> index;
   std::vector<Vec3> tanAccum;
   std::vector<Vec3> bitAccum;
@@ -376,6 +387,10 @@ static GunMesh LoadGunMesh(const char *path, float targetLength) {
       uv[i][0] = (tri.t[i] >= 0) ? uvs[(size_t)tri.t[i] * 2 + 0] : 0.0f;
       uv[i][1] = (tri.t[i] >= 0) ? uvs[(size_t)tri.t[i] * 2 + 1] : 0.0f;
     }
+    std::swap(p[1], p[2]);
+    std::swap(n[1], n[2]);
+    std::swap(uv[1], uv[2]);
+
     Vec3 e1 = V3Sub(p[1], p[0]);
     Vec3 e2 = V3Sub(p[2], p[0]);
     float du1 = uv[1][0] - uv[0][0], dv1 = uv[1][1] - uv[0][1];
@@ -408,6 +423,7 @@ static GunMesh LoadGunMesh(const char *path, float targetLength) {
       }
       tanAccum[idx] = V3Add(tanAccum[idx], t);
       bitAccum[idx] = V3Add(bitAccum[idx], b);
+      indices.push_back((unsigned int)idx);
     }
   }
 
@@ -430,11 +446,16 @@ static GunMesh LoadGunMesh(const char *path, float targetLength) {
   }
 
   mesh.vertexCount = (int)(out.size() / 12);
+  mesh.indexCount = (int)indices.size();
   glGenVertexArrays(1, &mesh.vao);
   glGenBuffers(1, &mesh.vbo);
+  glGenBuffers(1, &mesh.ebo);
   glBindVertexArray(mesh.vao);
   glBindBuffer(GL_ARRAY_BUFFER, mesh.vbo);
   glBufferData(GL_ARRAY_BUFFER, out.size() * sizeof(float), out.data(), GL_STATIC_DRAW);
+  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mesh.ebo);
+  glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(unsigned int),
+               indices.data(), GL_STATIC_DRAW);
   const GLsizei stride = 12 * sizeof(float);
   glEnableVertexAttribArray(0);
   glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, (void *)0);
@@ -793,12 +814,16 @@ static void DrawGuns(const Mat4 &viewProj, bool reflection) {
     gGunProg.m4("uViewProj", viewProj);
     (void)reflection;
     glBindVertexArray(gGun.vao);
-    glDrawArrays(GL_TRIANGLES, 0, gGun.vertexCount);
+    glDrawElements(GL_TRIANGLES, gGun.indexCount, GL_UNSIGNED_INT, (void *)0);
   }
   glBindVertexArray(0);
 }
 
 static void DrawBars(const Mat4 &viewProj, bool emissive, bool reflection) {
+  // the bar box has to be bound here: the caller is left with whatever mesh it
+  // drew last, and drawing the bar's vertex count from that mesh sprayed stray
+  // triangles across the frame
+  glBindVertexArray(gBar.vao);
   for (int i = 0; i < 3; i++) {
     float len = (i == 0) ? 5.2f : (i == 1 ? 4.4f : 4.0f);
     Mat4 model;
@@ -972,7 +997,7 @@ static void Setup() {
   glUniform1i(gGunProg.loc("uAOMap"), 4);
   glUniform1i(gGunProg.loc("uRoughnessMap"), 5);
   glUniform1i(gGunProg.loc("uShadowMap"), 6);
-  gGunProg.f1("uParallax", 0.006f);
+  gGunProg.f1("uParallax", 0.0025f);
   glUniform1i(gGunProg.loc("uReflect"), 0);
 
   glUseProgram(gFloorProg.handle);
@@ -1061,7 +1086,7 @@ static void RenderShadowMap() {
     gShadowProg.m4("uModel", model);
     gShadowProg.m4("uLightVP", gFrameState.lightVP);
     glBindVertexArray(gGun.vao);
-    glDrawArrays(GL_TRIANGLES, 0, gGun.vertexCount);
+    glDrawElements(GL_TRIANGLES, gGun.indexCount, GL_UNSIGNED_INT, (void *)0);
   }
   glBindVertexArray(0);
 
@@ -1091,6 +1116,7 @@ static void RenderReflection() {
 
   glUseProgram(gWallProg.handle);
   UploadFrameUniforms(gWallProg);
+  gWallProg.f1("uReflectPass", 1.0f);
   Mat4 identity;
   Mat4Identity(identity);
   gWallProg.m4("uModel", identity);
@@ -1161,6 +1187,7 @@ static void RenderScene() {
   // wall
   glUseProgram(gWallProg.handle);
   UploadFrameUniforms(gWallProg);
+  gWallProg.f1("uReflectPass", 0.0f);
   {
     Mat4 identity;
     Mat4Identity(identity);
