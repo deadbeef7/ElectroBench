@@ -6,9 +6,9 @@
 // files, no textures: every cylinder, catenary and quad is generated on the CPU
 // at startup).
 //
-// Like src/scene2.cxx and src/scene3.cxx, this translation unit is NOT a
+// Like src/scene1.cxx and src/scene2.cxx, this translation unit is NOT a
 // program of its own. It exports RunPoleScene(), which main.cxx calls as the
-// fourth scene of the one and only ElectroBench executable.
+// third scene of the one and only ElectroBench executable.
 //
 
 #include <algorithm>

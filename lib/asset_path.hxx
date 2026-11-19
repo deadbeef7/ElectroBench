@@ -1,4 +1,4 @@
-// Asset path resolution shared by all four scenes.
+// Asset path resolution shared by all three scenes.
 //
 // Assets (OBJ models, shader sources) live in the project root, while the build
 // places binaries in build/. When a path does not exist relative to the current

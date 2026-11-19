@@ -41,7 +41,7 @@ extern bool gWindowedMode;
 
 // lodepng.c is pulled in by lib/lodepng.h, which lib/process_image.h includes;
 // main.cxx already owns those definitions, so this unit only uses the decoder
-// (the same trick src/scene3.cxx uses for its PNG loading).
+// (the same trick the other scene modules use for their PNG loading).
 enum LodePNGColorType { LCT_GREY = 0, LCT_RGB = 2, LCT_PALETTE = 3,
                         LCT_GREY_ALPHA = 4, LCT_RGBA = 6 };
 unsigned lodepng_decode_file(unsigned char **out, unsigned *w, unsigned *h,
@@ -987,7 +987,7 @@ static void Setup() {
   gShadowProg = LinkProgram(resolveAssetPath("shaders/range/shadow_vert.glsl").c_str(),
                             resolveAssetPath("shaders/range/shadow_frag.glsl").c_str());
   gHudProg = LinkProgram(resolveAssetPath("shaders/ps14/hud_vert.glsl").c_str(),
-                         resolveAssetPath("shaders/pool/hud_frag.glsl").c_str());
+                         resolveAssetPath("shaders/range/hud_frag.glsl").c_str());
 
   CreateShadowTarget();
   CreateReflectionTarget(gWindowWidth / 2, gWindowHeight / 2);

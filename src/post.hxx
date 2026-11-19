@@ -1,18 +1,18 @@
 // ===========================================================================
 // ElectroBench -- shared HDR camera pipeline for the GL 3.3 scenes.
 //
-// The three GL 3.3 scenes (2 dusk ocean, 3 pool room, 4 power lines) used to
+// The three GL 3.3 scenes (1 range, 2 dusk ocean, 3 power lines) used to
 // write their own tone-mapped, gamma-encoded LDR colour straight into the
 // default framebuffer. That has three photographic consequences a scene
 // shader cannot fix on its own:
 //
 //   * every pass picked its own response curve (scene 2 used color/(color+1),
-//     scene 4 a Reinhard-ish col/(col*0.35+0.72), the sky an ACES blend), so
+//     scene 3 a Reinhard-ish col/(col*0.35+0.72), the sky an ACES blend), so
 //     the same radiance had three different brightnesses depending on which
 //     pass drew it;
 //   * there is no bloom, so the sun, the glitter path, wet-road speculars and
-//     the pool's ceiling panel have hard edges instead of the glare a real
-//     lens and a real eye produce around a bright source;
+//     the range's light bars have hard edges instead of the glare a real lens
+//     and a real eye produce around a bright source;
 //   * the scene wrote 8-bit LDR, so anything above 1.0 was clipped before it
 //     could be graded.
 //
