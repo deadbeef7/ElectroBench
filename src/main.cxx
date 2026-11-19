@@ -1,10 +1,10 @@
 // ElectroBench -- the harness.
 //
-// This file owns the command line, the four scene entry points and the final
+// This file owns the command line, the three scene entry points and the final
 // results screen. It contains no scene geometry any more: scene 1 now lives in
-// src/scene1.cxx (OpenGL 3.3 core, like scenes 2-4), which is why the only
+// src/scene1.cxx (OpenGL 3.3 core, like scenes 2-3), which is why the only
 // fixed-function code left here is the results card, drawn in its own small
-// OpenGL 2.1 compatibility context after the four scenes have finished.
+// OpenGL 2.1 compatibility context after the three scenes have finished.
 
 #include "../lib/asset_path.hxx"
 #include "../lib/util.hxx" // owns the lodepng definitions the scenes decode with
@@ -47,14 +47,7 @@ void OceanSceneSetScreenshot(const char *path);
 void OceanSceneSetShotTime(float t);
 void OceanSceneSetStandalone(bool standalone);
 
-int RunPoolScene(bool *gaveUpOut);             // scene 3 (GL 3.3 pool room)
-extern double gFusedPoolScore;
-int  PoolSceneParseArgs(int argc, char **argv);
-void PoolSceneSetScreenshot(const char *path);
-void PoolSceneSetShotTime(float t);
-void PoolSceneSetStandalone(bool standalone);
-
-int RunPoleScene(bool *gaveUpOut);             // scene 4 (GL 3.3 power lines)
+int RunPoleScene(bool *gaveUpOut);             // scene 3 (GL 3.3 power lines)
 extern double gFusedPoleScore;
 int  PoleSceneParseArgs(int argc, char **argv);
 void PoleSceneSetScreenshot(const char *path);
@@ -62,11 +55,9 @@ void PoleSceneSetShotTime(float t);
 void PoleSceneSetStandalone(bool standalone);
 
 static bool gSceneOnly = false;
-static bool gPoolOnly = false;
 static bool gPoleOnly = false;
 static bool gOgOnly = false;
 static bool gFusedTideRan = false;
-static bool gFusedPoolRan = false;
 static bool gFusedPoleRan = false;
 
 // ------------------------------------------------------------------ results
@@ -154,12 +145,10 @@ static void RenderResults() {
   glClearColor(0.012f, 0.012f, 0.022f, 1.0f);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-  char big[96], hint[96], line1[96], line2[96], line3[96], line4[96];
-  int scenesRan = 1 + (gFusedTideRan ? 1 : 0) + (gFusedPoolRan ? 1 : 0) +
-                  (gFusedPoleRan ? 1 : 0);
+  char big[96], hint[96], line1[96], line2[96], line3[96];
+  int scenesRan = 1 + (gFusedTideRan ? 1 : 0) + (gFusedPoleRan ? 1 : 0);
   double sum = gFusedOgScore;
   if (gFusedTideRan) sum += gFusedTideScore;
-  if (gFusedPoolRan) sum += gFusedPoolScore;
   if (gFusedPoleRan) sum += gFusedPoleScore;
   if (scenesRan > 1)
     std::snprintf(big, sizeof(big), "AVERAGE SCORE : %.0f", sum / scenesRan);
@@ -170,22 +159,16 @@ static void RenderResults() {
   std::snprintf(line1, sizeof(line1), "Scene 1 (range)  : %.0f", gFusedOgScore);
   std::snprintf(line2, sizeof(line2), "Scene 2 (ocean)  : %s",
                 gFusedTideRan ? "" : "skipped (needs GL 3.3)");
-  std::snprintf(line3, sizeof(line3), "Scene 3 (pool)   : %s",
-                gFusedPoolRan ? "" : "skipped (needs GL 3.3)");
-  std::snprintf(line4, sizeof(line4), "Scene 4 (lain)   : %s",
+  std::snprintf(line3, sizeof(line3), "Scene 3 (lain)   : %s",
                 gFusedPoleRan ? "" : "skipped (needs GL 3.3)");
   char score[24];
   if (gFusedTideRan) {
     std::snprintf(score, sizeof(score), "%.0f", gFusedTideScore);
     std::strncat(line2, score, sizeof(line2) - std::strlen(line2) - 1);
   }
-  if (gFusedPoolRan) {
-    std::snprintf(score, sizeof(score), "%.0f", gFusedPoolScore);
-    std::strncat(line3, score, sizeof(line3) - std::strlen(line3) - 1);
-  }
   if (gFusedPoleRan) {
     std::snprintf(score, sizeof(score), "%.0f", gFusedPoleScore);
-    std::strncat(line4, score, sizeof(line4) - std::strlen(line4) - 1);
+    std::strncat(line3, score, sizeof(line3) - std::strlen(line3) - 1);
   }
 
   const float cx = 0.5f * (float)gWinW;
@@ -198,7 +181,6 @@ static void RenderResults() {
   HudText(cx - HudTextWidth(line1, 2.0f) * 0.5f, cy + 8.0f, line1);
   HudText(cx - HudTextWidth(line2, 2.0f) * 0.5f, cy + 34.0f, line2);
   HudText(cx - HudTextWidth(line3, 2.0f) * 0.5f, cy + 60.0f, line3);
-  HudText(cx - HudTextWidth(line4, 2.0f) * 0.5f, cy + 86.0f, line4);
   glColor4f(0.40f, 0.48f, 0.55f, 1.0f);
   HudText(cx - HudTextWidth(hint, 2.0f) * 0.5f, cy + 132.0f, hint);
 
@@ -286,8 +268,6 @@ int main(int argc, char **argv) {
       gOgOnly = true;
     } else if (arg == "--scene-only") {
       gSceneOnly = true;
-    } else if (arg == "--pool-only") {
-      gPoolOnly = true;
     } else if (arg == "--pole-only") {
       gPoleOnly = true;
     } else if (arg == "--trace-assets") {
@@ -297,17 +277,14 @@ int main(int argc, char **argv) {
 
   if (GunSceneParseArgs(argc, argv) != EXIT_SUCCESS) return EXIT_FAILURE;
   if (OceanSceneParseArgs(argc, argv) != EXIT_SUCCESS) return EXIT_FAILURE;
-  if (PoolSceneParseArgs(argc, argv) != EXIT_SUCCESS) return EXIT_FAILURE;
   if (PoleSceneParseArgs(argc, argv) != EXIT_SUCCESS) return EXIT_FAILURE;
 
   if (gShotPath != nullptr) {
     GunSceneSetScreenshot(gShotPath);
     OceanSceneSetScreenshot(gShotPath);
-    PoolSceneSetScreenshot(gShotPath);
     PoleSceneSetScreenshot(gShotPath);
     GunSceneSetShotTime(gShotTime);
     OceanSceneSetShotTime(gShotTime);
-    PoolSceneSetShotTime(gShotTime);
     PoleSceneSetShotTime(gShotTime);
   }
 
@@ -315,12 +292,12 @@ int main(int argc, char **argv) {
   {
     static const char *kKey[] = {
         "shaders/range/uzi_frag.glsl", "shaders/ps14/sea_frag.glsl",
-        "shaders/pool/water_frag.glsl", "shaders/pole/object_frag.glsl"};
+        "shaders/pole/object_frag.glsl"};
     char *b = SDL_GetBasePath();
     std::printf("Assets: exe dir %s| cwd wins over the exe dir when it has shaders/\n",
                 b ? b : "(unknown)");
     SDL_free(b);
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 3; i++) {
       const std::string resolved = resolveAssetPath(kKey[i]);
       std::printf("  %-32s %7ld bytes  %s\n", kKey[i], assetSizeOf(resolved),
                   resolved.c_str());
@@ -342,18 +319,6 @@ int main(int argc, char **argv) {
     return 0;
   }
 
-  if (gPoolOnly) {
-    PoolSceneSetStandalone(true);
-    bool gaveUp = false;
-    int rc = RunPoolScene(&gaveUp);
-    if (rc == 1) {
-      std::fprintf(stderr, "ElectroBench: no OpenGL 3.3 core context on this device - "
-                           "the pool room scene cannot run here\n");
-      return EXIT_FAILURE;
-    }
-    return 0;
-  }
-
   if (gSceneOnly) {
     OceanSceneSetStandalone(true);
     bool gaveUp = false;
@@ -367,7 +332,7 @@ int main(int argc, char **argv) {
   }
 
   // ---- scene 1: the range -------------------------------------------------
-  std::printf("Scene 1/4 : Electro Range (GL 3.3)\n");
+  std::printf("Scene 1/3 : Electro Range (GL 3.3)\n");
   std::fflush(stdout);
   GunSceneSetStandalone(gOgOnly);
   bool gaveUpGun = false;
@@ -383,31 +348,24 @@ int main(int argc, char **argv) {
   }
   if (gOgOnly) return 0;
 
-  // ---- scenes 2-4, each recreating the window with a GL 3.3 core context --
+  // ---- scenes 2-3, each recreating the window with a GL 3.3 core context --
   bool gaveUp = false;
-  std::printf("Scene 2/4 : Dusk Ocean (GL 3.3)\n");
+  std::printf("Scene 2/3 : Dusk Ocean (GL 3.3)\n");
   std::fflush(stdout);
   int rc = RunOceanScene(&gaveUp);
   if (rc == 2) return 0;
   if (rc == 0) gFusedTideRan = true;
 
-  bool gaveUpPool = false;
-  std::printf("Scene 3/4 : Pool Room (GL 3.3)\n");
-  std::fflush(stdout);
-  int rcPool = RunPoolScene(&gaveUpPool);
-  if (rcPool == 2) return 0;
-  if (rcPool == 0) gFusedPoolRan = true;
-
   bool gaveUpPole = false;
-  std::printf("Scene 4/4 : Power lines (GL 3.3)\n");
+  std::printf("Scene 3/3 : Power lines (GL 3.3)\n");
   std::fflush(stdout);
   int rcPole = RunPoleScene(&gaveUpPole);
   if (rcPole == 2) return 0;
   if (rcPole == 0) gFusedPoleRan = true;
 
-  std::printf("Fused Results - Range : %.0f | Ocean : %.0f | Pool : %.0f | "
+  std::printf("Fused Results - Range : %.0f | Ocean : %.0f | "
               "Power lines : %.0f\n",
-              gFusedOgScore, gFusedTideScore, gFusedPoolScore, gFusedPoleScore);
+              gFusedOgScore, gFusedTideScore, gFusedPoleScore);
   std::fflush(stdout);
 
   RunResultsScreen();

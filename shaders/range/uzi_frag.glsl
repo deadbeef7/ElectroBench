@@ -134,7 +134,7 @@ void main() {
     // The base colour is a very dark parkerised steel (mean ≈ 0.02 linear);
     // lift it so the shape and the normal/roughness detail are readable in a
     // night scene instead of collapsing to a silhouette.
-    vec3 albedo = texture(uBaseColor, uv).rgb * 1.6 + vec3(0.010);
+    vec3 albedo = texture(uBaseColor, uv).rgb * 2.1 + vec3(0.014);
     float metal = clamp(texture(uMetallicMap, uv).r * 0.85, 0.0, 1.0);
     float rough = clamp(texture(uRoughnessMap, uv).r * 0.80 + 0.24, 0.30, 0.95);
     // widen the lobe with distance so far rings do not sparkle
@@ -162,7 +162,7 @@ void main() {
     // Ambient: hangar sky from above, warm slab bounce from below, plus the
     // amber glow that the wall washers throw onto everything.
     vec3 amb = mix(uGroundAmb, uSkyAmb, 0.5 + 0.5 * N.y) * ao;
-    col += diff * amb;
+    col += diff * amb * 1.2;
     // metals keep their body colour under the room's ambient instead of going
     // black between the direct highlights
     col += albedo * amb * metal * 1.4;

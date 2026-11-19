@@ -2,15 +2,15 @@
 # ElectroBench Makefile
 # Windows (MSYS2), macOS (Homebrew), Linux
 #
-# ONE executable: build/ElectroBench contains ALL FOUR scenes (the OG GL 2.1
-# gun scene in src/main.cxx, and the GL 3.3 scenes in src/scene2.cxx, src/
-# scene3.cxx and src/scene4.cxx). There is no second binary and no child
-# process: the three scene modules are linked straight into this program and
-# handed the same SDL session by src/main.cxx.
+# ONE executable: build/ElectroBench contains ALL THREE scenes (the GL 3.3
+# range in src/scene1.cxx, and the GL 3.3 scenes in src/scene2.cxx and
+# src/scene4.cxx). There is no second binary and no child process: the scene
+# modules are linked straight into this program and handed the same SDL
+# session by src/main.cxx.
 #
 # This file defines exactly ONE binary target ($(BIN)). There is no legacy or
-# per-scene target, and no per-scene second compile: the four .cxx files are
-# just the four object files of the one executable.
+# per-scene target, and no per-scene second compile: the scene .cxx files are
+# just the object files of the one executable.
 # ============================================================
 
 CXX ?= g++
@@ -34,7 +34,7 @@ else
     OBJDIR := $(BUILD)
 endif
 
-OBJS := $(OBJDIR)/main.o $(OBJDIR)/scene1.o $(OBJDIR)/scene2.o $(OBJDIR)/scene3.o $(OBJDIR)/scene4.o
+OBJS := $(OBJDIR)/main.o $(OBJDIR)/scene1.o $(OBJDIR)/scene2.o $(OBJDIR)/scene4.o
 
 BIN = $(BUILD)/ElectroBench$(STATIC_SUFFIX)
 
@@ -161,13 +161,13 @@ $(OBJDIR):
 	mkdir -p $@
 
 # ------------------------------------------------------------
-# ElectroBench (the single binary: scenes 1-4)
+# ElectroBench (the single binary: scenes 1-3)
 # ------------------------------------------------------------
 
 $(OBJDIR)/main.o: src/main.cxx src/font_atlas.hxx | $(OBJDIR)
 	$(CXX) $(CPPFLAGS) $(PKG_CFLAGS) $(GLEW_CFLAGS) $(CXXFLAGS) -c $< -o $@
 
-# The four GL 3.3 scenes all include src/post.hxx (the shared HDR camera
+# The GL 3.3 scenes all include src/post.hxx (the shared HDR camera
 # pipeline), so it is a prerequisite of each object file. Without it, editing
 # the pipeline's shaders relinks the executable from stale objects and the
 # scenes keep running the previous revision of the composite - which looks
@@ -178,15 +178,12 @@ $(OBJDIR)/scene1.o: src/scene1.cxx src/font_atlas.hxx src/post.hxx | $(OBJDIR)
 $(OBJDIR)/scene2.o: src/scene2.cxx src/font_atlas.hxx src/post.hxx | $(OBJDIR)
 	$(CXX) $(CPPFLAGS) $(PKG_CFLAGS) $(GLEW_CFLAGS) $(CXXFLAGS) -c $< -o $@
 
-$(OBJDIR)/scene3.o: src/scene3.cxx src/font_atlas.hxx src/post.hxx | $(OBJDIR)
-	$(CXX) $(CPPFLAGS) $(PKG_CFLAGS) $(GLEW_CFLAGS) $(CXXFLAGS) -c $< -o $@
-
 $(OBJDIR)/scene4.o: src/scene4.cxx src/font_atlas.hxx src/post.hxx | $(OBJDIR)
 	$(CXX) $(CPPFLAGS) $(PKG_CFLAGS) $(GLEW_CFLAGS) $(CXXFLAGS) -c $< -o $@
 
 $(BIN): $(OBJS) | $(OBJDIR)
 	@echo "========================================"
-	@echo " Building ElectroBench (all four scenes in one binary)"
+	@echo " Building ElectroBench (all three scenes in one binary)"
 	@echo " Platform: $(PLATFORM)"
 	@echo "========================================"
 ifeq ($(STATIC),1)

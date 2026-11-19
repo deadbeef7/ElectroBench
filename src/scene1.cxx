@@ -379,17 +379,21 @@ static GunMesh LoadGunMesh(const char *path, float targetLength) {
   std::vector<float> handedness;
 
   for (const Tri &tri : tris) {
+    // Flip the winding by swapping the last two corners *before* the corners are
+    // evaluated, so the weld key below always describes the vertex it stores.
+    Tri c = tri;
+    std::swap(c.p[1], c.p[2]);
+    std::swap(c.t[1], c.t[2]);
+    std::swap(c.n[1], c.n[2]);
+
     Vec3 p[3], n[3];
     float uv[3][2];
     for (int i = 0; i < 3; i++) {
-      p[i] = xf(positions[tri.p[i]]);
-      n[i] = (tri.n[i] >= 0 && tri.n[i] < (int)normals.size()) ? xfN(normals[tri.n[i]]) : V3(0, 1, 0);
-      uv[i][0] = (tri.t[i] >= 0) ? uvs[(size_t)tri.t[i] * 2 + 0] : 0.0f;
-      uv[i][1] = (tri.t[i] >= 0) ? uvs[(size_t)tri.t[i] * 2 + 1] : 0.0f;
+      p[i] = xf(positions[c.p[i]]);
+      n[i] = (c.n[i] >= 0 && c.n[i] < (int)normals.size()) ? xfN(normals[c.n[i]]) : V3(0, 1, 0);
+      uv[i][0] = (c.t[i] >= 0) ? uvs[(size_t)c.t[i] * 2 + 0] : 0.0f;
+      uv[i][1] = (c.t[i] >= 0) ? uvs[(size_t)c.t[i] * 2 + 1] : 0.0f;
     }
-    std::swap(p[1], p[2]);
-    std::swap(n[1], n[2]);
-    std::swap(uv[1], uv[2]);
 
     Vec3 e1 = V3Sub(p[1], p[0]);
     Vec3 e2 = V3Sub(p[2], p[0]);
@@ -404,7 +408,7 @@ static GunMesh LoadGunMesh(const char *path, float targetLength) {
     }
 
     for (int i = 0; i < 3; i++) {
-      auto key = std::make_tuple(tri.p[i], tri.t[i], tri.n[i]);
+      auto key = std::make_tuple(c.p[i], c.t[i], c.n[i]);
       auto it = index.find(key);
       int idx;
       if (it == index.end()) {
