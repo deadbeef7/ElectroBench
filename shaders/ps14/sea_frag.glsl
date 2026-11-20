@@ -236,7 +236,7 @@ void main() {
     // ---- sun: sharp lobe on the resolved normal + statistical broad lobe ---
     vec3 H = normalize(L + V);
     float sunE = 2.0;
-    vec3 sunTint = vec3(1.0, 0.60, 0.30);
+    vec3 sunTint = vec3(1.0, 0.52, 0.21);
 
     vec3 Ns = normalize(N + vec3(pert.x, 0.0, pert.y) * 0.22);
     float NoHs = max(dot(Ns, H), 0.0);

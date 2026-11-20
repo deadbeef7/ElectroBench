@@ -40,7 +40,7 @@ Looking down the rings — every gun casts its own shadow from the moving key li
 
 The dusk ocean scene — long cloud banks with sunward silver linings, two thin cirrus wisps riding high above the sun, a narrow orange glitter path down the middle of the sea, dark blue-purple water either side, raised swell banks:
 
-![ElectroBench scene 2: the dusk ocean under volumetric clouds](docs/screenshots/ps14_dusk_t36.png)
+![ElectroBench scene 2: the dusk ocean under volumetric clouds](docs/screenshots/ps14_dusk_t30.png)
 
 The power-line corridor — an orange dusk under a real atmosphere (Rayleigh sky, a tight limb-darkened sun disc sitting on the haze band, wind-blown cumulus with sunward silver linings). The camera aims at the **top** of the pole, because that is the subject: concrete shafts, three tiers of pin insulators, transformers and cut-outs, a **dense web of thin slack telecom cable** strung between the same two poles at a dozen heights, coils of spare cable hung off the brackets, and lattice transmission pylons standing behind the line. Below it, cast concrete kerbs and a damp road mirroring the sunset:
 
@@ -178,7 +178,7 @@ make
 (press enter to the first question then press "y" then enter) 
 
 All three scenes are linked into that one binary: `src/scene1.cxx`, `src/scene2.cxx` and
-`src/scene4.cxx` are scene modules (they have no `main()` of their own) that `src/main.cxx` hands the
+`src/scene3.cxx` are scene modules (they have no `main()` of their own) that `src/main.cxx` hands the
 same SDL session to. For
 the static build, prefer
 `make STATIC=1`: it passes `-DGLEW_STATIC`, uses `pkg-config --static`, and keeps the static object

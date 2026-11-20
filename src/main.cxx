@@ -313,7 +313,7 @@ int main(int argc, char **argv) {
     int rc = RunPoleScene(&gaveUp);
     if (rc == 1) {
       std::fprintf(stderr, "ElectroBench: no OpenGL 3.3 core context on this device - "
-                           "the power-lines (scene 4) scene cannot run here\n");
+                           "the power-lines (scene 3) scene cannot run here\n");
       return EXIT_FAILURE;
     }
     return 0;

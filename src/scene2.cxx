@@ -40,7 +40,6 @@ static const int kSeaResolution = 2048;  // vertices per side (2 m quads). Coars
 static const float kSeaSize = 4096.0f;   // world size of the ocean patch: reaches past the
                                          // visible horizon in every direction the camera can look
 static const int kEnvMapSize = 768;      // cubemap face resolution — higher fidelity reflections
-static const int kNoiseSize = 256;       // fBm noise texture size
 static const int kRippleSize = 256;      // ripple gradient texture size
 #define MAX_CLOUDS 9                     // must match sky_frag.glsl and sea_frag.glsl
 
@@ -267,32 +266,6 @@ static GLuint CreateRippleTexture() {
   return tex;
 }
 
-// RGBA fBm noise for the cloud shader (R/G used as two independent fields).
-static GLuint CreateSkyNoiseTexture() {
-  std::vector<unsigned char> px(kNoiseSize * kNoiseSize * 4);
-  for (int y = 0; y < kNoiseSize; y++) {
-    for (int x = 0; x < kNoiseSize; x++) {
-      float u = x / (float)kNoiseSize, v = y / (float)kNoiseSize;
-      float r = TileableFbm(u, v, 2, 4.0f, 101);
-      float g = TileableFbm(u, v, 2, 6.0f, 202);
-      px[(y * kNoiseSize + x) * 4 + 0] = (unsigned char)std::lround(r * 255.0f);
-      px[(y * kNoiseSize + x) * 4 + 1] = (unsigned char)std::lround(g * 255.0f);
-      px[(y * kNoiseSize + x) * 4 + 2] = (unsigned char)std::lround(r * g * 255.0f);
-      px[(y * kNoiseSize + x) * 4 + 3] = 255;
-    }
-  }
-  GLuint tex = 0;
-  glGenTextures(1, &tex);
-  glBindTexture(GL_TEXTURE_2D, tex);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, kNoiseSize, kNoiseSize, 0, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-  glGenerateMipmap(GL_TEXTURE_2D);
-  return tex;
-}
-
 // Grayscale foam / wave-detail texture.
 static GLuint CreateFoamTexture() {
   std::vector<unsigned char> px(kFoamSize * kFoamSize * 4);
@@ -426,10 +399,13 @@ static Program gSeaProg, gSkyProg, gHudProg;
 // water and the sky with two different response curves.
 static postproc::Pipeline gPost;
 static postproc::Settings gPostSettings;
-static GLuint gRippleTex = 0, gNoiseTex = 0, gFoamTex = 0, gFontTex = 0;
+static GLuint gRippleTex = 0, gFoamTex = 0, gFontTex = 0;
 static GLuint gEnvCube = 0, gEnvFbo = 0, gEnvDepth = 0;
 
-static Vec3 gSunDir = {0.824f, 0.287f, 0.489f};
+// A low sun: 13.6 degrees over the horizon, about three degrees lower than it
+// used to sit, with its azimuth unchanged so the reference camera still frames
+// it dead centre.
+static Vec3 gSunDir = {0.836f, 0.235f, 0.496f};
 
 static Vec3 gCamPos = {0.0f, 7.0f, 0.0f};
 static float gCamYaw = 0.0f, gCamPitch = -0.05f;
@@ -556,9 +532,8 @@ static void BindSkyUniforms(const Mat4 &vp) {
   glUniform3f(gSkyProg.loc("uSunDir"), gSunDir.x, gSunDir.y, gSunDir.z);
   glUniform1f(gSkyProg.loc("uTime"), (float)gSceneTime);
   glUniform3f(gSkyProg.loc("uZenithColor"), 0.012f, 0.016f, 0.048f);  // deep blue-black overhead
-  glUniform3f(gSkyProg.loc("uMidColor"), 0.028f, 0.022f, 0.048f);     // dark slate-mauve mid sky
   glUniform3f(gSkyProg.loc("uHorizonColor"), 0.115f, 0.055f, 0.062f); // warm maroon horizon band
-  glUniform3f(gSkyProg.loc("uSunColor"), 1.55f, 0.72f, 0.30f);        // deeper orange sun
+  glUniform3f(gSkyProg.loc("uSunColor"), 1.75f, 0.50f, 0.12f);        // deep orange sun
   glUniform1i(gSkyProg.loc("uCloudCount"), MAX_CLOUDS);
   glUniform1fv(gSkyProg.loc("uCloudAzim"), MAX_CLOUDS, gCloudAzimDrift);
   glUniform1fv(gSkyProg.loc("uCloudPhase"), MAX_CLOUDS, gCloudPhase);
@@ -704,7 +679,6 @@ static void Setup() {
   glBindVertexArray(0);
 
   gRippleTex = CreateRippleTexture();
-  gNoiseTex = CreateSkyNoiseTexture();
   gFoamTex = CreateFoamTexture();
   CreateEnvResources();
 

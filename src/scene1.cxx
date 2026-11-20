@@ -351,7 +351,6 @@ static GunMesh LoadGunMesh(const char *path, float targetLength) {
     mx.x = std::fmax(mx.x, p.x); mx.y = std::fmax(mx.y, p.y); mx.z = std::fmax(mx.z, p.z);
   }
   const float cx = (mn.x + mx.x) * 0.5f;
-  const float cy = (mn.y + mx.y) * 0.5f;
   const float scale = targetLength / std::fmax(mx.x - mn.x, 1e-5f);
 
   // The OBJ is Y-up (X = length, Y = height, Z = width). It is only centred and
@@ -718,6 +717,11 @@ static void EvalCamera(float t, Vec3 &eye, Vec3 &target, float &fov) {
       return;
     }
   }
+  // The loop above always brackets t, but leave every output written so the
+  // caller can never read an uninitialised pose if the key table changes.
+  eye = kCamKeys[n - 1].eye;
+  target = kCamKeys[n - 1].target;
+  fov = kCamKeys[n - 1].fov;
 }
 
 static void BuildLayout() {

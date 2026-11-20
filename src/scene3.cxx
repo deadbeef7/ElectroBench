@@ -1,4 +1,4 @@
-// ElectroBench — scene 4 of the single ElectroBench binary: the power-lines
+// ElectroBench — scene 3 of the single ElectroBench binary: the power-lines
 // scene. A late-afternoon Japanese suburb memory: orange sky,
 // white drifting clouds, and a tangle of utility poles, crossarms, insulators,
 // transformers and sagging wires receding into the heat haze — the
@@ -177,7 +177,7 @@ static Program LinkProgram(const char *vsPath, const char *fsPath) {
 }
 
 // ------------------------------------------------------------------ constants
-static const char *const gName = "ElectroBench - Scene 4 (Lain)";
+static const char *const gName = "ElectroBench - Scene 3 (Lain)";
 static const int WIDTH = 1280, HEIGHT = 720;
 static const float kGroundY = 0.0f;
 static Vec3 SunDirNow(double t) {
@@ -191,7 +191,7 @@ static Vec3 SunDirNow(double t) {
 // ---------------------------------------------------------------- scene state
 static Program gSkyProg, gObjProg, gHudProg;
 
-// Scene 4 is drawn into a half-float MSAA target and finished by the shared
+// Scene 3 is drawn into a half-float MSAA target and finished by the shared
 // camera pipeline: every pass writes linear radiance and one ACES composite
 // puts the frame on screen, with the bloom pyramid carrying the glare the
 // sun, the wet kerb and the galvanised steel actually throw.
@@ -374,7 +374,6 @@ static void AddTelecomBundle(const Vec3 &a, const Vec3 &b, int seed,
   int drops = 2 + (seed % 2);                    
   for (int i = 0; i < drops; i++) {
     float t = 0.18f + 0.62f * (float)((seed * 13 + i * 29) % 100) / 100.0f;
-    float drop = 0.35f + 0.55f * (float)((seed * 17 + i * 41) % 100) / 100.0f;
     Vec3 peel = WirePoint(a, b, sag, t);
     Vec3 p{peel.x, peel.y - 0.035f, peel.z};
     AddCylinder(Vec3Add(peel, Vec3{0, -0.035f, 0}), Vec3Add(peel, Vec3{0, 0.035f, 0}),
@@ -411,11 +410,6 @@ static void AddWire(const Vec3 &a, const Vec3 &b, float sag, float radius,
   Vec3 delta = Vec3Sub(b, a);
   float len = Vec3Len(delta);
   if (len < 1e-3f) return;
-
-  Vec3 dir = Vec3Scale(delta, 1.0f / len);
-  Vec3 side = Vec3PerpTo(dir);
-  Vec3 up = Vec3Norm(Vec3Cross(side, dir));
-  float halfSpan = len * 0.5f;
 
   std::vector<Vec3> centres(samples + 1);
   for (int i = 0; i <= samples; i++) {
@@ -1366,7 +1360,7 @@ static void RenderText(float x, float y, const char *text, float scale = 2.0f) {
 
 static void RenderHUD() {
   char line1[128];
-  std::snprintf(line1, sizeof(line1), "FPS: %d   Scene 4   Release 1 v0.6", gFps);
+  std::snprintf(line1, sizeof(line1), "FPS: %d   Scene 3   Release 1 v0.6", gFps);
   RenderText(16.0f, 16.0f, line1);
 }
 
@@ -1379,7 +1373,7 @@ static void RenderResults() {
   std::snprintf(big, sizeof(big), "SCORE : %.0f", gResultsScore);
   std::snprintf(timeLine, sizeof(timeLine), "Time : %.1fs   Average FPS : %.1f",
                 gResultsElapsed, gResultsFps);
-  std::snprintf(hint, sizeof(hint), "Scene 4 score");
+  std::snprintf(hint, sizeof(hint), "Scene 3 score");
 
   float cx = 0.5f * (float)gWindowWidth;
   float cy = 0.5f * (float)gWindowHeight;
@@ -1856,7 +1850,7 @@ static void Setup() {
   glClearColor(0.60f, 0.30f, 0.10f, 1.0f);
 
   // Exposure is the one photographic control shared by all three GL 3.3
-  // scenes; scene 4 is a bright low sun, so it sits a little under 1.0. The
+  // scenes; scene 3 is a bright low sun, so it sits a little under 1.0. The
   // threshold at 1.0 means only genuine highlights (sun disc, speculars,
   // glazed insulators) seed the bloom, not the whole orange sky.
   // The cables' sun glints were blooming into glowing tubes; a tighter

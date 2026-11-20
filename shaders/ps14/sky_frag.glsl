@@ -12,7 +12,7 @@
 //   * the sky, the horizon band and the sun's colour all come from the same
 //     coefficients, so the sea's cubemap reflection cannot drift from the sky;
 //   * the sun disc is drawn a little larger than the real 0.266 degrees (a
-//     0.72-degree disc, chosen for the scene's readability) with limb darkening,
+//     1.12-degree disc, chosen for the scene's readability) with limb darkening,
 //     and is attenuated by the same transmittance.
 //
 // Clouds are a single procedural deck projected onto the plane at 1.5 km,
@@ -25,7 +25,6 @@ uniform float uTime;
 uniform float uTonemap;
 uniform vec3  uSunDir;
 uniform vec3  uZenithColor;
-uniform vec3  uMidColor;
 uniform vec3  uHorizonColor;
 uniform vec3  uSunColor;
 
@@ -60,7 +59,7 @@ const float kBetaMExt = 4.44e-6;
 // Radiance scale. The integral below is in physical units; this converts it to
 // the scene's linear HDR units, which the shared ACES composite then maps.
 const float kSunI = 1.4;
-const float kSunAngularRadius = 0.01250; // 0.72 degrees: deliberately larger
+const float kSunAngularRadius = 0.01950; // 1.12 degrees: deliberately larger
                                          // than the real 0.266-degree disc
 
 // Distance from the camera (inside the atmosphere) to the top of the
@@ -380,13 +379,13 @@ void main() {
     float disc = 1.0 - smoothstep(R2 * 0.72, R2 * 1.18, d2);
     float limb = 0.42 + 0.58 * sqrt(clamp(1.0 - d2 / (R2 * 1.08), 0.0, 1.0));
     float cover = cl;
-    vec3 sunDisc = uSunColor * viewT * kSunI * 1.9 * disc * limb
+    vec3 sunDisc = uSunColor * viewT * kSunI * 1.75 * disc * limb
                  * (1.0 - 0.92 * clamp(cover, 0.0, 1.0));
 
     // The sun's aureole: a forward-scattering halo that stays narrow.
-    float aureole = pow(max(mu, 0.0), 220.0) * 0.55
-                  + pow(max(mu, 0.0), 900.0) * 0.85;
-    sunDisc += vec3(1.0, 0.52, 0.22) * viewT * aureole * (1.0 - cover);
+    float aureole = pow(max(mu, 0.0), 220.0) * 0.70
+                  + pow(max(mu, 0.0), 900.0) * 1.10;
+    sunDisc += vec3(1.0, 0.42, 0.12) * viewT * aureole * (1.0 - cover);
 
     sky += sunDisc;
 

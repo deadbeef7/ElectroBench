@@ -4,7 +4,7 @@
 #
 # ONE executable: build/ElectroBench contains ALL THREE scenes (the GL 3.3
 # range in src/scene1.cxx, and the GL 3.3 scenes in src/scene2.cxx and
-# src/scene4.cxx). There is no second binary and no child process: the scene
+# src/scene3.cxx). There is no second binary and no child process: the scene
 # modules are linked straight into this program and handed the same SDL
 # session by src/main.cxx.
 #
@@ -34,7 +34,7 @@ else
     OBJDIR := $(BUILD)
 endif
 
-OBJS := $(OBJDIR)/main.o $(OBJDIR)/scene1.o $(OBJDIR)/scene2.o $(OBJDIR)/scene4.o
+OBJS := $(OBJDIR)/main.o $(OBJDIR)/scene1.o $(OBJDIR)/scene2.o $(OBJDIR)/scene3.o
 
 BIN = $(BUILD)/ElectroBench$(STATIC_SUFFIX)
 
@@ -178,7 +178,7 @@ $(OBJDIR)/scene1.o: src/scene1.cxx src/font_atlas.hxx src/post.hxx | $(OBJDIR)
 $(OBJDIR)/scene2.o: src/scene2.cxx src/font_atlas.hxx src/post.hxx | $(OBJDIR)
 	$(CXX) $(CPPFLAGS) $(PKG_CFLAGS) $(GLEW_CFLAGS) $(CXXFLAGS) -c $< -o $@
 
-$(OBJDIR)/scene4.o: src/scene4.cxx src/font_atlas.hxx src/post.hxx | $(OBJDIR)
+$(OBJDIR)/scene3.o: src/scene3.cxx src/font_atlas.hxx src/post.hxx | $(OBJDIR)
 	$(CXX) $(CPPFLAGS) $(PKG_CFLAGS) $(GLEW_CFLAGS) $(CXXFLAGS) -c $< -o $@
 
 $(BIN): $(OBJS) | $(OBJDIR)
