@@ -218,7 +218,13 @@ static GLuint gSkyCube = 0, gSkyEnvFbo = 0, gSkyEnvDepth = 0;
 static bool gSkyEnvReady = false;
 static GLuint gObjVao = 0, gObjVbo = 0, gObjIbo = 0;
 static int gObjIndexCount = 0;
-static int gRoadIndexStart = -1; // flat receivers are skipped when casting
+// Casters only: the ground, road and paint are dropped from the shadow pass.
+// At this sun elevation a ground-level plate is almost edge-on to the light, so
+// the depth it stores along a ray is metres away from where the surface is,
+// and every receiver behind that depth turns black in one large blob.
+static GLuint gShadowVao = 0, gShadowIbo = 0;
+static int gShadowIndexCount = 0;
+static std::vector<unsigned int> gCasterIdx;
 
 static SDL_Window *gWindow = nullptr;
 static SDL_GLContext gContext = nullptr;
@@ -1264,6 +1270,46 @@ static void AddTreeline() {
   glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, sizeof(ObjVertex), (void *)(10 * sizeof(float)));
   glBindVertexArray(0);
   gObjIndexCount = (int)gIdx.size();
+
+  // Keep only the triangles that can actually cast: anything that is not a
+  // horizontal plate lying on the ground. Roofs stay in even though they are
+  // flat, because they sit high enough to throw a real shadow.
+  gCasterIdx.clear();
+  gCasterIdx.reserve(gIdx.size());
+  for (size_t i = 0; i + 2 < gIdx.size(); i += 3) {
+    bool flatReceiver = true;
+    for (int k = 0; k < 3; k++) {
+      const ObjVertex &v = gVerts[gIdx[i + (size_t)k]];
+      if (std::fabs(v.ny) < 0.9f || v.y > 0.9f) {
+        flatReceiver = false;
+        break;
+      }
+    }
+    if (flatReceiver) continue;
+    gCasterIdx.push_back(gIdx[i]);
+    gCasterIdx.push_back(gIdx[i + 1]);
+    gCasterIdx.push_back(gIdx[i + 2]);
+  }
+  gShadowIndexCount = (int)gCasterIdx.size();
+
+  glGenVertexArrays(1, &gShadowVao);
+  glGenBuffers(1, &gShadowIbo);
+  glBindVertexArray(gShadowVao);
+  glBindBuffer(GL_ARRAY_BUFFER, gObjVbo);
+  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gShadowIbo);
+  glBufferData(GL_ELEMENT_ARRAY_BUFFER, gCasterIdx.size() * sizeof(unsigned int),
+               gCasterIdx.data(), GL_STATIC_DRAW);
+  glEnableVertexAttribArray(0);
+  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(ObjVertex), (void *)0);
+  glEnableVertexAttribArray(1);
+  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(ObjVertex), (void *)(3 * sizeof(float)));
+  glEnableVertexAttribArray(2);
+  glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(ObjVertex), (void *)(6 * sizeof(float)));
+  glEnableVertexAttribArray(3);
+  glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(ObjVertex), (void *)(9 * sizeof(float)));
+  glEnableVertexAttribArray(4);
+  glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, sizeof(ObjVertex), (void *)(10 * sizeof(float)));
+  glBindVertexArray(0);
 }
 
 // ------------------------------------------------------------------- sky mesh
@@ -1587,22 +1633,8 @@ static void RenderShadowMap() {
   Mat4Identity(model);
   glUniformMatrix4fv(glGetUniformLocation(gShadowProg, "uModel"), 1, GL_FALSE,
                      model.data());
-  glBindVertexArray(gObjVao);
-  // Skip the ground quad (indices 0..5) and the road quad: they are flat
-  // receivers, and self-shadowing them is what forced a large bias that
-  // shifted pole contacts several metres at this sun elevation.
-  const int kGroundIdx = 6;
-  if (gRoadIndexStart > kGroundIdx) {
-    glDrawElements(GL_TRIANGLES, gRoadIndexStart - kGroundIdx, GL_UNSIGNED_INT,
-                   (void *)(size_t)(kGroundIdx * sizeof(unsigned int)));
-    const int afterRoad = gRoadIndexStart + 6;
-    if (afterRoad < gObjIndexCount)
-      glDrawElements(GL_TRIANGLES, gObjIndexCount - afterRoad, GL_UNSIGNED_INT,
-                     (void *)(size_t)(afterRoad * sizeof(unsigned int)));
-  } else {
-    glDrawElements(GL_TRIANGLES, gObjIndexCount - kGroundIdx, GL_UNSIGNED_INT,
-                   (void *)(size_t)(kGroundIdx * sizeof(unsigned int)));
-  }
+  glBindVertexArray(gShadowVao);
+  glDrawElements(GL_TRIANGLES, gShadowIndexCount, GL_UNSIGNED_INT, nullptr);
   glBindVertexArray(0);
 
 
