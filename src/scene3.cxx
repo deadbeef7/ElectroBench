@@ -244,6 +244,7 @@ static const double kResultsScreenSeconds = 4.0;
 double gFusedPoleScore = 0.0;      // read by main.cxx for the combined screen
 
 static const char *gScreenshotPath = nullptr;
+static const char *gDumpShadowPath = nullptr; // --dump-shadow-map FILE
 static std::vector<float> gShotTimes;
 static size_t gNextShot = 0;
 static int gWindowWidthOverride = 0;
@@ -1651,6 +1652,108 @@ static void RenderShadowMap() {
   glViewport(0, 0, gWindowWidth, gWindowHeight);
 }
 
+// ------------------------------------------------------- shadow map debug dump
+// --dump-shadow-map FILE writes the sun map this frame was shaded from (16-bit
+// PGM, depth in [0,1], 0 = nearest the sun) and prints what the map holds along
+// the shadow direction from the base of the nearest poles. That says directly
+// whether a pole is in the map where its contact shadow should start: if the
+// first samples read LIT while further ones read SHADOW, the shadow is detached
+// from the pole rather than missing.
+static void DumpShadowMap(const Vec3 &sunDir) {
+  if (!gDumpShadowPath || !gShadowReady) return;
+  static bool dumped = false;
+  if (dumped) return;
+  dumped = true;
+
+  const size_t n = (size_t)kShadowSize * (size_t)kShadowSize;
+  std::vector<float> depth(n, 1.0f);
+  glBindFramebuffer(GL_FRAMEBUFFER, gShadowFbo);
+  glPixelStorei(GL_PACK_ALIGNMENT, 1);
+  glReadPixels(0, 0, kShadowSize, kShadowSize, GL_DEPTH_COMPONENT, GL_FLOAT,
+               depth.data());
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+  std::FILE *f = std::fopen(gDumpShadowPath, "wb");
+  if (!f) {
+    std::fprintf(stderr, "pole scene: cannot write shadow map %s\n",
+                 gDumpShadowPath);
+    return;
+  }
+  std::fprintf(f, "P5\n%d %d\n65535\n", kShadowSize, kShadowSize);
+  std::vector<unsigned char> row((size_t)kShadowSize * 2);
+  for (int y = kShadowSize - 1; y >= 0; y--) { // PGM rows start at the top
+    for (int x = 0; x < kShadowSize; x++) {
+      float d = depth[(size_t)y * kShadowSize + x];
+      if (!(d >= 0.0f)) d = 0.0f;
+      if (d > 1.0f) d = 1.0f;
+      unsigned int v = (unsigned int)(d * 65535.0f + 0.5f);
+      row[(size_t)x * 2] = (unsigned char)((v >> 8) & 0xFFu);
+      row[(size_t)x * 2 + 1] = (unsigned char)(v & 0xFFu);
+    }
+    std::fwrite(row.data(), 1, row.size(), f);
+  }
+  std::fclose(f);
+  std::printf("Shadow map dumped: %s (%dx%d, 16-bit PGM, 0 = nearest the sun), "
+              "%d caster triangles\n",
+              gDumpShadowPath, kShadowSize, kShadowSize, gShadowIndexCount / 3);
+
+  Vec3 sd{-sunDir.x, 0.0f, -sunDir.z}; // shadows run away from the sun
+  float sl = std::sqrt(Vec3Dot(sd, sd));
+  if (sl > 1e-4f) {
+    sd.x /= sl;
+    sd.z /= sl;
+  }
+  const float *m = gLightVP.data();
+  auto lookup = [&](const Vec3 &p, float *u, float *v, float *stored, float *recv) {
+    float x = p.x, y = p.y + 0.001f, z = p.z; // the shader's normal offset
+    float cx = m[0] * x + m[4] * y + m[8] * z + m[12];
+    float cy = m[1] * x + m[5] * y + m[9] * z + m[13];
+    float cz = m[2] * x + m[6] * y + m[10] * z + m[14];
+    float cw = m[3] * x + m[7] * y + m[11] * z + m[15];
+    if (std::fabs(cw) < 1e-6f) cw = 1.0f;
+    *u = cx / cw * 0.5f + 0.5f;
+    *v = cy / cw * 0.5f + 0.5f;
+    *recv = (cz / cw) * 0.5f + 0.5f;
+    int tx = (int)(*u * (float)kShadowSize);
+    int ty = (int)(*v * (float)kShadowSize);
+    if (tx < 0 || tx >= kShadowSize || ty < 0 || ty >= kShadowSize) {
+      *stored = -1.0f;
+      return false;
+    }
+    *stored = depth[(size_t)ty * kShadowSize + tx];
+    return true;
+  };
+
+  std::printf("Sun direction (%.3f, %.3f, %.3f); shadow direction on the ground "
+              "(%.3f, %.3f)\n",
+              sunDir.x, sunDir.y, sunDir.z, sd.x, sd.z);
+  std::printf("Per pole: offset = metres along the shadow from the base, "
+              "stored = shadow map depth, ground = depth the ground samples\n");
+  const std::vector<PoleSpec> *lines[2] = {&gLineA, &gLineB};
+  const char *lineName[2] = {"lineA", "lineB"};
+  for (int li = 0; li < 2; li++) {
+    int shown = 0;
+    for (const PoleSpec &p : *lines[li]) {
+      if (shown >= 3) break;
+      if (p.z < gCamPos.z - 2.0f) continue; // only what is in front of the camera
+      shown++;
+      float u = 0.0f, v = 0.0f, stored = 0.0f, recv = 0.0f;
+      lookup({p.x, kGroundY, p.z}, &u, &v, &stored, &recv);
+      std::printf("  %s pole (%.2f, %.2f) base uv=(%.4f, %.4f)\n", lineName[li],
+                  p.x, p.z, u, v);
+      for (float d : {0.0f, 0.2f, 0.5f, 1.0f, 2.0f, 4.0f}) {
+        Vec3 q{p.x + sd.x * d, kGroundY, p.z + sd.z * d};
+        bool inside = lookup(q, &u, &v, &stored, &recv);
+        const char *state = "outside-map";
+        if (inside) state = (stored <= recv - 0.000015f) ? "SHADOW" : "LIT";
+        std::printf("    d=%.1fm uv=(%.4f, %.4f) stored=%.5f ground=%.5f %s\n", d,
+                    u, v, stored, recv, state);
+      }
+    }
+  }
+  std::fflush(stdout);
+}
+
 static void RenderSkyEnv(const Vec3 &eye, double timeSec) {
   if (!gSkyEnvReady || !gSkyProg.handle) return;
   static const GLenum faces[6] = {
@@ -1741,6 +1844,7 @@ static void RenderScene() {
   Vec3 sunNow = SunDirNow(gSimTime);
   UpdateLightMatrix(eye, sunNow);
   RenderShadowMap();
+  DumpShadowMap(sunNow);
   RenderSkyEnv(eye, gSimTime);
 
   const bool hdr = postproc::Begin(gPost, gWindowWidth, gWindowHeight);
@@ -1827,6 +1931,8 @@ int PoleSceneParseArgs(int argc, char **argv) {
       }
     } else if (!std::strcmp(argv[i], "--width") && i + 1 < argc) {
       gWindowWidthOverride = std::atoi(argv[++i]);
+    } else if (!std::strcmp(argv[i], "--dump-shadow-map") && i + 1 < argc) {
+      gDumpShadowPath = argv[++i];
     }
   }
   return EXIT_SUCCESS;
