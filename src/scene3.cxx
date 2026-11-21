@@ -1773,34 +1773,48 @@ static void DrawGroundShadows(const Mat4 &view, const Vec3 &eye, double timeSec)
   Vec3 sunDir = SunDirNow(timeSec);
   Vec3 sun = Vec3Norm({sunDir.x, 0.0f, sunDir.z});
   Vec3 perp{-sun.z, 0.0f, sun.x};
-  const float kAlpha[6] = {0.46f, 0.39f, 0.31f, 0.23f, 0.15f, 0.07f};
-  const int kStrips = 5;
+  // Blend is (GL_ZERO, GL_ONE_MINUS_SRC_ALPHA), so alpha is how much of the
+  // ground's light the strip removes. Each station across the strip is five
+  // vertices - transparent rim, dark shoulder, dark centre, shoulder, rim - so
+  // the shadow holds its weight across most of its width and still feathers
+  // out at the edges. Flat quads with one alpha each show their own edges as
+  // wedges as soon as the shadow is dark enough to matter.
+  const int kStations = 14;
+  const int kAcross = 5;
 
   verts.clear();
   idx.clear();
-  verts.reserve((gLineA.size() + gLineB.size()) * kStrips * 4);
-  idx.reserve((gLineA.size() + gLineB.size()) * kStrips * 6);
+  verts.reserve((gLineA.size() + gLineB.size()) * (size_t)(kStations + 1) * kAcross);
+  idx.reserve((gLineA.size() + gLineB.size()) * (size_t)kStations * 24);
   for (const std::vector<PoleSpec> *line : {&gLineA, &gLineB}) {
     for (const PoleSpec &p : *line) {
-      float reach = 16.0f * (1.0f + 0.05f * (float)((int(p.z) % 7)));
+      // A 10 m pole throws a ~30 m shadow at this sun. Fading the strip out
+      // along its length, the way the old decal did, is what made it read as a
+      // smudge at the foot rather than as the pole's shadow, so the darkness
+      // stays flat and only the last quarter tapers off.
+      float reach = 26.0f * (1.0f + 0.05f * (float)((int(p.z) % 7)));
       Vec3 b{p.x, kDecalY, p.z};
-      for (int k = 0; k < kStrips; k++) {
-        float t0 = (float)k / kStrips, t1 = (float)(k + 1) / kStrips;
-        Vec3 c0 = Vec3Add(b, Vec3Scale(sun, -reach * t0));
-        Vec3 c1 = Vec3Add(b, Vec3Scale(sun, -reach * t1));
-        float w0 = 0.30f + 0.95f * t0, w1 = 0.30f + 0.95f * t1;
-        float a0 = kAlpha[k], a1 = kAlpha[k + 1];
-        unsigned int v = (unsigned int)verts.size();
-        verts.push_back({c0.x + perp.x * w0, kDecalY, c0.z + perp.z * w0, 0, 1, 0,
-                         0, 0, 0, kMatShadow, a0});
-        verts.push_back({c0.x - perp.x * w0, kDecalY, c0.z - perp.z * w0, 0, 1, 0,
-                         0, 0, 0, kMatShadow, a0});
-        verts.push_back({c1.x - perp.x * w1, kDecalY, c1.z - perp.z * w1, 0, 1, 0,
-                         0, 0, 0, kMatShadow, a1});
-        verts.push_back({c1.x + perp.x * w1, kDecalY, c1.z + perp.z * w1, 0, 1, 0,
-                         0, 0, 0, kMatShadow, a1});
-        idx.push_back(v); idx.push_back(v + 1); idx.push_back(v + 2);
-        idx.push_back(v); idx.push_back(v + 2); idx.push_back(v + 3);
+      unsigned int first = (unsigned int)verts.size();
+      for (int s = 0; s <= kStations; s++) {
+        float u = (float)s / (float)kStations;
+        Vec3 c = Vec3Add(b, Vec3Scale(sun, -reach * u));
+        float w = 0.22f + 1.00f * u;
+        float taper = u < 0.75f ? 1.0f : 1.0f - (u - 0.75f) * 4.0f;
+        float a = 0.92f * taper;
+        const float off[kAcross] = {-w, -0.55f * w, 0.0f, 0.55f * w, w};
+        const float shade[kAcross] = {0.0f, 0.80f, 1.0f, 0.80f, 0.0f};
+        for (int k = 0; k < kAcross; k++) {
+          verts.push_back({c.x + perp.x * off[k], kDecalY, c.z + perp.z * off[k],
+                           0, 1, 0, 0, 0, 0, kMatShadow, a * shade[k]});
+        }
+      }
+      for (int s = 0; s < kStations; s++) {
+        unsigned int i0 = first + (unsigned int)(s * kAcross);
+        unsigned int i1 = i0 + kAcross;
+        for (int k = 0; k < kAcross - 1; k++) {
+          idx.push_back(i0 + k); idx.push_back(i0 + k + 1); idx.push_back(i1 + k + 1);
+          idx.push_back(i0 + k); idx.push_back(i1 + k + 1); idx.push_back(i1 + k);
+        }
       }
     }
   }
