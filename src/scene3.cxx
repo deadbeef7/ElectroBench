@@ -282,6 +282,7 @@ static std::vector<unsigned int> gIdx;
 static const float kMatPaint = 0.0f;      // generic, no detail
 static const float kMatWood = 1.0f;
 static const float kMatGround = 2.0f;
+static const float kMatShadow = 12.0f; // black, alpha blended: the pole's ground shadow
 static const float kMatRoad = 3.0f;
 static const float kMatLine = 4.0f;       // road paint
 static const float kMatCable = 5.0f;
@@ -1754,6 +1755,116 @@ static void DumpShadowMap(const Vec3 &sunDir) {
   std::fflush(stdout);
 }
 
+
+// ---------------------------------------------------------- pole shadows
+// The sun sits within 20 degrees of the camera's own axis down this corridor,
+// so a shadow-map shadow of a pole is a 26 cm wide strip that hides behind the
+// pole itself and leaves the foot looking pasted onto the road. Master drew a
+// set of fading ground strips for this reason and they are what makes the poles
+// read as planted, so the corridor keeps them, over the top of the sun map.
+static void DrawGroundShadows(const Mat4 &view, const Vec3 &eye, double timeSec) {
+  static GLuint vao = 0, vbo = 0, ibo = 0;
+  const float kDecalY = 0.08f; // above the road (0.03) and its paint (0.05)
+
+  struct DecalVert { float x, y, z, nx, ny, nz, r, g, b, mat, alpha; };
+  static std::vector<DecalVert> verts;
+  static std::vector<unsigned int> idx;
+
+  Vec3 sunDir = SunDirNow(timeSec);
+  Vec3 sun = Vec3Norm({sunDir.x, 0.0f, sunDir.z});
+  Vec3 perp{-sun.z, 0.0f, sun.x};
+  const float kAlpha[6] = {0.46f, 0.39f, 0.31f, 0.23f, 0.15f, 0.07f};
+  const int kStrips = 5;
+
+  verts.clear();
+  idx.clear();
+  verts.reserve((gLineA.size() + gLineB.size()) * kStrips * 4);
+  idx.reserve((gLineA.size() + gLineB.size()) * kStrips * 6);
+  for (const std::vector<PoleSpec> *line : {&gLineA, &gLineB}) {
+    for (const PoleSpec &p : *line) {
+      float reach = 16.0f * (1.0f + 0.05f * (float)((int(p.z) % 7)));
+      Vec3 b{p.x, kDecalY, p.z};
+      for (int k = 0; k < kStrips; k++) {
+        float t0 = (float)k / kStrips, t1 = (float)(k + 1) / kStrips;
+        Vec3 c0 = Vec3Add(b, Vec3Scale(sun, -reach * t0));
+        Vec3 c1 = Vec3Add(b, Vec3Scale(sun, -reach * t1));
+        float w0 = 0.30f + 0.95f * t0, w1 = 0.30f + 0.95f * t1;
+        float a0 = kAlpha[k], a1 = kAlpha[k + 1];
+        unsigned int v = (unsigned int)verts.size();
+        verts.push_back({c0.x + perp.x * w0, kDecalY, c0.z + perp.z * w0, 0, 1, 0,
+                         0, 0, 0, kMatShadow, a0});
+        verts.push_back({c0.x - perp.x * w0, kDecalY, c0.z - perp.z * w0, 0, 1, 0,
+                         0, 0, 0, kMatShadow, a0});
+        verts.push_back({c1.x - perp.x * w1, kDecalY, c1.z - perp.z * w1, 0, 1, 0,
+                         0, 0, 0, kMatShadow, a1});
+        verts.push_back({c1.x + perp.x * w1, kDecalY, c1.z + perp.z * w1, 0, 1, 0,
+                         0, 0, 0, kMatShadow, a1});
+        idx.push_back(v); idx.push_back(v + 1); idx.push_back(v + 2);
+        idx.push_back(v); idx.push_back(v + 2); idx.push_back(v + 3);
+      }
+    }
+  }
+
+  if (!vao) {
+    glGenVertexArrays(1, &vao);
+    glGenBuffers(1, &vbo);
+    glGenBuffers(1, &ibo);
+  }
+  glBindVertexArray(vao);
+  glBindBuffer(GL_ARRAY_BUFFER, vbo);
+  glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(verts.size() * sizeof(DecalVert)),
+               verts.data(), GL_STREAM_DRAW);
+  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
+  glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)(idx.size() * sizeof(unsigned int)),
+               idx.data(), GL_STREAM_DRAW);
+  glEnableVertexAttribArray(0);
+  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(DecalVert), (void *)0);
+  glEnableVertexAttribArray(1);
+  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(DecalVert), (void *)(3 * sizeof(float)));
+  glEnableVertexAttribArray(2);
+  glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(DecalVert), (void *)(6 * sizeof(float)));
+  glEnableVertexAttribArray(3);
+  glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(DecalVert), (void *)(9 * sizeof(float)));
+  glEnableVertexAttribArray(4);
+  glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, sizeof(DecalVert), (void *)(10 * sizeof(float)));
+
+  Mat4 vp;
+  Mat4Multiply(vp, gProj, view);
+  Mat4 model;
+  Mat4Identity(model);
+  glUseProgram(gObjProg.handle);
+  glUniformMatrix4fv(gObjProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
+  glUniformMatrix4fv(gObjProg.loc("uModel"), 1, GL_FALSE, model.data());
+  glUniform3f(gObjProg.loc("uEyePos"), eye.x, eye.y, eye.z);
+  glUniform3f(gObjProg.loc("uSunDir"), sunDir.x, sunDir.y, sunDir.z);
+  glUniform1f(gObjProg.loc("uTime"), (float)timeSec);
+  glUniform1f(gObjProg.loc("uRoadX"), kRoadX);
+  glUniform1f(gObjProg.loc("uHdrOut"), gPost.ready ? 1.0f : 0.0f);
+  glActiveTexture(GL_TEXTURE0);
+  glBindTexture(GL_TEXTURE_CUBE_MAP, gSkyCube);
+  glUniform1i(gObjProg.loc("uSkyEnvTex"), 0);
+  glActiveTexture(GL_TEXTURE1);
+  glBindTexture(GL_TEXTURE_2D, gShadowTex);
+  glUniform1i(gObjProg.loc("uShadowMap"), 1);
+  glActiveTexture(GL_TEXTURE0);
+  glUniformMatrix4fv(gObjProg.loc("uLightVP"), 1, GL_FALSE, gLightVP.data());
+  glUniform2f(gObjProg.loc("uShadowTexel"), 1.0f / (float)kShadowSize,
+              1.0f / (float)kShadowSize);
+  glUniform1f(gObjProg.loc("uShadowEnabled"), gShadowReady ? 1.0f : 0.0f);
+  glUniform1f(gObjProg.loc("uShadowStrength"), 1.0f);
+  glUniform1f(gObjProg.loc("uEnvMaxLod"), 8.0f);
+
+  glDisable(GL_CULL_FACE);
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_ZERO, GL_ONE_MINUS_SRC_ALPHA);
+  glDepthMask(GL_FALSE);
+  glDrawElements(GL_TRIANGLES, (GLsizei)idx.size(), GL_UNSIGNED_INT, nullptr);
+  glDepthMask(GL_TRUE);
+  glDisable(GL_BLEND);
+  glEnable(GL_CULL_FACE);
+  glBindVertexArray(0);
+}
+
 static void RenderSkyEnv(const Vec3 &eye, double timeSec) {
   if (!gSkyEnvReady || !gSkyProg.handle) return;
   static const GLenum faces[6] = {
@@ -1852,6 +1963,7 @@ static void RenderScene() {
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
   DrawGrid(view, eye, gSimTime);
+  DrawGroundShadows(view, eye, gSimTime);
   DrawSky(view, eye, gSimTime);
   if (hdr) postproc::End(gPost, gPostSettings, t);
   RenderHUD();
