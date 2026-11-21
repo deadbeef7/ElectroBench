@@ -34,12 +34,6 @@ uniform float uHdrOut;
 uniform samplerCube uSkyEnvTex;
 uniform float uEnvMaxLod;
 
-uniform sampler2D uShadowMap;
-uniform mat4  uLightVP;
-uniform vec2  uShadowTexel;
-uniform float uShadowEnabled;
-uniform float uShadowStrength;
-
 const float kMatPaint     = 0.0;
 const float kMatWood      = 1.0;
 const float kMatGround    = 2.0;
@@ -78,35 +72,6 @@ float vnoise(vec2 p) {
 }
 float octaveRes(float foot, float freq) {
     return 1.0 - smoothstep(0.35, 1.10, foot * freq);
-}
-
-// ------------------------------------------------------------------ shadowing
-float shadowFactor(vec3 P, vec3 N, float NoL) {
-    if (uShadowEnabled < 0.5) return 1.0;
-    // Normal offset in world units: moves the sample off the geometric
-    // surface so a depth-map texel cannot shadow itself at grazing angles.
-    vec3 offsetP = P + N * 0.001;
-    vec4 lp = uLightVP * vec4(offsetP, 1.0);
-    vec3 sc = lp.xyz / max(lp.w, 1e-5);
-    sc = sc * 0.5 + 0.5;
-    if (sc.x < 0.005 || sc.x > 0.995 || sc.y < 0.005 || sc.y > 0.995
-        || sc.z > 1.0) return 1.0;
-
-    // Slope-scaled bias plus a 3x3 PCF footprint. The map is 3072^2 over a
-    // 120 m corridor, so a few centimetres of bias is plenty.
-    // Depth bias over 230 m is huge in world space at a low sun; keep it at
-    // a few centimetres and let the shadow-pass polygon offset handle acne.
-    float bias = 0.000015;
-    float sum = 0.0;
-    for (int y = -1; y <= 1; y++) {
-        for (int x = -1; x <= 1; x++) {
-            float d = texture(uShadowMap,
-                              sc.xy + vec2(float(x), float(y)) * uShadowTexel).r;
-            sum += step(sc.z - bias, d);
-        }
-    }
-    float sh = sum / 9.0;
-    return mix(1.0, sh, uShadowStrength);
 }
 
 // ------------------------------------------------------------------ materials
@@ -316,7 +281,8 @@ void main() {
     float NoV = clamp(dot(N, V), 1e-4, 1.0);
     float NoL = max(dot(N, L), 0.0);
 
-    float shadow = shadowFactor(P, N, NoL);
+    // No sun map in this corridor: the only cast shadows are the pole decals.
+    const float shadow = 1.0;
 
     // Sun irradiance: the same extinction the sky shader uses, evaluated for
     // the local surface normal's altitude. Warm at this sun elevation.

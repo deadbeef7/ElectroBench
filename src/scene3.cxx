@@ -204,28 +204,13 @@ static GLuint gFontTex = 0;
 static GLuint gSkyVao = 0, gSkyVbo = 0, gSkyIbo = 0;
 static int gSkyIndexCount = 0;
 
-// Real-time sun shadow map and the sky cubemap the materials reflect. Both are
-// rebuilt every frame: the camera dollies down the corridor, so a cached static
-// shadow map would smear as soon as the view moved.
-static const int kShadowSize = 4096;
-static GLuint gShadowFbo = 0, gShadowTex = 0;
-static GLuint gShadowProg = 0;
-static bool gShadowReady = false;
-static Mat4 gLightVP;
+// The sky cubemap the materials reflect, rebuilt from the camera every frame.
 
 static const int kEnvSize = 256;
 static GLuint gSkyCube = 0, gSkyEnvFbo = 0, gSkyEnvDepth = 0;
 static bool gSkyEnvReady = false;
 static GLuint gObjVao = 0, gObjVbo = 0, gObjIbo = 0;
 static int gObjIndexCount = 0;
-// Casters only: the ground, road and paint are dropped from the shadow pass.
-// At this sun elevation a ground-level plate is almost edge-on to the light, so
-// the depth it stores along a ray is metres away from where the surface is,
-// and every receiver behind that depth turns black in one large blob.
-static GLuint gShadowVao = 0, gShadowIbo = 0;
-static int gShadowIndexCount = 0;
-static std::vector<unsigned int> gCasterIdx;
-
 static SDL_Window *gWindow = nullptr;
 static SDL_GLContext gContext = nullptr;
 static int gWindowWidth = WIDTH, gWindowHeight = HEIGHT;
@@ -244,7 +229,6 @@ static const double kResultsScreenSeconds = 4.0;
 double gFusedPoleScore = 0.0;      // read by main.cxx for the combined screen
 
 static const char *gScreenshotPath = nullptr;
-static const char *gDumpShadowPath = nullptr; // --dump-shadow-map FILE
 static std::vector<float> gShotTimes;
 static size_t gNextShot = 0;
 static int gWindowWidthOverride = 0;
@@ -1273,47 +1257,6 @@ static void AddTreeline() {
   glBindVertexArray(0);
   gObjIndexCount = (int)gIdx.size();
 
-  // Keep only the triangles that can actually cast: drop the horizontal plates
-  // that lie on the ground itself (ground y = 0, road 0.03, paint 0.05). The
-  // height cutoff is deliberately tight, because the flared foot of every pole
-  // is a wide, almost flat cone that sits on the same ground and has to keep
-  // casting: lose it and each pole stops touching its own shadow.
-  gCasterIdx.clear();
-  gCasterIdx.reserve(gIdx.size());
-  for (size_t i = 0; i + 2 < gIdx.size(); i += 3) {
-    bool flatReceiver = true;
-    for (int k = 0; k < 3; k++) {
-      const ObjVertex &v = gVerts[gIdx[i + (size_t)k]];
-      if (std::fabs(v.ny) < 0.9f || v.y > 0.06f) {
-        flatReceiver = false;
-        break;
-      }
-    }
-    if (flatReceiver) continue;
-    gCasterIdx.push_back(gIdx[i]);
-    gCasterIdx.push_back(gIdx[i + 1]);
-    gCasterIdx.push_back(gIdx[i + 2]);
-  }
-  gShadowIndexCount = (int)gCasterIdx.size();
-
-  glGenVertexArrays(1, &gShadowVao);
-  glGenBuffers(1, &gShadowIbo);
-  glBindVertexArray(gShadowVao);
-  glBindBuffer(GL_ARRAY_BUFFER, gObjVbo);
-  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gShadowIbo);
-  glBufferData(GL_ELEMENT_ARRAY_BUFFER, gCasterIdx.size() * sizeof(unsigned int),
-               gCasterIdx.data(), GL_STATIC_DRAW);
-  glEnableVertexAttribArray(0);
-  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(ObjVertex), (void *)0);
-  glEnableVertexAttribArray(1);
-  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(ObjVertex), (void *)(3 * sizeof(float)));
-  glEnableVertexAttribArray(2);
-  glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(ObjVertex), (void *)(6 * sizeof(float)));
-  glEnableVertexAttribArray(3);
-  glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(ObjVertex), (void *)(9 * sizeof(float)));
-  glEnableVertexAttribArray(4);
-  glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, sizeof(ObjVertex), (void *)(10 * sizeof(float)));
-  glBindVertexArray(0);
 }
 
 // ------------------------------------------------------------------- sky mesh
@@ -1483,15 +1426,6 @@ static void DrawGrid(const Mat4 &view, const Vec3 &eye, double timeSec) {
   glActiveTexture(GL_TEXTURE0);
   glBindTexture(GL_TEXTURE_CUBE_MAP, gSkyCube);
   glUniform1i(gObjProg.loc("uSkyEnvTex"), 0);
-  glActiveTexture(GL_TEXTURE1);
-  glBindTexture(GL_TEXTURE_2D, gShadowTex);
-  glUniform1i(gObjProg.loc("uShadowMap"), 1);
-  glActiveTexture(GL_TEXTURE0);
-  glUniformMatrix4fv(gObjProg.loc("uLightVP"), 1, GL_FALSE, gLightVP.data());
-  glUniform2f(gObjProg.loc("uShadowTexel"), 1.0f / (float)kShadowSize,
-              1.0f / (float)kShadowSize);
-  glUniform1f(gObjProg.loc("uShadowEnabled"), gShadowReady ? 1.0f : 0.0f);
-  glUniform1f(gObjProg.loc("uShadowStrength"), 1.0f);
   glUniform1f(gObjProg.loc("uEnvMaxLod"), 8.0f);
   glDrawElements(GL_TRIANGLES, gObjIndexCount, GL_UNSIGNED_INT, nullptr);
   glBindVertexArray(0);
@@ -1499,7 +1433,7 @@ static void DrawGrid(const Mat4 &view, const Vec3 &eye, double timeSec) {
 }
 
 
-// ------------------------------------------------- shadow map + sky cubemap
+// ----------------------------------------------------------- sky cubemap
 static GLuint LinkSourceProgram(const char *vsSrc, const char *fsSrc,
                                 const char *label) {
   GLuint vs = CompileShader(GL_VERTEX_SHADER, vsSrc, label);
@@ -1518,47 +1452,6 @@ static GLuint LinkSourceProgram(const char *vsSrc, const char *fsSrc,
   glDeleteShader(vs);
   glDeleteShader(fs);
   return prog;
-}
-
-static const char *kShadowVert = R"GLSL(
-#version 330 core
-layout(location = 0) in vec3 aPos;
-uniform mat4 uLightVP;
-uniform mat4 uModel;
-void main() {
-    gl_Position = uLightVP * uModel * vec4(aPos, 1.0);
-}
-)GLSL";
-
-static const char *kShadowFrag = R"GLSL(
-#version 330 core
-void main() {}
-)GLSL";
-
-static void CreateShadowResources() {
-  glGenTextures(1, &gShadowTex);
-  glBindTexture(GL_TEXTURE_2D, gShadowTex);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, kShadowSize, kShadowSize,
-               0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
-  const float border[4] = {1.0f, 1.0f, 1.0f, 1.0f};
-  glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, border);
-
-  glGenFramebuffers(1, &gShadowFbo);
-  glBindFramebuffer(GL_FRAMEBUFFER, gShadowFbo);
-  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D,
-                         gShadowTex, 0);
-  glDrawBuffer(GL_NONE);
-  glReadBuffer(GL_NONE);
-  gShadowReady = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
-  glBindFramebuffer(GL_FRAMEBUFFER, 0);
-  if (!gShadowReady)
-    std::fprintf(stderr, "pole scene: shadow map unavailable, falling back to no shadows\n");
-  else
-    std::printf("Shadows: %dx%d sun map, PCF 3x3\n", kShadowSize, kShadowSize);
 }
 
 static void CreateSkyEnvResources() {
@@ -1594,180 +1487,11 @@ static void CreateSkyEnvResources() {
     std::printf("Reflections: %dx%d linear sky cubemap\n", kEnvSize, kEnvSize);
 }
 
-static void UpdateLightMatrix(const Vec3 &eye, const Vec3 &sunDir) {
-  // Centre the orthographic sun frustum a little ahead of the camera so the
-  // poles and the cable web in front of the view are inside it. Extents are
-  // generous because a 0.2 elevation sun throws very long shadows.
-  Vec3 center{eye.x, 5.0f, eye.z + 42.0f};
-  Vec3 lightPos = Vec3Add(center, Vec3Scale(sunDir, 150.0f));
-  Mat4 lightView;
-  Mat4LookAt(lightView, lightPos, center, {0, 1, 0});
-  // Snap the texel grid to the world, but in LIGHT space. The map's axes are
-  // rotated against the world's (the sun looks across the road, not down it),
-  // so quantising the centre in world x/z leaves up to half a texel of drift:
-  // every time the camera crossed a step the whole shadow field shifted by a
-  // fraction of a texel, which at this sun's grazing angle is centimetres of
-  // creep on the ground and reads as shadows travelling with the camera. The
-  // view translation is where the world origin lands in light space, so
-  // quantising that steps the grid by whole texels and sampling stops moving.
-  const float kShadowExtent = 104.0f; // matches the ortho box below
-  const float texel = kShadowExtent / (float)kShadowSize;
-  lightView[12] = std::floor(lightView[12] / texel) * texel;
-  lightView[13] = std::floor(lightView[13] / texel) * texel;
-  Mat4 lightProj;
-  // 104 m across 4096 texels is 2.5 cm per texel: fine enough that the pole
-  // contacts land where the poles land, tight enough that both rows and the
-  // cable web in front of the camera stay inside the map.
-  Mat4Ortho(lightProj, -52.0f, 52.0f, -52.0f, 52.0f, 0.1f, 280.0f);
-  Mat4Multiply(gLightVP, lightProj, lightView);
-}
-
-static void RenderShadowMap() {
-  if (!gShadowReady || !gShadowProg) return;
-  glBindFramebuffer(GL_FRAMEBUFFER, gShadowFbo);
-  glViewport(0, 0, kShadowSize, kShadowSize);
-  glClear(GL_DEPTH_BUFFER_BIT);
-  glEnable(GL_DEPTH_TEST);
-  glDepthMask(GL_TRUE);
-  glDisable(GL_BLEND);
-  // Two-sided casting: cables and signs are single-sided, and culling either
-  // face leaves holes in the map that look like detached or missing shadows.
-  glDisable(GL_CULL_FACE);
-  // A small slope-scaled offset only. A large constant bias drags every
-  // caster's depth towards the light, which lifts the shadow off the ground at
-  // the contact point (and drivers do not agree on how big an offset unit is);
-  // the receivers that needed the big bias are no longer casters at all.
-  glEnable(GL_POLYGON_OFFSET_FILL);
-  glPolygonOffset(1.5f, 4.0f);
-
-  glUseProgram(gShadowProg);
-  glUniformMatrix4fv(glGetUniformLocation(gShadowProg, "uLightVP"), 1, GL_FALSE,
-                     gLightVP.data());
-  Mat4 model;
-  Mat4Identity(model);
-  glUniformMatrix4fv(glGetUniformLocation(gShadowProg, "uModel"), 1, GL_FALSE,
-                     model.data());
-  glBindVertexArray(gShadowVao);
-  glDrawElements(GL_TRIANGLES, gShadowIndexCount, GL_UNSIGNED_INT, nullptr);
-  glBindVertexArray(0);
-
-
-  glDisable(GL_POLYGON_OFFSET_FILL);
-  glEnable(GL_CULL_FACE);
-  glCullFace(GL_BACK);
-  glBindFramebuffer(GL_FRAMEBUFFER, 0);
-  glViewport(0, 0, gWindowWidth, gWindowHeight);
-}
-
-// ------------------------------------------------------- shadow map debug dump
-// --dump-shadow-map FILE writes the sun map this frame was shaded from (16-bit
-// PGM, depth in [0,1], 0 = nearest the sun) and prints what the map holds along
-// the shadow direction from the base of the nearest poles. That says directly
-// whether a pole is in the map where its contact shadow should start: if the
-// first samples read LIT while further ones read SHADOW, the shadow is detached
-// from the pole rather than missing.
-static void DumpShadowMap(const Vec3 &sunDir) {
-  if (!gDumpShadowPath || !gShadowReady) return;
-  static bool dumped = false;
-  if (dumped) return;
-  dumped = true;
-
-  const size_t n = (size_t)kShadowSize * (size_t)kShadowSize;
-  std::vector<float> depth(n, 1.0f);
-  glBindFramebuffer(GL_FRAMEBUFFER, gShadowFbo);
-  glPixelStorei(GL_PACK_ALIGNMENT, 1);
-  glReadPixels(0, 0, kShadowSize, kShadowSize, GL_DEPTH_COMPONENT, GL_FLOAT,
-               depth.data());
-  glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
-  std::FILE *f = std::fopen(gDumpShadowPath, "wb");
-  if (!f) {
-    std::fprintf(stderr, "pole scene: cannot write shadow map %s\n",
-                 gDumpShadowPath);
-    return;
-  }
-  std::fprintf(f, "P5\n%d %d\n65535\n", kShadowSize, kShadowSize);
-  std::vector<unsigned char> row((size_t)kShadowSize * 2);
-  for (int y = kShadowSize - 1; y >= 0; y--) { // PGM rows start at the top
-    for (int x = 0; x < kShadowSize; x++) {
-      float d = depth[(size_t)y * kShadowSize + x];
-      if (!(d >= 0.0f)) d = 0.0f;
-      if (d > 1.0f) d = 1.0f;
-      unsigned int v = (unsigned int)(d * 65535.0f + 0.5f);
-      row[(size_t)x * 2] = (unsigned char)((v >> 8) & 0xFFu);
-      row[(size_t)x * 2 + 1] = (unsigned char)(v & 0xFFu);
-    }
-    std::fwrite(row.data(), 1, row.size(), f);
-  }
-  std::fclose(f);
-  std::printf("Shadow map dumped: %s (%dx%d, 16-bit PGM, 0 = nearest the sun), "
-              "%d caster triangles\n",
-              gDumpShadowPath, kShadowSize, kShadowSize, gShadowIndexCount / 3);
-
-  Vec3 sd{-sunDir.x, 0.0f, -sunDir.z}; // shadows run away from the sun
-  float sl = std::sqrt(Vec3Dot(sd, sd));
-  if (sl > 1e-4f) {
-    sd.x /= sl;
-    sd.z /= sl;
-  }
-  const float *m = gLightVP.data();
-  auto lookup = [&](const Vec3 &p, float *u, float *v, float *stored, float *recv) {
-    float x = p.x, y = p.y + 0.001f, z = p.z; // the shader's normal offset
-    float cx = m[0] * x + m[4] * y + m[8] * z + m[12];
-    float cy = m[1] * x + m[5] * y + m[9] * z + m[13];
-    float cz = m[2] * x + m[6] * y + m[10] * z + m[14];
-    float cw = m[3] * x + m[7] * y + m[11] * z + m[15];
-    if (std::fabs(cw) < 1e-6f) cw = 1.0f;
-    *u = cx / cw * 0.5f + 0.5f;
-    *v = cy / cw * 0.5f + 0.5f;
-    *recv = (cz / cw) * 0.5f + 0.5f;
-    int tx = (int)(*u * (float)kShadowSize);
-    int ty = (int)(*v * (float)kShadowSize);
-    if (tx < 0 || tx >= kShadowSize || ty < 0 || ty >= kShadowSize) {
-      *stored = -1.0f;
-      return false;
-    }
-    *stored = depth[(size_t)ty * kShadowSize + tx];
-    return true;
-  };
-
-  std::printf("Sun direction (%.3f, %.3f, %.3f); shadow direction on the ground "
-              "(%.3f, %.3f)\n",
-              sunDir.x, sunDir.y, sunDir.z, sd.x, sd.z);
-  std::printf("Per pole: offset = metres along the shadow from the base, "
-              "stored = shadow map depth, ground = depth the ground samples\n");
-  const std::vector<PoleSpec> *lines[2] = {&gLineA, &gLineB};
-  const char *lineName[2] = {"lineA", "lineB"};
-  for (int li = 0; li < 2; li++) {
-    int shown = 0;
-    for (const PoleSpec &p : *lines[li]) {
-      if (shown >= 3) break;
-      if (p.z < gCamPos.z - 2.0f) continue; // only what is in front of the camera
-      shown++;
-      float u = 0.0f, v = 0.0f, stored = 0.0f, recv = 0.0f;
-      lookup({p.x, kGroundY, p.z}, &u, &v, &stored, &recv);
-      std::printf("  %s pole (%.2f, %.2f) base uv=(%.4f, %.4f)\n", lineName[li],
-                  p.x, p.z, u, v);
-      for (float d : {0.0f, 0.2f, 0.5f, 1.0f, 2.0f, 4.0f}) {
-        Vec3 q{p.x + sd.x * d, kGroundY, p.z + sd.z * d};
-        bool inside = lookup(q, &u, &v, &stored, &recv);
-        const char *state = "outside-map";
-        if (inside) state = (stored <= recv - 0.000015f) ? "SHADOW" : "LIT";
-        std::printf("    d=%.1fm uv=(%.4f, %.4f) stored=%.5f ground=%.5f %s\n", d,
-                    u, v, stored, recv, state);
-      }
-    }
-  }
-  std::fflush(stdout);
-}
-
-
 // ---------------------------------------------------------- pole shadows
-// The sun sits within 20 degrees of the camera's own axis down this corridor,
-// so a shadow-map shadow of a pole is a 26 cm wide strip that hides behind the
-// pole itself and leaves the foot looking pasted onto the road. Master drew a
-// set of fading ground strips for this reason and they are what makes the poles
-// read as planted, so the corridor keeps them, over the top of the sun map.
+// These are master's pole shadows, unchanged in intent: a fading strip laid on
+// the ground from each pole's base, away from the sun. They are the corridor's
+// only cast shadows now - the sun map that used to shade everything else drifted
+// with the camera, so it was removed rather than kept alongside them.
 static void DrawGroundShadows(const Mat4 &view, const Vec3 &eye, double timeSec) {
   static GLuint vao = 0, vbo = 0, ibo = 0;
   const float kDecalY = 0.08f; // above the road (0.03) and its paint (0.05)
@@ -1863,15 +1587,6 @@ static void DrawGroundShadows(const Mat4 &view, const Vec3 &eye, double timeSec)
   glActiveTexture(GL_TEXTURE0);
   glBindTexture(GL_TEXTURE_CUBE_MAP, gSkyCube);
   glUniform1i(gObjProg.loc("uSkyEnvTex"), 0);
-  glActiveTexture(GL_TEXTURE1);
-  glBindTexture(GL_TEXTURE_2D, gShadowTex);
-  glUniform1i(gObjProg.loc("uShadowMap"), 1);
-  glActiveTexture(GL_TEXTURE0);
-  glUniformMatrix4fv(gObjProg.loc("uLightVP"), 1, GL_FALSE, gLightVP.data());
-  glUniform2f(gObjProg.loc("uShadowTexel"), 1.0f / (float)kShadowSize,
-              1.0f / (float)kShadowSize);
-  glUniform1f(gObjProg.loc("uShadowEnabled"), gShadowReady ? 1.0f : 0.0f);
-  glUniform1f(gObjProg.loc("uShadowStrength"), 1.0f);
   glUniform1f(gObjProg.loc("uEnvMaxLod"), 8.0f);
 
   glDisable(GL_CULL_FACE);
@@ -1970,12 +1685,8 @@ static void RenderScene() {
   float aspect = (float)gWindowWidth / (float)gWindowHeight;
   Mat4Perspective(gProj, 52.0f, aspect, 0.1f, 900.0f);
 
-  // Sun shadows and the material-reflection environment are rendered before
-  // the camera target is bound; both are per-frame because the camera dollies.
-  Vec3 sunNow = SunDirNow(gSimTime);
-  UpdateLightMatrix(eye, sunNow);
-  RenderShadowMap();
-  DumpShadowMap(sunNow);
+  // The material-reflection environment is rendered before the camera target is
+  // bound; it is per-frame because the camera dollies along the corridor.
   RenderSkyEnv(eye, gSimTime);
 
   const bool hdr = postproc::Begin(gPost, gWindowWidth, gWindowHeight);
@@ -2063,8 +1774,6 @@ int PoleSceneParseArgs(int argc, char **argv) {
       }
     } else if (!std::strcmp(argv[i], "--width") && i + 1 < argc) {
       gWindowWidthOverride = std::atoi(argv[++i]);
-    } else if (!std::strcmp(argv[i], "--dump-shadow-map") && i + 1 < argc) {
-      gDumpShadowPath = argv[++i];
     }
   }
   return EXIT_SUCCESS;
@@ -2117,8 +1826,6 @@ static void Setup() {
   gHudProg = LinkProgram(resolveAssetPath("shaders/ps14/hud_vert.glsl").c_str(),
                          resolveAssetPath("shaders/pole/hud_frag.glsl").c_str());
 
-  gShadowProg = LinkSourceProgram(kShadowVert, kShadowFrag, "sun shadow");
-  CreateShadowResources();
   CreateSkyEnvResources();
 
   glEnable(GL_DEPTH_TEST);
