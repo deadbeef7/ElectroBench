@@ -1271,16 +1271,18 @@ static void AddTreeline() {
   glBindVertexArray(0);
   gObjIndexCount = (int)gIdx.size();
 
-  // Keep only the triangles that can actually cast: anything that is not a
-  // horizontal plate lying on the ground. Roofs stay in even though they are
-  // flat, because they sit high enough to throw a real shadow.
+  // Keep only the triangles that can actually cast: drop the horizontal plates
+  // that lie on the ground itself (ground y = 0, road 0.03, paint 0.05). The
+  // height cutoff is deliberately tight, because the flared foot of every pole
+  // is a wide, almost flat cone that sits on the same ground and has to keep
+  // casting: lose it and each pole stops touching its own shadow.
   gCasterIdx.clear();
   gCasterIdx.reserve(gIdx.size());
   for (size_t i = 0; i + 2 < gIdx.size(); i += 3) {
     bool flatReceiver = true;
     for (int k = 0; k < 3; k++) {
       const ObjVertex &v = gVerts[gIdx[i + (size_t)k]];
-      if (std::fabs(v.ny) < 0.9f || v.y > 0.9f) {
+      if (std::fabs(v.ny) < 0.9f || v.y > 0.06f) {
         flatReceiver = false;
         break;
       }
@@ -1623,8 +1625,12 @@ static void RenderShadowMap() {
   // Two-sided casting: cables and signs are single-sided, and culling either
   // face leaves holes in the map that look like detached or missing shadows.
   glDisable(GL_CULL_FACE);
+  // A small slope-scaled offset only. A large constant bias drags every
+  // caster's depth towards the light, which lifts the shadow off the ground at
+  // the contact point (and drivers do not agree on how big an offset unit is);
+  // the receivers that needed the big bias are no longer casters at all.
   glEnable(GL_POLYGON_OFFSET_FILL);
-  glPolygonOffset(0.0f, 256.0f); // units only; the slope factor is huge at a grazing sun
+  glPolygonOffset(1.5f, 4.0f);
 
   glUseProgram(gShadowProg);
   glUniformMatrix4fv(glGetUniformLocation(gShadowProg, "uLightVP"), 1, GL_FALSE,
