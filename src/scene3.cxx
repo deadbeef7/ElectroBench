@@ -182,11 +182,11 @@ static Program LinkProgram(const char *vsPath, const char *fsPath) {
 static const char *const gName = "ElectroBench - Scene 3 (Lain)";
 static const int WIDTH = 1280, HEIGHT = 720;
 static const float kGroundY = 0.0f;
-static Vec3 SunDirNow(double t) {
-  float az = 0.30f - 0.004f * (float)t;               
-  float el = 0.20f - 0.0011f * (float)t;                
-  if (el < 0.15f) el = 0.15f;
-  Vec3 s{az, el, 0.93f};
+// Fixed sun. It used to creep down with simulated time, so the shadows (and the
+// sun disk in the sky) drifted on their own while the camera dollied. The
+// corridor is graded and lit for one late-afternoon angle, so it stays put.
+static Vec3 SunDir() {
+  const Vec3 s{0.30f, 0.20f, 0.93f};
   return Vec3Norm(s);
 }
 
@@ -224,8 +224,9 @@ static int gShadowTexSize = 0, gShadowIndexCount = 0;
 static bool gShadowReady = false;
 static Mat4 gLightVP;
 static float gShadowTexelWorld = kShadowTexelTarget, gShadowBias = 0.0f;
+static float gShadowNear = 0.0f, gShadowFar = 1.0f; // light-space depth range
+static bool gShadowBuilt = false;
 static std::vector<unsigned int> gCasterIdx;
-static Vec3 gLastShadowSun{1e9f, 1e9f, 1e9f};
 
 static const int kEnvSize = 256;
 static GLuint gSkyCube = 0, gSkyEnvFbo = 0, gSkyEnvDepth = 0;
@@ -250,6 +251,7 @@ static const double kResultsScreenSeconds = 4.0;
 double gFusedPoleScore = 0.0;      // read by main.cxx for the combined screen
 
 static const char *gScreenshotPath = nullptr;
+static const char *gDumpShadowPath = nullptr; // --dump-shadow-map FILE
 static std::vector<float> gShotTimes;
 static size_t gNextShot = 0;
 static int gWindowWidthOverride = 0;
@@ -1451,7 +1453,7 @@ static void DrawSky(const Mat4 &view, const Vec3 &eye, double timeSec) {
   m[12] = eye.x; m[13] = eye.y; m[14] = eye.z;
   glUniformMatrix4fv(gSkyProg.loc("uModel"), 1, GL_FALSE, m.data());
   glUniform3f(gSkyProg.loc("uEyePos"), eye.x, eye.y, eye.z);
-  Vec3 sd = SunDirNow(timeSec);
+  Vec3 sd = SunDir();
   glUniform3f(gSkyProg.loc("uSunDir"), sd.x, sd.y, sd.z);
   glUniform1f(gSkyProg.loc("uTime"), (float)timeSec);
   glUniform1f(gSkyProg.loc("uHdrOut"), gPost.ready ? 1.0f : 0.0f);
@@ -1474,7 +1476,7 @@ static void DrawGrid(const Mat4 &view, const Vec3 &eye, double timeSec) {
   glUniformMatrix4fv(gObjProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
   glUniformMatrix4fv(gObjProg.loc("uModel"), 1, GL_FALSE, model.data());
   glUniform3f(gObjProg.loc("uEyePos"), eye.x, eye.y, eye.z);
-  Vec3 sd = SunDirNow(timeSec);
+  Vec3 sd = SunDir();
   glUniform3f(gObjProg.loc("uSunDir"), sd.x, sd.y, sd.z);
   glUniform1f(gObjProg.loc("uTime"), (float)timeSec);
   glUniform1f(gObjProg.loc("uRoadX"), kRoadX);
@@ -1609,6 +1611,8 @@ static void UpdateLightMatrix(const Vec3 &sunDir) {
   const float r = l + (float)gShadowTexSize * texel;
   const float t = b + (float)gShadowTexSize * texel;
   const float zn = box[4] - 2.0f, zf = box[5] + 2.0f;
+  gShadowNear = zn;
+  gShadowFar = zf;
   Mat4 lightProj;
   Mat4Ortho(lightProj, l, r, b, t, zn, zf);
   Mat4Multiply(gLightVP, lightProj, lightView);
@@ -1654,19 +1658,18 @@ static void CreateShadowResources(const Vec3 &sunDir) {
                 gShadowIndexCount / 3);
 }
 
-static void RenderShadowMap(const Vec3 &sunDir) {
-  if (!gShadowReady || !gShadowProg) return;
-  // Nothing here depends on the camera, so the map only has to be rebuilt when
-  // the sun itself has moved enough to matter (well under a tenth of a degree).
-  if (std::fabs(sunDir.x - gLastShadowSun.x) < 2e-3f &&
-      std::fabs(sunDir.y - gLastShadowSun.y) < 2e-3f &&
-      std::fabs(sunDir.z - gLastShadowSun.z) < 2e-3f)
-    return;
-  gLastShadowSun = sunDir;
-  UpdateLightMatrix(sunDir);
+static void RenderShadowMap() {
+  if (!gShadowReady || !gShadowProg || gShadowBuilt) return;
+  // The sun is fixed and the geometry is static, so the map is built once: there
+  // is nothing left that could make it drift, with time or with the camera.
+  gShadowBuilt = true;
+  UpdateLightMatrix(SunDir());
 
   glBindFramebuffer(GL_FRAMEBUFFER, gShadowFbo);
   glViewport(0, 0, gShadowTexSize, gShadowTexSize);
+  // The map's background must be the far plane whatever the last pass left in
+  // the clear value, or every receiver compares against depth 0 and goes black.
+  glClearDepth(1.0);
   glClear(GL_DEPTH_BUFFER_BIT);
   glEnable(GL_DEPTH_TEST);
   glDepthMask(GL_TRUE);
@@ -1693,6 +1696,66 @@ static void RenderShadowMap(const Vec3 &sunDir) {
   glViewport(0, 0, gWindowWidth, gWindowHeight);
 }
 
+// ------------------------------------------------------- shadow map debug dump
+// --dump-shadow-map FILE writes the map the corridor is shaded from, as a 16-bit
+// PGM (0 = nearest the sun, 1 = background). It is a fixed grid over a fixed
+// world box, so the printed numbers are everything needed to read a texel back
+// into the world; the dump is written once, from whichever frame comes first.
+static void DumpShadowMap() {
+  if (!gDumpShadowPath || !gShadowReady) return;
+  static bool dumped = false;
+  if (dumped) return;
+  dumped = true;
+
+  const size_t n = (size_t)gShadowTexSize * (size_t)gShadowTexSize;
+  std::vector<float> depth(n, 1.0f);
+  glBindTexture(GL_TEXTURE_2D, gShadowTex);
+  glPixelStorei(GL_PACK_ALIGNMENT, 1);
+  glGetTexImage(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, GL_FLOAT, depth.data());
+  glBindTexture(GL_TEXTURE_2D, 0);
+
+  std::FILE *f = std::fopen(gDumpShadowPath, "wb");
+  if (!f) {
+    std::fprintf(stderr, "pole scene: cannot write shadow map %s\n", gDumpShadowPath);
+    return;
+  }
+  std::fprintf(f, "P5\n%d %d\n65535\n", gShadowTexSize, gShadowTexSize);
+  std::vector<unsigned char> row((size_t)gShadowTexSize * 2);
+  float lo = 1.0f, hi = 0.0f;
+  size_t covered = 0;
+  for (int y = gShadowTexSize - 1; y >= 0; y--) { // PGM rows start at the top
+    for (int x = 0; x < gShadowTexSize; x++) {
+      float d = depth[(size_t)y * gShadowTexSize + x];
+      if (!(d >= 0.0f)) d = 0.0f;
+      if (d > 1.0f) d = 1.0f;
+      const unsigned int v = (unsigned int)(d * 65535.0f + 0.5f);
+      row[(size_t)x * 2] = (unsigned char)((v >> 8) & 0xFFu);
+      row[(size_t)x * 2 + 1] = (unsigned char)(v & 0xFFu);
+      if (d < 1.0f) {
+        covered++;
+        lo = std::min(lo, d);
+        hi = std::max(hi, d);
+      }
+    }
+    std::fwrite(row.data(), 1, row.size(), f);
+  }
+  std::fclose(f);
+
+  const Vec3 sun = SunDir();
+  std::printf("Shadow map dumped: %s (%dx%d, 16-bit PGM, 0 = nearest the sun, "
+              "1 = background, first row is light-space +y)\n",
+              gDumpShadowPath, gShadowTexSize, gShadowTexSize);
+  std::printf("  sun (%.3f, %.3f, %.3f), %.1f cm per texel over the fixed world box "
+              "x[%.0f %.0f] y[%.0f %.0f] z[%.0f %.0f]\n",
+              sun.x, sun.y, sun.z, gShadowTexelWorld * 100.0f, kShadowMin.x, kShadowMax.x,
+              kShadowMin.y, kShadowMax.y, kShadowMin.z, kShadowMax.z);
+  std::printf("  light-space depth %.1f .. %.1f m, %d caster triangles, "
+              "%.1f%% of texels hold geometry (depth %.4f .. %.4f)\n",
+              gShadowNear, gShadowFar, gShadowIndexCount / 3,
+              100.0 * (double)covered / (double)n, lo, hi);
+  std::fflush(stdout);
+}
+
 // ---------------------------------------------------------- pole shadows
 // These are master's pole shadows, unchanged in intent: a fading strip laid on
 // the ground from each pole's base, away from the sun. They are the corridor's
@@ -1706,7 +1769,7 @@ static void DrawGroundShadows(const Mat4 &view, const Vec3 &eye, double timeSec)
   static std::vector<DecalVert> verts;
   static std::vector<unsigned int> idx;
 
-  Vec3 sunDir = SunDirNow(timeSec);
+  Vec3 sunDir = SunDir();
   Vec3 sun = Vec3Norm({sunDir.x, 0.0f, sunDir.z});
   Vec3 perp{-sun.z, 0.0f, sun.x};
   // Blend is (GL_ZERO, GL_ONE_MINUS_SRC_ALPHA), so alpha is how much of the
@@ -1815,7 +1878,7 @@ static void RenderSkyEnv(const Vec3 &eye, double timeSec) {
   static const Vec3 fwd[6] = {{1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1}};
   static const Vec3 up[6] = {{0,-1,0},{0,-1,0},{0,0,1},{0,0,-1},{0,-1,0},{0,-1,0}};
 
-  Vec3 sd = SunDirNow(timeSec);
+  Vec3 sd = SunDir();
   Mat4 proj;
   Mat4Perspective(proj, 90.0f, 1.0f, 0.1f, 2000.0f);
 
@@ -1893,7 +1956,8 @@ static void RenderScene() {
 
   // Sun shadows and the material-reflection environment are rendered before
   // the camera target is bound. Neither takes the eye as an input.
-  RenderShadowMap(SunDirNow(gSimTime));
+  RenderShadowMap();
+  DumpShadowMap();
   RenderSkyEnv(eye, gSimTime);
 
   const bool hdr = postproc::Begin(gPost, gWindowWidth, gWindowHeight);
@@ -1981,6 +2045,8 @@ int PoleSceneParseArgs(int argc, char **argv) {
       }
     } else if (!std::strcmp(argv[i], "--width") && i + 1 < argc) {
       gWindowWidthOverride = std::atoi(argv[++i]);
+    } else if (!std::strcmp(argv[i], "--dump-shadow-map") && i + 1 < argc) {
+      gDumpShadowPath = argv[++i];
     }
   }
   return EXIT_SUCCESS;
@@ -2034,8 +2100,8 @@ static void Setup() {
                          resolveAssetPath("shaders/pole/hud_frag.glsl").c_str());
 
   gShadowProg = LinkSourceProgram(kShadowVert, kShadowFrag, "sun shadow");
-  CreateShadowResources(SunDirNow(gSimTime));
-  UpdateLightMatrix(SunDirNow(gSimTime));
+  CreateShadowResources(SunDir());
+  UpdateLightMatrix(SunDir());
   CreateSkyEnvResources();
 
   glEnable(GL_DEPTH_TEST);
