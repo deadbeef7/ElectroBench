@@ -1599,15 +1599,21 @@ static void UpdateLightMatrix(const Vec3 &eye, const Vec3 &sunDir) {
   // poles and the cable web in front of the view are inside it. Extents are
   // generous because a 0.2 elevation sun throws very long shadows.
   Vec3 center{eye.x, 5.0f, eye.z + 42.0f};
-  // Snap the centre to the shadow texel grid. Without this the whole map
-  // slides under the scene as the camera dollies, and edges crawl.
-  const float kShadowExtent = 104.0f; // matches the ortho box below
-  const float texel = kShadowExtent / (float)kShadowSize;
-  center.x = std::floor(center.x / texel) * texel;
-  center.z = std::floor(center.z / texel) * texel;
   Vec3 lightPos = Vec3Add(center, Vec3Scale(sunDir, 150.0f));
   Mat4 lightView;
   Mat4LookAt(lightView, lightPos, center, {0, 1, 0});
+  // Snap the texel grid to the world, but in LIGHT space. The map's axes are
+  // rotated against the world's (the sun looks across the road, not down it),
+  // so quantising the centre in world x/z leaves up to half a texel of drift:
+  // every time the camera crossed a step the whole shadow field shifted by a
+  // fraction of a texel, which at this sun's grazing angle is centimetres of
+  // creep on the ground and reads as shadows travelling with the camera. The
+  // view translation is where the world origin lands in light space, so
+  // quantising that steps the grid by whole texels and sampling stops moving.
+  const float kShadowExtent = 104.0f; // matches the ortho box below
+  const float texel = kShadowExtent / (float)kShadowSize;
+  lightView[12] = std::floor(lightView[12] / texel) * texel;
+  lightView[13] = std::floor(lightView[13] / texel) * texel;
   Mat4 lightProj;
   // 104 m across 4096 texels is 2.5 cm per texel: fine enough that the pole
   // contacts land where the poles land, tight enough that both rows and the
