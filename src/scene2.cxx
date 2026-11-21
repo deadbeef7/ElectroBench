@@ -457,7 +457,7 @@ static float Smooth01(float x) {
 
 static void UpdateAutoCamera(float t) {
   const float kCycle = 26.0f;                            // lap: forward, turn, restore
-  const float kForward = 24.0f;                          // units pushed towards the sun
+  const float kForward = 72.0f;                          // units pushed towards the sun
   const float kTurnLeft = 0.38f;                         // ~22 deg of yaw
   const float kEyeX = 42.0f, kEyeY = 7.5f, kEyeZ = 0.0f; // the reference pose
 
