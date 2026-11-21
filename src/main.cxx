@@ -33,17 +33,14 @@ int gWinW = 1280, gWinH = 720;
 bool gWindowedMode = false;
 
 // -------------------------------------------------------------- window setup
-// A window created with SDL_WINDOW_FULLSCREEN_DESKTOP is not always switched to
-// borderless fullscreen by macOS when it is not the first window of the
-// process: the benchmark destroys the scene-1 window and opens fresh ones for
-// scenes 2 and 3, and those came up as ordinary windows. Apple builds therefore
-// create a normal window and BenchApplyDesktopFullscreen() switches it over.
+// Every scene asks for borderless fullscreen in SDL_CreateWindow, which is the
+// path the display server presents cleanly (a window created fullscreen never
+// shows a torn frame, where one switched over while it is already drawing can).
+// macOS does not always honour the flag on every window of the process, so
+// BenchApplyDesktopFullscreen() still switches the window over afterwards for
+// the ones it missed.
 Uint32 BenchCreateFullscreenFlag() {
-#if defined(__APPLE__)
-  return 0u;
-#else
   return gWindowedMode ? (Uint32)0 : (Uint32)SDL_WINDOW_FULLSCREEN_DESKTOP;
-#endif
 }
 
 void BenchApplyDesktopFullscreen(SDL_Window *win) {
