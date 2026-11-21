@@ -37,6 +37,8 @@
 #include "post.hxx"
 
 extern bool gWindowedMode;
+Uint32 BenchCreateFullscreenFlag();
+void BenchApplyDesktopFullscreen(SDL_Window *win);
 #include "font_atlas.hxx"
 
 // lodepng.c is pulled in by lib/lodepng.h, which lib/process_image.h includes;
@@ -1452,7 +1454,7 @@ int RunGunScene(bool *gaveUpOut) {
                                SDL_WINDOWPOS_UNDEFINED, winW, winH,
                                SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN |
                                    SDL_WINDOW_RESIZABLE |
-                                   (gWindowedMode ? 0u : SDL_WINDOW_FULLSCREEN_DESKTOP));
+                                   BenchCreateFullscreenFlag());
     if (!gWindow) {
       std::fprintf(stderr, "Window could not be created! SDL_Error: %s\n",
                    SDL_GetError());
@@ -1472,6 +1474,7 @@ int RunGunScene(bool *gaveUpOut) {
     if (gaveUpOut) *gaveUpOut = true;
     return 1;
   }
+  BenchApplyDesktopFullscreen(gWindow);
   if (!gWindowedMode) {
     int dw = gWindowWidth, dh = gWindowHeight;
     SDL_GetWindowSize(gWindow, &dw, &dh);

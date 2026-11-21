@@ -26,6 +26,8 @@
 #include "post.hxx"
 
 extern bool gWindowedMode;
+Uint32 BenchCreateFullscreenFlag();
+void BenchApplyDesktopFullscreen(SDL_Window *win);
 #include "font_atlas.hxx" // shared HUD font data and atlas layout
 
 
@@ -990,11 +992,20 @@ int RunOceanScene(bool *gaveUpOut) {
 
   gWindow = SDL_CreateWindow(NAME, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, winW, winH,
                              SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE
-                             | (gWindowedMode ? 0u : SDL_WINDOW_FULLSCREEN_DESKTOP));
+                             | BenchCreateFullscreenFlag());
   if (!gWindow) {
     std::fprintf(stderr, "Window could not be created! SDL_Error: %s\n", SDL_GetError());
     return EXIT_FAILURE;
   }
+  gContext = SDL_GL_CreateContext(gWindow);
+  if (!gContext) {
+    std::printf("Dusk ocean scene: OpenGL 3.3 core context unavailable — skipping this scene\n");
+    std::fflush(stdout);
+    SDL_Quit();
+    if (gaveUpOut) *gaveUpOut = true;
+    return 1;
+  }
+  BenchApplyDesktopFullscreen(gWindow);
   if (!gWindowedMode) {
     int dw = winW, dh = winH;
     SDL_GetWindowSize(gWindow, &dw, &dh);
@@ -1006,17 +1017,9 @@ int RunOceanScene(bool *gaveUpOut) {
     }
   }
   if (gWindowWidthOverride > 0) {
-    gWindowWidth = winW;  
+    gWindowWidth = winW;
     gWindowHeight = winH;
     glViewport(0, 0, winW, winH);
-  }
-  gContext = SDL_GL_CreateContext(gWindow);
-  if (!gContext) {
-    std::printf("Dusk ocean scene: OpenGL 3.3 core context unavailable — skipping this scene\n");
-    std::fflush(stdout);
-    SDL_Quit();
-    if (gaveUpOut) *gaveUpOut = true;
-    return 1;
   }
   std::printf("Display: %s %dx%d | capture with Win+PrtScr, or --screenshot FILE (outputs a ppm file)\n",
               gWindowedMode ? "windowed" : "borderless fullscreen",

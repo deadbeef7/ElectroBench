@@ -32,6 +32,38 @@ float gShotTime = 3.0f;
 int gWinW = 1280, gWinH = 720;
 bool gWindowedMode = false;
 
+// -------------------------------------------------------------- window setup
+// A window created with SDL_WINDOW_FULLSCREEN_DESKTOP is not always switched to
+// borderless fullscreen by macOS when it is not the first window of the
+// process: the benchmark destroys the scene-1 window and opens fresh ones for
+// scenes 2 and 3, and those came up as ordinary windows. Apple builds therefore
+// create a normal window and BenchApplyDesktopFullscreen() switches it over.
+Uint32 BenchCreateFullscreenFlag() {
+#if defined(__APPLE__)
+  return 0u;
+#else
+  return gWindowedMode ? (Uint32)0 : (Uint32)SDL_WINDOW_FULLSCREEN_DESKTOP;
+#endif
+}
+
+void BenchApplyDesktopFullscreen(SDL_Window *win) {
+  if (!win || gWindowedMode) return;
+  if (SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN) return;
+  if (SDL_SetWindowFullscreen(win, SDL_WINDOW_FULLSCREEN_DESKTOP) != 0) {
+    std::fprintf(stderr, "ElectroBench: could not enter borderless fullscreen: %s\n",
+                 SDL_GetError());
+    return;
+  }
+  // The window manager finishes the switch asynchronously, so wait for the flag
+  // before the caller reads the window size back for its viewport.
+  const Uint32 deadline = SDL_GetTicks() + 1000;
+  while (!(SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN) &&
+         SDL_GetTicks() < deadline) {
+    SDL_PumpEvents();
+    SDL_Delay(2);
+  }
+}
+
 // ------------------------------------------------------------- scene entry
 int RunGunScene(bool *gaveUpOut);              // scene 1 (GL 3.3 range)
 extern double gFusedOgScore;                   // scene 1's final score
@@ -206,7 +238,7 @@ static void OpenResultsWindow() {
   window = SDL_CreateWindow("ElectroBench - Results", SDL_WINDOWPOS_UNDEFINED,
                             SDL_WINDOWPOS_UNDEFINED, gWinW, gWinH,
                             SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN |
-                                (gWindowedMode ? 0u : SDL_WINDOW_FULLSCREEN_DESKTOP));
+                                BenchCreateFullscreenFlag());
   if (!window) {
     std::fprintf(stderr, "Results window could not be created! SDL_Error: %s\n",
                  SDL_GetError());
@@ -218,6 +250,7 @@ static void OpenResultsWindow() {
                  SDL_GetError());
     std::exit(EXIT_FAILURE);
   }
+  BenchApplyDesktopFullscreen(window);
   SDL_GL_SetSwapInterval(0);
   SDL_GetWindowSize(window, &gWinW, &gWinH);
   glViewport(0, 0, gWinW, gWinH);

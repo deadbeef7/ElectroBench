@@ -34,6 +34,8 @@
 #include "post.hxx"
 
 extern bool gWindowedMode;
+Uint32 BenchCreateFullscreenFlag();
+void BenchApplyDesktopFullscreen(SDL_Window *win);
 #include "font_atlas.hxx"
 // --------------------------------------------------------------- math block
 struct Vec3 {
@@ -1901,7 +1903,7 @@ int RunPoleScene(bool *gaveUpOut) {
     gWindow = SDL_CreateWindow(gName, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
                                winW, winH,
                                SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE
-                               | (gWindowedMode ? 0u : SDL_WINDOW_FULLSCREEN_DESKTOP));
+                               | BenchCreateFullscreenFlag());
     if (!gWindow) {
       std::fprintf(stderr, "Window could not be created! SDL_Error: %s\n", SDL_GetError());
       return EXIT_FAILURE;
@@ -1919,6 +1921,7 @@ int RunPoleScene(bool *gaveUpOut) {
     if (gaveUpOut) *gaveUpOut = true;
     return 1;
   }
+  BenchApplyDesktopFullscreen(gWindow);
   if (!gWindowedMode) {
     int dw = gWindowWidth, dh = gWindowHeight;
     SDL_GetWindowSize(gWindow, &dw, &dh);
