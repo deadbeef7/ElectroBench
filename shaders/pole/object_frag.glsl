@@ -34,6 +34,13 @@ uniform float uHdrOut;
 uniform samplerCube uSkyEnvTex;
 uniform float uEnvMaxLod;
 
+uniform sampler2D uShadowMap;
+uniform mat4  uLightVP;
+uniform vec2  uShadowTexel;
+uniform float uShadowBias;
+uniform float uShadowNoffset;
+uniform float uShadowEnabled;
+
 const float kMatPaint     = 0.0;
 const float kMatWood      = 1.0;
 const float kMatGround    = 2.0;
@@ -72,6 +79,42 @@ float vnoise(vec2 p) {
 }
 float octaveRes(float foot, float freq) {
     return 1.0 - smoothstep(0.35, 1.10, foot * freq);
+}
+
+// ------------------------------------------------------------------ shadowing
+// Sun map for everything but the poles: one depth map over the whole corridor,
+// built from a fixed world box so it cannot slide with the camera. About 5 cm
+// per texel, hence a normal offset, a slope-scaled depth bias and a filtered
+// lookup rather than a single tap.
+float shadowFactor(vec3 P, vec3 N, float NoL) {
+    if (uShadowEnabled < 0.5) return 1.0;
+    vec4 lp = uLightVP * vec4(P + N * uShadowNoffset, 1.0);
+    vec3 sc = lp.xyz / max(lp.w, 1e-5);
+    sc = sc * 0.5 + 0.5;
+    if (sc.x < 0.002 || sc.x > 0.998 || sc.y < 0.002 || sc.y > 0.998 || sc.z > 1.0)
+        return 1.0;
+    float cosT = clamp(NoL, 0.0, 1.0);
+    float tanT = sqrt(max(1.0 - cosT * cosT, 0.0)) / max(cosT, 0.08);
+    float bias = uShadowBias * (1.0 + clamp(tanT, 0.0, 12.0));
+
+    // A 12-tap Vogel disk about three texels across, rotated per pixel. An
+    // axis-aligned kernel over this map beats against the texel grid wherever a
+    // terminator runs almost along the surface, which reads as stair steps or a
+    // diamond lattice; spreading the taps on a rotated disk turns that into
+    // noise, and three texels is about the penumbra an 11 degree sun gives.
+    float angle = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453)
+                  * 6.2831853;
+    mat2 rot = mat2(cos(angle), sin(angle), -sin(angle), cos(angle));
+    const int kTaps = 12;
+    float sum = 0.0;
+    for (int i = 0; i < kTaps; i++) {
+        float fi = float(i) + 0.5;
+        float radius = sqrt(fi / float(kTaps)) * 3.0;
+        float theta = fi * 2.39996323; // golden angle, evenly spread
+        vec2 o = rot * vec2(cos(theta), sin(theta)) * radius;
+        sum += step(sc.z - bias, texture(uShadowMap, sc.xy + o * uShadowTexel).r);
+    }
+    return sum / float(kTaps);
 }
 
 // ------------------------------------------------------------------ materials
@@ -281,8 +324,7 @@ void main() {
     float NoV = clamp(dot(N, V), 1e-4, 1.0);
     float NoL = max(dot(N, L), 0.0);
 
-    // No sun map in this corridor: the only cast shadows are the pole decals.
-    const float shadow = 1.0;
+    float shadow = shadowFactor(P, N, NoL);
 
     // Sun irradiance: the same extinction the sky shader uses, evaluated for
     // the local surface normal's altitude. Warm at this sun elevation.

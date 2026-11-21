@@ -205,6 +205,27 @@ static GLuint gSkyVao = 0, gSkyVbo = 0, gSkyIbo = 0;
 static int gSkyIndexCount = 0;
 
 // The sky cubemap the materials reflect, rebuilt from the camera every frame.
+//
+// The sun shadow map is the opposite: its frustum is fitted to the scene's own
+// static world bounds and the sun direction, and the eye is deliberately not an
+// input. That is the whole point - the old map re-centred itself on the camera
+// every frame and its shadow edges crept along the ground whenever the view
+// moved. A frustum that never looks at the camera cannot do that.
+static const float kShadowTexelTarget = 0.055f; // metres per texel, before rounding
+// The map covers the corridor the camera lives in, not the whole skyline: the
+// scene's own bounds run out to 700 m of backdrop blocks, which would push a
+// single map to 21 cm per texel. These numbers are world constants, never
+// derived from the eye, which is what keeps the shadows tied to the ground.
+static const Vec3 kShadowMin{-140.0f, 0.0f, -120.0f};
+static const Vec3 kShadowMax{140.0f, 40.0f, 360.0f};
+static GLuint gShadowFbo = 0, gShadowTex = 0, gShadowProg = 0;
+static GLuint gShadowVao = 0, gShadowIbo = 0;
+static int gShadowTexSize = 0, gShadowIndexCount = 0;
+static bool gShadowReady = false;
+static Mat4 gLightVP;
+static float gShadowTexelWorld = kShadowTexelTarget, gShadowBias = 0.0f;
+static std::vector<unsigned int> gCasterIdx;
+static Vec3 gLastShadowSun{1e9f, 1e9f, 1e9f};
 
 static const int kEnvSize = 256;
 static GLuint gSkyCube = 0, gSkyEnvFbo = 0, gSkyEnvDepth = 0;
@@ -1257,6 +1278,42 @@ static void AddTreeline() {
   glBindVertexArray(0);
   gObjIndexCount = (int)gIdx.size();
 
+  // Casters only: the ground, road and paint are dropped from the shadow pass.
+  // At this sun elevation a ground-level plate is almost edge-on to the light, so
+  // the depth it stores along a ray is metres away from where the surface is,
+  // and every receiver behind that depth turns black in one large blob.
+  gCasterIdx.clear();
+  gCasterIdx.reserve(gIdx.size());
+  for (size_t i = 0; i + 2 < gIdx.size(); i += 3) {
+    bool flatReceiver = true;
+    for (int k = 0; k < 3; k++) {
+      const ObjVertex &v = gVerts[gIdx[i + (size_t)k]];
+      if (std::fabs(v.y) > 0.06f || std::fabs(v.ny) < 0.9f) {
+        flatReceiver = false;
+        break;
+      }
+    }
+    if (flatReceiver) continue;
+    gCasterIdx.push_back(gIdx[i]);
+    gCasterIdx.push_back(gIdx[i + 1]);
+    gCasterIdx.push_back(gIdx[i + 2]);
+  }
+  gShadowIndexCount = (int)gCasterIdx.size();
+
+  glGenVertexArrays(1, &gShadowVao);
+  glGenBuffers(1, &gShadowIbo);
+  glBindVertexArray(gShadowVao);
+  glBindBuffer(GL_ARRAY_BUFFER, gObjVbo);
+  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gShadowIbo);
+  glBufferData(GL_ELEMENT_ARRAY_BUFFER, gCasterIdx.size() * sizeof(unsigned int),
+               gCasterIdx.data(), GL_STATIC_DRAW);
+  for (int a = 0; a < 5; a++) glEnableVertexAttribArray((GLuint)a);
+  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(ObjVertex), (void *)0);
+  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(ObjVertex), (void *)(3 * sizeof(float)));
+  glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(ObjVertex), (void *)(6 * sizeof(float)));
+  glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(ObjVertex), (void *)(9 * sizeof(float)));
+  glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, sizeof(ObjVertex), (void *)(10 * sizeof(float)));
+  glBindVertexArray(0);
 }
 
 // ------------------------------------------------------------------- sky mesh
@@ -1426,6 +1483,16 @@ static void DrawGrid(const Mat4 &view, const Vec3 &eye, double timeSec) {
   glActiveTexture(GL_TEXTURE0);
   glBindTexture(GL_TEXTURE_CUBE_MAP, gSkyCube);
   glUniform1i(gObjProg.loc("uSkyEnvTex"), 0);
+  glActiveTexture(GL_TEXTURE1);
+  glBindTexture(GL_TEXTURE_2D, gShadowTex);
+  glUniform1i(gObjProg.loc("uShadowMap"), 1);
+  glActiveTexture(GL_TEXTURE0);
+  glUniformMatrix4fv(gObjProg.loc("uLightVP"), 1, GL_FALSE, gLightVP.data());
+  glUniform2f(gObjProg.loc("uShadowTexel"), 1.0f / (float)gShadowTexSize,
+              1.0f / (float)gShadowTexSize);
+  glUniform1f(gObjProg.loc("uShadowBias"), gShadowBias);
+  glUniform1f(gObjProg.loc("uShadowNoffset"), 0.02f);
+  glUniform1f(gObjProg.loc("uShadowEnabled"), gShadowReady ? 1.0f : 0.0f);
   glUniform1f(gObjProg.loc("uEnvMaxLod"), 8.0f);
   glDrawElements(GL_TRIANGLES, gObjIndexCount, GL_UNSIGNED_INT, nullptr);
   glBindVertexArray(0);
@@ -1485,6 +1552,145 @@ static void CreateSkyEnvResources() {
     std::fprintf(stderr, "pole scene: sky cubemap unavailable, reflections fall back to sky\n");
   else
     std::printf("Reflections: %dx%d linear sky cubemap\n", kEnvSize, kEnvSize);
+}
+
+// ------------------------------------------------------- sun shadow map
+static const char *kShadowVert = R"GLSL(
+#version 330 core
+layout(location = 0) in vec3 aPos;
+uniform mat4 uLightVP;
+void main() {
+    gl_Position = uLightVP * vec4(aPos, 1.0);
+}
+)GLSL";
+
+static const char *kShadowFrag = R"GLSL(
+#version 330 core
+void main() {}
+)GLSL";
+
+// Bounding box of the scene's world corners in light space. z is flipped to a
+// positive depth because a look-at view looks down its own -z.
+static void LightBox(const Mat4 &lightView, float box[6]) {
+  float l = 1e30f, r = -1e30f, b = 1e30f, t = -1e30f, n = 1e30f, f = -1e30f;
+  for (int i = 0; i < 8; i++) {
+    const Vec3 c{(i & 1) ? kShadowMax.x : kShadowMin.x, (i & 2) ? kShadowMax.y : kShadowMin.y,
+                 (i & 4) ? kShadowMax.z : kShadowMin.z};
+    const float x = lightView[0] * c.x + lightView[4] * c.y + lightView[8] * c.z + lightView[12];
+    const float y = lightView[1] * c.x + lightView[5] * c.y + lightView[9] * c.z + lightView[13];
+    const float z = lightView[2] * c.x + lightView[6] * c.y + lightView[10] * c.z + lightView[14];
+    l = std::min(l, x); r = std::max(r, x);
+    b = std::min(b, y); t = std::max(t, y);
+    n = std::min(n, -z); f = std::max(f, -z);
+  }
+  box[0] = l; box[1] = r; box[2] = b; box[3] = t; box[4] = n; box[5] = f;
+}
+
+static Mat4 ShadowLightView(const Vec3 &sunDir) {
+  const Vec3 center = Vec3Scale(Vec3Add(kShadowMin, kShadowMax), 0.5f);
+  const float radius = 0.5f * Vec3Len(Vec3Sub(kShadowMax, kShadowMin)) + 2.0f;
+  Mat4 view;
+  Mat4LookAt(view, Vec3Add(center, Vec3Scale(Vec3Norm(sunDir), radius)), center,
+             {0.0f, 1.0f, 0.0f});
+  return view;
+}
+
+static void UpdateLightMatrix(const Vec3 &sunDir) {
+  const Mat4 lightView = ShadowLightView(sunDir);
+  float box[6];
+  LightBox(lightView, box);
+  // Whole-texel alignment in light space. The bounds and the sun are the only
+  // inputs, so this grid is fixed in the world: as the simulated sun creeps the
+  // alignment is recomputed from scratch rather than accumulated, and shadow
+  // edges do not shimmer.
+  const float texel = gShadowTexelWorld;
+  const float l = std::floor(box[0] / texel) * texel;
+  const float b = std::floor(box[2] / texel) * texel;
+  const float r = l + (float)gShadowTexSize * texel;
+  const float t = b + (float)gShadowTexSize * texel;
+  const float zn = box[4] - 2.0f, zf = box[5] + 2.0f;
+  Mat4 lightProj;
+  Mat4Ortho(lightProj, l, r, b, t, zn, zf);
+  Mat4Multiply(gLightVP, lightProj, lightView);
+  // One texel of depth, in the [0,1] units the shader compares against.
+  gShadowBias = texel / std::max(zf - zn, 1.0f);
+}
+
+static void CreateShadowResources(const Vec3 &sunDir) {
+  float box[6];
+  LightBox(ShadowLightView(sunDir), box);
+  const float side = std::max(box[1] - box[0], box[3] - box[2]);
+  GLint maxTex = 4096;
+  glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTex);
+  int size = 1024;
+  while ((float)size < side / kShadowTexelTarget && size < 8192 && size * 2 <= maxTex)
+    size *= 2;
+  gShadowTexSize = std::min(size, (int)maxTex);
+  gShadowTexelWorld = std::max(side / (float)gShadowTexSize, 0.005f);
+
+  glGenTextures(1, &gShadowTex);
+  glBindTexture(GL_TEXTURE_2D, gShadowTex);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, gShadowTexSize, gShadowTexSize,
+               0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+  const float border[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+  glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, border);
+
+  glGenFramebuffers(1, &gShadowFbo);
+  glBindFramebuffer(GL_FRAMEBUFFER, gShadowFbo);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, gShadowTex, 0);
+  glDrawBuffer(GL_NONE);
+  glReadBuffer(GL_NONE);
+  gShadowReady = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  if (!gShadowReady)
+    std::fprintf(stderr, "pole scene: shadow map unavailable, falling back to no shadows\n");
+  else
+    std::printf("Shadows: %dx%d sun map, %.1f cm per texel over %.0f m, %d caster triangles\n",
+                gShadowTexSize, gShadowTexSize, gShadowTexelWorld * 100.0f, side,
+                gShadowIndexCount / 3);
+}
+
+static void RenderShadowMap(const Vec3 &sunDir) {
+  if (!gShadowReady || !gShadowProg) return;
+  // Nothing here depends on the camera, so the map only has to be rebuilt when
+  // the sun itself has moved enough to matter (well under a tenth of a degree).
+  if (std::fabs(sunDir.x - gLastShadowSun.x) < 2e-3f &&
+      std::fabs(sunDir.y - gLastShadowSun.y) < 2e-3f &&
+      std::fabs(sunDir.z - gLastShadowSun.z) < 2e-3f)
+    return;
+  gLastShadowSun = sunDir;
+  UpdateLightMatrix(sunDir);
+
+  glBindFramebuffer(GL_FRAMEBUFFER, gShadowFbo);
+  glViewport(0, 0, gShadowTexSize, gShadowTexSize);
+  glClear(GL_DEPTH_BUFFER_BIT);
+  glEnable(GL_DEPTH_TEST);
+  glDepthMask(GL_TRUE);
+  glDisable(GL_BLEND);
+  // Two-sided casting: cables and signs are single-sided, and culling either
+  // face leaves holes in the map that look like detached or missing shadows.
+  glDisable(GL_CULL_FACE);
+  // Slope-scaled offset only. A large constant bias drags every caster's depth
+  // towards the light, which lifts the shadow off the ground at its contact
+  // point; the receivers that needed a big bias do not cast at all.
+  glEnable(GL_POLYGON_OFFSET_FILL);
+  glPolygonOffset(1.5f, 4.0f);
+
+  glUseProgram(gShadowProg);
+  glUniformMatrix4fv(glGetUniformLocation(gShadowProg, "uLightVP"), 1, GL_FALSE, gLightVP.data());
+  glBindVertexArray(gShadowVao);
+  glDrawElements(GL_TRIANGLES, gShadowIndexCount, GL_UNSIGNED_INT, nullptr);
+  glBindVertexArray(0);
+
+  glDisable(GL_POLYGON_OFFSET_FILL);
+  glEnable(GL_CULL_FACE);
+  glCullFace(GL_BACK);
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  glViewport(0, 0, gWindowWidth, gWindowHeight);
 }
 
 // ---------------------------------------------------------- pole shadows
@@ -1685,8 +1891,9 @@ static void RenderScene() {
   float aspect = (float)gWindowWidth / (float)gWindowHeight;
   Mat4Perspective(gProj, 52.0f, aspect, 0.1f, 900.0f);
 
-  // The material-reflection environment is rendered before the camera target is
-  // bound; it is per-frame because the camera dollies along the corridor.
+  // Sun shadows and the material-reflection environment are rendered before
+  // the camera target is bound. Neither takes the eye as an input.
+  RenderShadowMap(SunDirNow(gSimTime));
   RenderSkyEnv(eye, gSimTime);
 
   const bool hdr = postproc::Begin(gPost, gWindowWidth, gWindowHeight);
@@ -1826,6 +2033,9 @@ static void Setup() {
   gHudProg = LinkProgram(resolveAssetPath("shaders/ps14/hud_vert.glsl").c_str(),
                          resolveAssetPath("shaders/pole/hud_frag.glsl").c_str());
 
+  gShadowProg = LinkSourceProgram(kShadowVert, kShadowFrag, "sun shadow");
+  CreateShadowResources(SunDirNow(gSimTime));
+  UpdateLightMatrix(SunDirNow(gSimTime));
   CreateSkyEnvResources();
 
   glEnable(GL_DEPTH_TEST);
