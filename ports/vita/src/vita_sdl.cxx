@@ -1,0 +1,311 @@
+// ===========================================================================
+// SDL2 subset implementation for the ElectroBench PS Vita port (see
+// include/SDL2/SDL.h for what this is and why it is not SDL).
+#include <SDL2/SDL.h>
+
+#include <vitaGL.h>
+
+#include <psp2/ctrl.h>
+#include <psp2/io/fcntl.h>
+#include <psp2/kernel/processmgr.h>
+#include <psp2/kernel/threadmgr.h>
+#include <psp2/power.h>
+#include <psp2/kernel/sysmem.h>
+
+#include <cstdarg>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+void VitaLog(const char *fmt, ...);
+static void PortTrace(const char *fmt, ...) {
+  char buf[384];
+  va_list ap;
+  va_start(ap, fmt);
+  std::vsnprintf(buf, sizeof(buf), fmt, ap);
+  va_end(ap);
+  VitaLog("%s", buf);
+}
+void PortShotTrace(const char *fmt, ...) {
+  char buf[384];
+  va_list ap;
+  va_start(ap, fmt);
+  std::vsnprintf(buf, sizeof(buf), fmt, ap);
+  va_end(ap);
+  VitaLog("%s", buf);
+}
+extern "C" void PRX_PRINTF_PROXY(const char *fmt, ...) {
+  char buf[384];
+  va_list ap;
+  va_start(ap, fmt);
+  std::vsnprintf(buf, sizeof(buf), fmt, ap);
+  va_end(ap);
+  VitaLog("%s", buf);
+}
+
+// SDL.h only forward declares this; the one window lives here.
+struct SDL_Window {
+  int width = 0;
+  int height = 0;
+  Uint32 flags = 0;
+  char title[128] = {0};
+};
+
+namespace {
+
+const int kScreenW = 960;
+const int kScreenH = 544;
+
+SDL_Window gWindow;
+
+int gDepthBits = 24;
+int gMsaaRequest = 0;
+int gSwapInterval = 0;
+bool gInitialised = false;
+bool gGlReady = false;
+char gError[256] = {0};
+
+int gFramesSinceLog = 0;
+unsigned long gFrameTotal = 0;
+
+void PortLogFrame(void) {
+  gFramesSinceLog++;
+  gFrameTotal++;
+  if (gFramesSinceLog < 30) return;
+  gFramesSinceLog = 0;
+  SceUID f = sceIoOpen("ux0:/data/ELEB00002/frames.txt",
+                       SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0777);
+  if (f < 0) return;  // log dir may not exist yet; scene log lines create it
+  char line[64];
+  std::snprintf(line, sizeof(line), "swapped %lu frames\n", gFrameTotal);
+  sceIoWrite(f, line, std::strlen(line));
+  sceIoClose(f);
+}
+unsigned int gPrevButtons = 0;
+bool gPrevValid = false;
+bool gQuitRequested = false;
+SDL_Event gPending[4];
+int gPendingHead = 0;
+int gPendingCount = 0;
+
+void PushEvent(const SDL_Event &e) {
+  if (gPendingCount >= 4) return;
+  gPending[(gPendingHead + gPendingCount) % 4] = e;
+  gPendingCount++;
+}
+
+bool PopEvent(SDL_Event *out) {
+  if (!gPendingCount) return false;
+  *out = gPending[gPendingHead];
+  gPendingHead = (gPendingHead + 1) % 4;
+  gPendingCount--;
+  return true;
+}
+
+void SetError(const char *msg) {
+  std::snprintf(gError, sizeof(gError), "%s", msg);
+}
+
+}  // namespace
+
+extern "C" {
+
+int SDL_Init(Uint32 flags) {
+  (void)flags;
+  sceCtrlSetSamplingMode(SCE_CTRL_MODE_ANALOG);
+  PortTrace("clocks: arm=%d bus=%d gpu=%d xbar=%d MHz",
+            scePowerGetArmClockFrequency(), scePowerGetBusClockFrequency(),
+            scePowerGetGpuClockFrequency(), scePowerGetGpuXbarClockFrequency());
+  gInitialised = true;
+  return 0;
+}
+
+void SDL_Quit(void) {
+  gInitialised = false;
+}
+
+int SDL_GL_SetAttribute(int attr, int value) {
+  switch (attr) {
+    case SDL_GL_DEPTH_SIZE:
+      gDepthBits = value;
+      return 0;
+    case SDL_GL_MULTISAMPLESAMPLES:
+    case SDL_GL_SAMPLES:
+      gMsaaRequest = value;
+      return 0;
+    case SDL_GL_MULTISAMPLEBUFFERS:
+      if (value == 0) gMsaaRequest = 0;
+      return 0;
+    default:
+      return 0;
+  }
+}
+
+int SDL_GL_GetAttribute(int attr, int *value) {
+  if (!value) return -1;
+  switch (attr) {
+    case SDL_GL_DEPTH_SIZE:
+      *value = gDepthBits;
+      return 0;
+    case SDL_GL_SAMPLES:
+    case SDL_GL_MULTISAMPLESAMPLES:
+      *value = gMsaaRequest >= 4 ? 4 : (gMsaaRequest >= 2 ? 2 : 0);
+      return 0;
+    default:
+      *value = 0;
+      return 0;
+  }
+}
+
+SDL_GLContext SDL_GL_CreateContext(SDL_Window *window) {
+  (void)window;
+  if (!gGlReady) {
+    SceGxmMultisampleMode msaa = SCE_GXM_MULTISAMPLE_NONE;
+    if (gMsaaRequest >= 4)
+      msaa = SCE_GXM_MULTISAMPLE_4X;
+    else if (gMsaaRequest >= 2)
+      msaa = SCE_GXM_MULTISAMPLE_2X;
+
+    SceKernelFreeMemorySizeInfo mem;
+    mem.size = sizeof(mem);
+    sceKernelGetFreeMemorySize(&mem);
+    PortTrace("vgl init attempt: msaa=%d free user=%u cdram=%u phycont=%u",
+              (int)msaa, mem.size_user, mem.size_cdram, mem.size_phycont);
+    vglUseCachedMem(GL_TRUE);
+    struct InitStep {
+      const char *name;
+      SceGxmMultisampleMode msaa;
+      int ram_threshold;
+    };
+    const InitStep ladder[] = {
+        {"vglInitExtended(4MB,cached)", msaa, 4 * 1024 * 1024},
+        {"vglInitExtended(cached,no-msaa)", SCE_GXM_MULTISAMPLE_NONE,
+         4 * 1024 * 1024},
+        {"vglInitExtended(cached,16MB-no-msaa)", SCE_GXM_MULTISAMPLE_NONE,
+         16 * 1024 * 1024},
+    };
+    GLboolean ok = GL_FALSE;
+    const char *used = nullptr;
+    for (const InitStep &step : ladder) {
+      GLboolean ret = vglInitExtended(0, kScreenW, kScreenH,
+                                      step.ram_threshold, step.msaa);
+      (void)ret;
+      if (vglMemTotal(VGL_MEM_RAM) > 0 || vglMemTotal(VGL_MEM_VRAM) > 0) {
+        ok = GL_TRUE;
+        used = step.name;
+        break;
+      }
+      PortTrace("vgl init failed at %s", step.name);
+      used = step.name;
+    }
+    if (!ok) {
+      SetError("vglInitExtended failed");
+      PortTrace("vgl init gave up (all ladder entries failed)");
+      return nullptr;
+    }
+    PortTrace("vgl init ok via %s", used);
+    gGlReady = true;
+  }
+  return (SDL_GLContext)(void *)&gWindow;
+}
+
+void SDL_GL_DeleteContext(SDL_GLContext context) { (void)context; }
+
+void SDL_GL_SwapWindow(SDL_Window *window) {
+  (void)window;
+  vglSwapBuffers(GL_FALSE);
+  PortLogFrame();
+}
+
+int SDL_GL_SetSwapInterval(int interval) {
+  gSwapInterval = interval;
+  return 0;
+}
+
+SDL_Window *SDL_CreateWindow(const char *title, int x, int y, int w, int h, Uint32 flags) {
+  (void)x;
+  (void)y;
+  (void)w;
+  (void)h;
+  if (title) std::snprintf(gWindow.title, sizeof(gWindow.title), "%s", title);
+  gWindow.flags = flags;
+  gWindow.width = kScreenW;
+  gWindow.height = kScreenH;
+  return &gWindow;
+}
+
+void SDL_DestroyWindow(SDL_Window *window) { (void)window; }
+
+void SDL_SetWindowTitle(SDL_Window *window, const char *title) {
+  (void)window;
+  (void)title;
+}
+
+void SDL_GetWindowSize(SDL_Window *window, int *w, int *h) {
+  (void)window;
+  if (w) *w = gWindow.width;
+  if (h) *h = gWindow.height;
+}
+
+Uint32 SDL_GetWindowFlags(SDL_Window *window) {
+  return window ? window->flags : gWindow.flags;
+}
+
+int SDL_PollEvent(SDL_Event *event) {
+  if (!event) return 0;
+  if (PopEvent(event)) return 1;
+
+  if (!gInitialised) return 0;
+
+  SceCtrlData pad;
+  std::memset(&pad, 0, sizeof(pad));
+  if (sceCtrlPeekBufferPositive(0, &pad, 1) < 0) return 0;
+
+  if (!gPrevValid) {
+    gPrevButtons = pad.buttons;
+    gPrevValid = true;
+    return 0;
+  }
+  const unsigned int pressed = pad.buttons & ~gPrevButtons;
+  gPrevButtons = pad.buttons;
+
+  if (pressed & SCE_CTRL_START) {
+    SDL_Event e;
+    std::memset(&e, 0, sizeof(e));
+    e.type = SDL_QUIT;
+    gQuitRequested = true;
+    PushEvent(e);
+  }
+  if (pressed & (SCE_CTRL_SELECT | SCE_CTRL_CIRCLE)) {
+    SDL_Event e;
+    std::memset(&e, 0, sizeof(e));
+    e.type = SDL_KEYDOWN;
+    e.key.state = 1;
+    e.key.keysym.sym = SDLK_ESCAPE;
+    PushEvent(e);
+  }
+
+  if (PopEvent(event)) return 1;
+  return 0;
+}
+
+const char *SDL_GetError(void) { return gError; }
+int VitaPortQuitRequested(void) { return gQuitRequested ? 1 : 0; }
+
+Uint64 SDL_GetPerformanceCounter(void) {
+  return (Uint64)sceKernelGetSystemTimeWide();
+}
+
+Uint64 SDL_GetPerformanceFrequency(void) { return 1000000ull; }
+
+void SDL_Delay(Uint32 ms) { sceKernelDelayThread(ms * 1000); }
+
+void SDL_free(void *mem) { std::free(mem); }
+
+char *SDL_GetBasePath(void) {
+  const char *base = "app0:/";
+  char *copy = (char *)std::malloc(std::strlen(base) + 1);
+  if (copy) std::strcpy(copy, base);
+  return copy;
+}
+
+}  // extern "C"
