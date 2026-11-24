@@ -39,7 +39,13 @@ static const int kSeaResolution = 384;   // vertices per side of the ocean grid 
                                          // vertex count of 256 — pushed for realism)
 static const float kSeaSize = 4096.0f;   // world size of the ocean patch: reaches past the
 #ifndef ELECTROBENCH_VITA
-static const int kEnvMapSize = 768;      // cubemap face resolution — higher fidelity reflections
+// The reflection probe renders the raymarched sky into six faces every time it
+// refreshes, so its size is a per-frame cost, not just a quality knob: at 768²
+// the probe was several times the work of the visible frame. The sky it mirrors
+// is smooth, so 256² (linearly filtered, no mip chain) is indistinguishable in
+// the sea and costs a sixteenth as much, which also keeps the cube's render
+// target well away from the memory a 4 GB phone has to spare.
+static const int kEnvMapSize = 256;
 #endif
 static const int kNoiseSize = 256;       // fBm noise texture size
 static const int kRippleSize = 256;      // ripple gradient texture size
@@ -142,11 +148,21 @@ static double NowSeconds() {
 }
 
 // ------------------------------------------------------------ shader plumbing
-#ifdef ELECTROBENCH_VITA
+#if defined(__ANDROID__)
+void PortLog(const char *fmt, ...);  // android/jni/android_sdl.cxx
+#define SCENE1_LOG(...) PortLog(__VA_ARGS__)
+#elif defined(ELECTROBENCH_VITA)
 void VitaLog(const char *fmt, ...);
 #define SCENE1_LOG(...) VitaLog(__VA_ARGS__)
 #else
 #define SCENE1_LOG(...) ((void)0)
+#endif
+
+#if defined(__ANDROID__)
+void PortSetPhase(const char *phase);  // android/jni/android_sdl.cxx
+#define SCENE1_PHASE(p) PortSetPhase(p)
+#else
+#define SCENE1_PHASE(p) ((void)0)
 #endif
 
 struct Program {
@@ -455,6 +471,10 @@ static int gWindowWidth = WIDTH, gWindowHeight = HEIGHT;
 static Program gSeaProg, gSkyProg, gHudProg;
 static GLuint gRippleTex = 0, gNoiseTex = 0, gFoamTex = 0, gFontTex = 0;
 static GLuint gEnvCube = 0, gEnvFbo = 0, gEnvDepth = 0;
+// Whether the reflection probe's cube is actually renderable on this driver.
+// When it is not, the sea falls back to its analytic dusk sky instead of
+// sampling a texture that was never written.
+static bool gEnvCubeReady = false;
 
 static Vec3 gSunDir = {0.824f, 0.287f, 0.489f};
 
@@ -569,7 +589,10 @@ static void CreateEnvResources() {
   for (int i = 0; i < 6; i++)
     glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, GL_RGBA16F, kEnvMapSize, kEnvMapSize, 0,
                  GL_RGBA, GL_FLOAT, nullptr);
-  glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+  // Linear, not mipmapped: the cube is a render target whose mip chain used to
+  // be rebuilt every frame (see DrawSkyToEnvMap), and its reflection is blurred
+  // by the water anyway.
+  glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
   glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
@@ -587,6 +610,7 @@ static void CreateEnvResources() {
   glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, gEnvDepth);
 #endif
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  gEnvCubeReady = false;
 }
 
 
@@ -624,6 +648,20 @@ static void DrawSkyToEnvMap(const Mat4 &proj) {
   glDisable(GL_DEPTH_TEST);
   glDisable(GL_CULL_FACE); // the dome is seen from the inside
   glBindFramebuffer(GL_FRAMEBUFFER, gEnvFbo);
+
+  // A driver that cannot render to RGBA16F would leave every draw to this
+  // target undefined, so ask once (with a face attached) instead of assuming.
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, faces[0], gEnvCube, 0);
+  if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+    gEnvCubeReady = false;
+    SCENE1_LOG("scene1: env probe target is not renderable - sea uses the analytic sky");
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glEnable(GL_CULL_FACE);
+    glEnable(GL_DEPTH_TEST);
+    return;
+  }
+  gEnvCubeReady = true;
+
   glUseProgram(gSkyProg.handle);
   glBindVertexArray(gDomeMesh.vao);
 
@@ -641,8 +679,11 @@ static void DrawSkyToEnvMap(const Mat4 &proj) {
     glUniform1f(gSkyProg.loc("uTonemap"), 0.0f);
     glDrawElements(GL_TRIANGLES, gDomeMesh.indexCount, GL_UNSIGNED_INT, nullptr);
   }
-  glBindTexture(GL_TEXTURE_CUBE_MAP, gEnvCube);
-  glGenerateMipmap(GL_TEXTURE_CUBE_MAP);
+  // Detach the probe target before touching the cube again: the last face is
+  // still attached to gEnvFbo at this point, and updating a texture that is
+  // attached to the draw framebuffer is undefined in ES 3.0 - a feedback loop
+  // that some mobile drivers fault on. No mip chain is generated either; the
+  // cube is filtered linearly (CreateEnvResources).
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
   glEnable(GL_CULL_FACE);
 }
@@ -843,7 +884,7 @@ static void DrawSea(const Mat4 &view, double timeSec, const Vec3 &eye) {
 #ifdef ELECTROBENCH_VITA
   glUniform1f(gSeaProg.loc("uEnvCube"), 0.0f);
 #else
-  glUniform1f(gSeaProg.loc("uEnvCube"), 1.0f);
+  glUniform1f(gSeaProg.loc("uEnvCube"), gEnvCubeReady ? 1.0f : 0.0f);
 #endif
   glUniform3fv(gSeaProg.loc("uSkyZenith"), 1, kSkyZenith);
   glUniform3fv(gSeaProg.loc("uSkyMid"), 1, kSkyMid);
@@ -955,9 +996,24 @@ static void RenderScene() {
 
   float aspect = (float)gWindowWidth / (float)gWindowHeight;
   Mat4Perspective(gProj, 45.0f, aspect, 0.5f, 6000.0f); 
+  // The probe re-renders the whole sky into six cube faces. Doing that on every
+  // frame cost more than the frame the player sees and made a phone GPU drop
+  // the context; the cloud drift over a quarter of a second is invisible in a
+  // water reflection, so refresh on a clock instead (and after a resize).
+  static bool gEnvMapDrawn = false;
+  static double gEnvMapTime = 0.0;
+  static int gEnvMapW = 0, gEnvMapH = 0;
+  SCENE1_PHASE("env probe");
   Mat4 envProj;
   Mat4Perspective(envProj, 90.0f, 1.0f, 0.1f, 20.0f);
-  UpdateEnvMap(envProj);
+  if (!gEnvMapDrawn || gEnvMapW != gWindowWidth || gEnvMapH != gWindowHeight ||
+      t - gEnvMapTime >= 0.25) {
+    UpdateEnvMap(envProj);
+    gEnvMapDrawn = true;
+    gEnvMapTime = t;
+    gEnvMapW = gWindowWidth;
+    gEnvMapH = gWindowHeight;
+  }
   DumpEnvFacesOnce();
 
   // ---- pass 2: the HDR camera target (default framebuffer if unavailable) ----
@@ -965,9 +1021,13 @@ static void RenderScene() {
   glViewport(0, 0, gWindowWidth, gWindowHeight);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+  SCENE1_PHASE("sky pass");
   DrawSkyScreen(view, eye);
+  SCENE1_PHASE("sea pass");
   DrawSea(view, gSceneTime, eye);
+  SCENE1_PHASE("post pass");
   if (hdr) postproc::End(gPost, gPostSettings, t);
+  SCENE1_PHASE("hud pass");
   RenderHUD();
 
     if (gScreenshotPath && gNextShot < gShotTimes.size() &&
@@ -988,6 +1048,7 @@ static void RenderScene() {
       }
     }
 
+    SCENE1_PHASE("present");
     SDL_GL_SwapWindow(gWindow);
 
   // ---- fps + benchmark timer ----

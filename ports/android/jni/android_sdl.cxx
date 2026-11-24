@@ -18,6 +18,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <signal.h>
 #include <unistd.h>
 #include <vector>
 
@@ -91,6 +92,24 @@ double NowSeconds() {
 }
 
 void SetError(const char *msg) { std::snprintf(gError, sizeof(gError), "%s", msg); }
+
+// The pass the renderer is in, published so a fatal signal can name it. A
+// bionic build at this API level has no backtrace(), and the packaged .so is
+// stripped, so an address would not name a function anyway; the phase below is
+// what actually locates the crash.
+const char *volatile gCrashPhase = "startup";
+
+// A fatal signal inside a driver call would otherwise leave only "the app went
+// back to the launcher": the tombstone needs adb, and the portlog stops
+// mid-frame. Writing the signal and phase to stderr reaches stdout.txt.
+void CrashHandler(int sig) {
+  char head[192];
+  const int n = std::snprintf(head, sizeof(head), "\nFATAL signal %d during %s\n", sig,
+                              (const char *)gCrashPhase);
+  if (n > 0) (void)!write(STDERR_FILENO, head, (size_t)n);
+  signal(sig, SIG_DFL);
+  raise(sig);
+}
 
 void PushEvent(const SDL_Event &e) {
   if (gPendingCount >= kEventQueue) return;
@@ -594,6 +613,8 @@ void CheckWindowSize() {
 }  // namespace
 
 // ------------------------------------------------------------------ port hooks
+void PortSetPhase(const char *phase) { gCrashPhase = phase ? phase : "?"; }
+
 void PortLog(const char *fmt, ...) {
   char buf[1024];
   va_list ap;
@@ -648,6 +669,10 @@ unsigned long PortFrameCount(void) { return gFrameTotal; }
 
 void PortAttachApp(struct android_app *app) {
   gApp = app;
+  signal(SIGSEGV, CrashHandler);
+  signal(SIGBUS, CrashHandler);
+  signal(SIGFPE, CrashHandler);
+  signal(SIGABRT, CrashHandler);
   app->onAppCmd = OnAppCmd;
   app->onInputEvent = OnInput;
   gNativeWindow = app->window;
@@ -767,6 +792,21 @@ void SDL_GL_SwapWindow(SDL_Window *window) {
     return;
   }
   gFrameTotal++;
+
+  // A heartbeat, so a log that stops early says whether frames were still
+  // being presented (slow) or the process died inside a frame.
+  static double gBeatTime = 0.0;
+  static unsigned long gBeatFrames = 0;
+  const double beatNow = NowSeconds();
+  if (gBeatTime == 0.0) {
+    gBeatTime = beatNow;
+    gBeatFrames = gFrameTotal;
+  } else if (beatNow - gBeatTime >= 2.0) {
+    PortLog("heartbeat: %s frame %lu, %.1f fps", gSceneLabel, gFrameTotal,
+            (double)(gFrameTotal - gBeatFrames) / (beatNow - gBeatTime));
+    gBeatTime = beatNow;
+    gBeatFrames = gFrameTotal;
+  }
   if (!gSceneFirstFrameLogged) {
     gSceneFirstFrameLogged = true;
     PortLog("first presented frame: %s (frame %lu)", gSceneLabel, gFrameTotal);
