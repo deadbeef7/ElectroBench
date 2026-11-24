@@ -1,14 +1,9 @@
-// ElectroBench — scene 3 of the single ElectroBench binary: the power-lines
-// scene. A late-afternoon Japanese suburb memory: orange sky,
-// white drifting clouds, and a tangle of utility poles, crossarms, insulators,
-// transformers and sagging wires receding into the heat haze — the
-// serial-experiments mood, built entirely from analytic geometry (no model
-// files, no textures: every cylinder, catenary and quad is generated on the CPU
-// at startup).
+// ElectroBench — scene 3 of the single ElectroBench binary: the power-lines (its LAIN)
+// scene. 
 //
 // Like src/scene1.cxx and src/scene2.cxx, this translation unit is NOT a
 // program of its own. It exports RunPoleScene(), which main.cxx calls as the
-// third scene of the one and only ElectroBench executable.
+// third scene of the ElectroBench executable.
 //
 
 #include <algorithm>
@@ -204,18 +199,7 @@ static GLuint gFontTex = 0;
 static GLuint gSkyVao = 0, gSkyVbo = 0, gSkyIbo = 0;
 static int gSkyIndexCount = 0;
 
-// The sky cubemap the materials reflect, rebuilt from the camera every frame.
-//
-// The sun shadow map is the opposite: its frustum is fitted to the scene's own
-// static world bounds and the sun direction, and the eye is deliberately not an
-// input. That is the whole point - the old map re-centred itself on the camera
-// every frame and its shadow edges crept along the ground whenever the view
-// moved. A frustum that never looks at the camera cannot do that.
-static const float kShadowTexelTarget = 0.055f; // metres per texel, before rounding
-// The map covers the corridor the camera lives in, not the whole skyline: the
-// scene's own bounds run out to 700 m of backdrop blocks, which would push a
-// single map to 21 cm per texel. These numbers are world constants, never
-// derived from the eye, which is what keeps the shadows tied to the ground.
+static const float kShadowTexelTarget = 0.055f; 
 static const Vec3 kShadowMin{-140.0f, 0.0f, -120.0f};
 static const Vec3 kShadowMax{140.0f, 40.0f, 360.0f};
 static GLuint gShadowFbo = 0, gShadowTex = 0, gShadowProg = 0;
@@ -240,7 +224,7 @@ static int gWindowWidth = WIDTH, gWindowHeight = HEIGHT;
 static int gFrame = 0, gFps = 0, gFrameAccum = 0;
 static double gFpsTimer = 0.0;
 static double gStartTime = 0.0;
-static double gSimTime = 0.0;      // SIM seconds: screenshot times are sim-based
+static double gSimTime = 0.0;      
 static bool gQuit = false;
 static bool gFusedDone = false;
 static bool gStandaloneScene = false;
@@ -248,7 +232,7 @@ static double gResultsShownAt = 0.0;
 static bool gResultsShown = false;
 static double gResultsElapsed = 0.0, gResultsFps = 0.0, gResultsScore = 0.0;
 static const double kResultsScreenSeconds = 4.0;
-double gFusedPoleScore = 0.0;      // read by main.cxx for the combined screen
+double gFusedPoleScore = 0.0;      
 
 static const char *gScreenshotPath = nullptr;
 static const char *gDumpShadowPath = nullptr; // --dump-shadow-map FILE
@@ -262,15 +246,15 @@ static Vec3 gCamPos{0.0f, 2.0f, 4.0f};
 static float gCamYaw = 0.0f, gCamPitch = -0.06f, gCamDist = 7.0f;
 
 static void UpdateAutoCamera(float t) {
-  const float span = 161.0f;   // 13 spans of the 15-pole corridor
+  const float span = 161.0f;   
   float z = 4.0f + std::fmod(t * 2.6f, span);
-  gCamPos = {2.0f + std::sin(t * 0.05f) * 0.30f,         // gentle weave
-             1.55f + 0.18f * std::sin(t * 0.11f),        // breathing height
+  gCamPos = {2.0f + std::sin(t * 0.05f) * 0.30f,        
+             1.55f + 0.18f * std::sin(t * 0.11f),        
              z};
   Vec3 target{-1.15f, 7.6f, z + 17.0f};
   Vec3 f = Vec3Norm(Vec3Sub(target, gCamPos));
   gCamYaw = std::atan2(-f.x, -f.z);
-  gCamPitch = std::asin(f.y) * -1.0f;   // negative = looking up
+  gCamPitch = std::asin(f.y) * -1.0f;  
 }
 
 static Vec3 OrbitCamPos() {
@@ -279,19 +263,19 @@ static Vec3 OrbitCamPos() {
   pos.x = gCamPos.x + std::sin(gCamYaw) * cp * gCamDist;
   pos.y = gCamPos.y + sp * gCamDist;
   pos.z = gCamPos.z + std::cos(gCamYaw) * cp * gCamDist;
-  if (pos.y < 0.5f) pos.y = 0.5f;                        // never under the ground
+  if (pos.y < 0.5f) pos.y = 0.5f;                       
   return pos;
 }
 struct ObjVertex { float x, y, z, nx, ny, nz, r, g, b, mat, alpha; };
 static std::vector<ObjVertex> gVerts;
 static std::vector<unsigned int> gIdx;
 
-static const float kMatPaint = 0.0f;      // generic, no detail
+static const float kMatPaint = 0.0f;     
 static const float kMatWood = 1.0f;
 static const float kMatGround = 2.0f;
-static const float kMatShadow = 12.0f; // black, alpha blended: the pole's ground shadow
+static const float kMatShadow = 12.0f;
 static const float kMatRoad = 3.0f;
-static const float kMatLine = 4.0f;       // road paint
+static const float kMatLine = 4.0f;       
 static const float kMatCable = 5.0f;
 static const float kMatCeramic = 6.0f;
 static const float kMatMetal = 7.0f;
@@ -305,18 +289,18 @@ static const float kMatKerb = 15.0f;
 static const float kMatConcrete = 16.0f;
 static const Vec3 kConcreteGrey{0.212f, 0.216f, 0.218f};
 
-static const Vec3 kWoodDark{0.165f, 0.115f, 0.085f};   // creosote (treeline)
-static const Vec3 kWoodOld{0.230f, 0.180f, 0.140f};   // weathered timber
-static const Vec3 kCeramic{0.780f, 0.760f, 0.700f};   // insulator glaze
-static const Vec3 kCable{0.055f, 0.050f, 0.055f};    // rubber wire
+static const Vec3 kWoodDark{0.165f, 0.115f, 0.085f};  
+static const Vec3 kWoodOld{0.230f, 0.180f, 0.140f};   
+static const Vec3 kCeramic{0.780f, 0.760f, 0.700f};  
+static const Vec3 kCable{0.055f, 0.050f, 0.055f};    
 static const Vec3 kCableOld{0.085f, 0.075f, 0.070f};
 static const Vec3 kMetal{0.190f, 0.195f, 0.200f};   
-static const Vec3 kSteelGalv{0.252f, 0.261f, 0.273f}; // hot-dip zinc, trunk
-static const Vec3 kSteelArm{0.265f, 0.272f, 0.282f};  // angle iron, brackets
-static const Vec3 kSteelPlate{0.560f, 0.545f, 0.505f};// pole number plate
+static const Vec3 kSteelGalv{0.252f, 0.261f, 0.273f}; 
+static const Vec3 kSteelArm{0.265f, 0.272f, 0.282f};  
+static const Vec3 kSteelPlate{0.560f, 0.545f, 0.505f};
 static const Vec3 kGravel{0.330f, 0.272f, 0.205f};  
-static const float kRoadX = 2.6f;       // road centre (matches uRoadX)
-static const float kRoadHalf = 2.7f;    // 5.4 m carriageway
+static const float kRoadX = 2.6f;    
+static const float kRoadHalf = 2.7f;    
 static const float kRoadY = 0.030f;
 static const float kPaintY = 0.050f;
 static const float kKerbTopY = 0.190f;
@@ -344,7 +328,6 @@ static void AddCylinder(const Vec3 &base, const Vec3 &top, float rBase, float rT
     gIdx.push_back(a); gIdx.push_back(a + 1); gIdx.push_back(a + 2);
     gIdx.push_back(a + 1); gIdx.push_back(a + 3); gIdx.push_back(a + 2);
   }
-  // caps (fan around the centre vertex)
   for (int cap = 0; cap < 2; cap++) {
     Vec3 c = cap ? top : base;
     Vec3 n = cap ? axis : Vec3Scale(axis, -1.0f);
@@ -459,7 +442,6 @@ static void AddWire(const Vec3 &a, const Vec3 &b, float sag, float radius,
   }
 }
 
-// Box via 6 quads (crossarms, transformer fins).
 static void AddBox(const Vec3 &center, const Vec3 &half, const Vec3 &color,
                    float mat = kMatPaint) {
   static const int quads[6][4] = {
@@ -597,8 +579,8 @@ static void AddSlackLoop(const PoleSpec &p, float h, float side, float radius) {
 static void AddPylon(float x, float z, float height) {
   const Vec3 steel{0.170f, 0.172f, 0.180f};
   const Vec3 galv{0.215f, 0.220f, 0.232f};
-  const float footHalf = height * 0.175f;   // splayed feet
-  const float kneeY = height * 0.34f;       // where the A-frame closes
+  const float footHalf = height * 0.175f;   
+  const float kneeY = height * 0.34f;      
   const float kneeHalf = footHalf * 0.46f;
   const float topHalf = height * 0.048f;
   for (int c = 0; c < 4; c++) {
@@ -762,15 +744,12 @@ static void AddPole(const PoleSpec &p, bool concrete = false) {
     }
   }
 
-  // BUILD-P9: pole hardware on the road face — step bolts, the asset number
-  // plate with its band strap, and (on a deterministic scatter) the guy wire.
   AddStepBolts(p, 3.15f, 6.15f, side);
   {
     Vec3 pa = PoleAxisAt(p, 2.35f);
     float pr = TrunkRadius(p, 2.35f);
     AddCylinder({pa.x + pr, 2.35f, pa.z}, {pa.x + pr + 0.035f, 2.35f, pa.z},
                 pr + 0.030f, pr + 0.030f, 8, kSteelArm, kMatSteel);
-    // the plate itself stands proud of the band, with a dark legend block
     AddBox({pa.x + pr + 0.042f, 2.62f, pa.z}, {0.012f, 0.085f, 0.062f},
            kSteelPlate, kMatMetal);
     AddBox({pa.x + pr + 0.058f, 2.62f, pa.z}, {0.006f, 0.020f, 0.050f},
