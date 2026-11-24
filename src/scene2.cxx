@@ -393,20 +393,11 @@ static SDL_GLContext gContext = nullptr;
 static int gWindowWidth = WIDTH, gWindowHeight = HEIGHT;
 
 static Program gSeaProg, gSkyProg, gHudProg;
-
-// The sea's radiance goes into the shared half-float camera target; the ACES
-// composite, the bloom around the sun and its glitter path, and the lens
-// response are all applied once, after both passes have drawn. Before this the
-// sea used color/(color+1) and the sky an ACES blend, so the same sun lit the
-// water and the sky with two different response curves.
 static postproc::Pipeline gPost;
 static postproc::Settings gPostSettings;
 static GLuint gRippleTex = 0, gFoamTex = 0, gFontTex = 0;
 static GLuint gEnvCube = 0, gEnvFbo = 0, gEnvDepth = 0;
 
-// A low sun: 13.6 degrees over the horizon, about three degrees lower than it
-// used to sit, with its azimuth unchanged so the reference camera still frames
-// it dead centre.
 static Vec3 gSunDir = {0.836f, 0.235f, 0.496f};
 
 static Vec3 gCamPos = {0.0f, 7.0f, 0.0f};
@@ -444,11 +435,6 @@ static bool gDumpEnvDone = false;
 static GLuint gHudVao = 0, gHudVbo = 0;
 static int gHudQuadCount = 0;
 
-// The auto camera is an out-and-back move, not an endless orbit: one lap
-// dollies straight forward along the reference view, turns left in place, then
-// eases both back to the pose the shot is framed from. Every lap therefore
-// begins and ends on the same reference framing instead of chasing its own
-// tail around the scene.
 static float Smooth01(float x) {
   if (x < 0.0f) x = 0.0f;
   if (x > 1.0f) x = 1.0f;
@@ -477,8 +463,6 @@ static void UpdateAutoCamera(float t) {
   }
 
   float yawSun = std::atan2(gSunDir.x, gSunDir.z);
-  // A rising yaw swings the view towards screen-left, so the sun -- dead centre
-  // in the reference shot -- drifts right exactly as a left-hand turn would.
   float yaw = yawSun + left * kTurnLeft;
   const float pitch = 0.030f; // horizon high in frame: sky ~25%, sea ~75%
 
@@ -694,9 +678,6 @@ static void Setup() {
   glCullFace(GL_BACK);
   glClearColor(0.055f, 0.035f, 0.075f, 1.0f); // dusk background (only visible if geometry ever gaps)
 
-  // The dusk ocean exposes for its sky, not its water: the frame is mostly a
-  // bright band over a nearly black sea, so the threshold sits above the sky's
-  // midtones and only the sun, its halo and the glitter path seed the bloom.
   gPostSettings.exposure = 1.00f;
   gPostSettings.bloom = 0.055f;
   gPostSettings.threshold = 1.35f;
@@ -727,11 +708,9 @@ static void DrawSea(const Mat4 &view, double timeSec, const Vec3 &eye) {
   glUniformMatrix4fv(gSeaProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
   glUniform1f(gSeaProg.loc("uTime"), (float)timeSec);
   glUniform3f(gSeaProg.loc("uEyePos"), eye.x, eye.y, eye.z);
-  // The vertex stage band-limits its displacement against the same eye the
-  // fragment stage shades from, so the drawn surface and its normals agree.
   glUniform1f(gSeaProg.loc("uGridCell"), kSeaSize / (float)(kSeaResolution - 1));
   glUniform3f(gSeaProg.loc("uSunDir"), gSunDir.x, gSunDir.y, gSunDir.z);
-  glUniform3f(gSeaProg.loc("uWaterColor"), 0.034f, 0.020f, 0.052f); // near-black indigo body like the dusk reference
+  glUniform3f(gSeaProg.loc("uWaterColor"), 0.034f, 0.020f, 0.052f); 
   glUniform1f(gSeaProg.loc("uHdrOut"), gPost.ready ? 1.0f : 0.0f);
   glActiveTexture(GL_TEXTURE0);
   glBindTexture(GL_TEXTURE_2D, gRippleTex);
@@ -764,9 +743,6 @@ static void DrawSkyScreen(const Mat4 &view, const Vec3 &eye) {
   BindSkyUniforms(vp);
   glUniform3f(gSkyProg.loc("uCenter"), eye.x, eye.y, eye.z);
   glUniform1f(gSkyProg.loc("uRadius"), 5000.0f);
-  // Linear: the composite owns the response curve. When the HDR target could
-  // not be created the sky keeps its own encode, because the scene is then
-  // writing straight into the window's 8-bit buffer.
   glUniform1f(gSkyProg.loc("uTonemap"), gPost.ready ? 0.0f : 1.0f);
   glDrawElements(GL_TRIANGLES, gDomeMesh.indexCount, GL_UNSIGNED_INT, nullptr);
   glBindVertexArray(0);
