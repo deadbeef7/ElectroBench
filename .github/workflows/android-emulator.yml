@@ -5,7 +5,8 @@ name: Android emulator run
 # itself (the app needs ES 3.0; a Core 2 era desktop with GMA graphics has no
 # usable VT-x and no GLES3 driver).
 #
-# The run is meant to answer "why did it go back to the launcher": it keeps the
+# Both scenes run (dusk ocean, then power lines), each 45 s plus its score
+# screen. The run is meant to answer "why did it go back to the launcher": it keeps the
 # app's own portlog/stdout (which carry the render phase a fatal signal landed
 # in, and a frame heartbeat), the emulator's crash buffer, tombstones, DropBox
 # crash records and ActivityManager's per-process exit info, then says in the
@@ -41,7 +42,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Boot the emulator, install the APK and run a scene
+      - name: Boot the emulator, install the APK and run both scenes
         uses: ReactiveCircus/android-emulator-runner@v2
         with:
           api-level: 33
@@ -79,10 +80,18 @@ jobs:
           RUN=$OUT/org.deadbeef7.electrobench
           LOG=$RUN/stdout.txt
           PORT=$RUN/portlog.txt
-          verdict=unknown
+          # The port runs scene 1 and then scene 2, so a complete run prints two
+          # results lines: the ocean scene's and the power lines'.
+          results=0
+          if [ -f "$LOG" ]; then
+            results=$(grep -c "Benchmark Results" "$LOG" || true)
+          fi
+          case "$results" in ''|*[!0-9]*) results=0 ;; esac
 
-          if [ -f "$LOG" ] && grep -q "Benchmark Results" "$LOG"; then
+          if [ "$results" -ge 2 ]; then
             verdict=finished
+          elif [ "$results" -eq 1 ]; then
+            verdict=one-scene
           elif [ -f "$LOG" ] && grep -q "FATAL signal" "$LOG"; then
             verdict=crashed
           elif [ -f "$LOG" ]; then
@@ -95,9 +104,9 @@ jobs:
             echo "API 33, x86_64, 768x1280, SwiftShader software ES 3.0: a renderer"
             echo "correctness run, not a GPU score."
             echo
-            echo "**Verdict: \`$verdict\`**"
+            echo "**Verdict: \`$verdict\`** ($results of 2 scenes reported a score)"
             echo
-            if [ "$verdict" = finished ]; then
+            if [ "$results" -ge 1 ]; then
               echo '```'
               grep "Benchmark Results" "$LOG"
               echo '```'
@@ -152,16 +161,16 @@ jobs:
           notice=$(
             {
               echo "verdict: $verdict"
-              [ -f "$LOG" ] && grep -m1 "Benchmark Results" "$LOG"
+              [ -f "$LOG" ] && grep "Benchmark Results" "$LOG"
               [ -f "$LOG" ] && grep -m1 "FATAL signal" "$LOG"
               [ -f "$PORT" ] && grep -m1 "renderer" "$PORT"
               [ -f "$PORT" ] && grep -m1 "env probe target is not renderable" "$PORT"
-              [ -f "$PORT" ] && grep "heartbeat" "$PORT" | tail -1
+              [ -f "$PORT" ] && grep "heartbeat" "$PORT" | tail -2
               [ -f "$PORT" ] && tail -1 "$PORT"
               true
             } | sed 's/%/%25/g; s/$/%0A/'
           )
           echo "::notice title=ElectroBench emulator run::$(echo "$notice" | tr -d '\n')"
 
-          # A run that never reached the results line is a failure, not a pass.
+          # A run that did not score both scenes is a failure, not a pass.
           [ "$verdict" = finished ]

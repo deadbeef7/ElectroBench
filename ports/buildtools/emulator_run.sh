@@ -54,22 +54,28 @@ adb logcat -c || true
 adb install -r "$APK" | tee "$OUT/install.txt"
 adb shell pm list packages | grep -qx "package:$PKG"
 
-# The port reads getExternalFilesDir()/electrobench.txt on launch. only=1 runs
-# the dusk ocean scene alone; the shots are the times at which it also writes a
-# PNG into that same directory.
+# The port reads getExternalFilesDir()/electrobench.txt on launch. No `only=`
+# line, so it runs scene 1 (dusk ocean) and then scene 2 (power lines). The
+# shots are wall-clock seconds into each scene: 20 s and 30 s land mid-run,
+# before the 45 s benchmark ends and the score screen takes over.
 adb shell mkdir -p "$RUN_DIR"
-printf 'only=1\nshots=45.1,46.5\n' \
+printf 'start=1\nshots=20.0,30.0\n' \
   | adb shell "cat > $RUN_DIR/electrobench.txt" || \
-  echo "::warning::could not write the run spec; the port will use its defaults (both scenes)"
+  echo "::warning::could not write the run spec; the port will use its defaults (both scenes, shots at 45.1/47.0/48.5 s)"
 
 adb shell am start -W -n "$PKG/android.app.NativeActivity" | tee "$OUT/launch.txt"
 
-# The benchmark is wall-clock: 45 s scene plus a 12 s results screen. Poll until
-# it finishes, or until the process is gone (a crash to the launcher, which is
-# the case this run exists for).
+# Each scene is 45 s of wall clock plus its results screen, so the two-scene
+# run is a little over two minutes. Poll until both have printed their results
+# line, or until the process is gone (a crash to the launcher, which is the case
+# this run exists for).
+scenes=2
+results=0
 finished=0
-for i in $(seq 1 120); do
-  if adb shell "grep -q 'Benchmark Results' '$RUN_DIR/stdout.txt'" 2>/dev/null; then
+for i in $(seq 1 150); do  # 5 minutes
+  results=$(adb shell "grep -c 'Benchmark Results' '$RUN_DIR/stdout.txt'" 2>/dev/null | tr -d '\r' || true)
+  case "$results" in ''|*[!0-9]*) results=0 ;; esac
+  if [ "$results" -ge "$scenes" ]; then
     finished=1
     break
   fi
@@ -86,7 +92,7 @@ for i in $(seq 1 120); do
   fi
   sleep 2
 done
-echo "benchmark finished: $finished"
+echo "benchmark finished: $finished (results lines: $results of $scenes)"
 
 # ---- everything that survives the process ---------------------------------
 adb wait-for-device
