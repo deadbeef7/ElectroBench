@@ -1,0 +1,142 @@
+name: Android emulator run
+
+# Runs ports/ElectroBench-android.apk on a KVM-accelerated x86_64 emulator, so
+# the GLES3 port can be exercised on a machine that cannot virtualise Android
+# itself (the app needs ES 3.0; a Core 2 era desktop with GMA graphics has no
+# VT-x and no GLES3 driver).
+#
+# Start it by hand from the Actions tab, or push to the ports branch.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ports]
+    paths:
+      - 'ports/ElectroBench-android.apk'
+      - '.github/workflows/android-emulator.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  emulator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable KVM access for the runner user
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Boot the emulator, install the APK and run a scene
+        uses: ReactiveCircus/android-emulator-runner@v2
+        with:
+          api-level: 33
+          target: google_apis
+          arch: x86_64
+          # The default emulator options (-no-window -gpu swiftshader_indirect
+          # -no-snapshot ...) are what this needs: the runner has no GPU, and
+          # SwiftShader still gives the app a working ES 3.0 context.
+          disable-animations: true
+          script: |
+            set -euo pipefail
+
+            APK=ports/ElectroBench-android.apk
+            PKG=org.deadbeef7.electrobench
+            RUN_DIR=/sdcard/Android/data/$PKG/files
+            OUT=emulator-artifacts
+            mkdir -p "$OUT"
+
+            adb wait-for-device
+            # getprop can answer before the framework is up, unlike the runner's
+            # own boot wait, so poll the boot flag as well.
+            for _ in $(seq 1 120); do
+              [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] && break
+              sleep 2
+            done
+
+            echo "::group::Device"
+            adb shell getprop ro.build.version.release
+            adb shell getprop ro.product.cpu.abi
+            adb shell getprop ro.hardware.egl || true
+            echo "::endgroup::"
+
+            adb install -r "$APK"
+            adb shell pm list packages | grep -qx "package:$PKG"
+
+            # google_apis (not playstore) images allow adb root, which is what
+            # gives the shell write access to /sdcard/Android/data on API 30+.
+            adb root || true
+            adb wait-for-device
+            sleep 2
+
+            # The port reads getExternalFilesDir()/electrobench.txt on launch.
+            # only=1 runs the dusk ocean scene alone; shots are the sim times at
+            # which it writes a PNG into that same directory.
+            adb shell mkdir -p "$RUN_DIR"
+            printf 'only=1\nshots=45.1,46.5\n' \
+              | adb shell "cat > $RUN_DIR/electrobench.txt" || \
+              echo "::warning::could not write the run spec; the port will use its defaults (both scenes)"
+
+            adb logcat -c
+            adb shell am start -W -n "$PKG/android.app.NativeActivity"
+
+            # One 45 s scene plus the results screen; 3 minutes is generous.
+            for _ in $(seq 1 90); do
+              if adb shell "grep -q 'benchmark finished' '$RUN_DIR/stdout.txt'" 2>/dev/null; then
+                break
+              fi
+              sleep 2
+            done
+
+            adb pull "$RUN_DIR" "$OUT/$PKG" || true
+            adb logcat -d > "$OUT/logcat.txt" || true
+            adb logcat -d -s ElectroBench:V > "$OUT/logcat-electrobench.txt" || true
+            ls -lR "$OUT"
+
+      - name: Upload screenshots, score and logcat
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: electrobench-emulator
+          path: emulator-artifacts
+          if-no-files-found: warn
+
+      - name: Report the score
+        if: always()
+        run: |
+          set -uo pipefail
+
+          results=emulator-artifacts/org.deadbeef7.electrobench/stdout.txt
+          screenshots=$(find emulator-artifacts -name '*.png' 2>/dev/null | sort)
+
+          {
+            echo "## ElectroBench on the Android emulator"
+            echo
+            echo "API 33, x86_64, SwiftShader software ES 3.0: a correctness run, not a GPU score."
+            echo
+            if [ -f "$results" ] && grep -q "Benchmark Results" "$results"; then
+              echo '```'
+              grep "Benchmark Results" "$results"
+              echo '```'
+            else
+              echo "No \`Benchmark Results\` line was produced - see the \`electrobench-emulator\` artifact."
+            fi
+            echo
+            if [ -n "$screenshots" ]; then
+              echo "Screenshots:"
+              echo
+              echo '```'
+              echo "$screenshots"
+              echo '```'
+            else
+              echo "No screenshots were captured."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          [ -f "$results" ] && grep -q "Benchmark Results" "$results"
