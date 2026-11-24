@@ -22,7 +22,7 @@ void main() {
     vec4 w = uModel * vec4(aPos, 1.0);
     vWorld = w.xyz;
 
-    vNormal = mat3(uModel) * aNormal;
+    vNormal = normalize(mat3(uModel) * aNormal);
     vColor = aColor;
     vMat = aMat;
     vAlpha = aAlpha;

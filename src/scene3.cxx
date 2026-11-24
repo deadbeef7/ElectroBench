@@ -1,13 +1,15 @@
-// ElectroBench — scene 3 of the single ElectroBench binary: the "pool room"
-// — an infinite checkerboard sky reflected on open water, lit only by a
-// hidden light source, with a teapot that falls from the sky, splashes down,
-// and bobs on the surface with realistic-ish physics (gravity, buoyancy,
-// drag, damping) on OpenGL 3.3 core.
+// ElectroBench — scene 3 of the single ElectroBench binary: the power-lines
+// scene. A late-afternoon Japanese suburb memory: orange sky,
+// white drifting clouds, and a tangle of utility poles, crossarms, insulators,
+// transformers and sagging wires receding into the heat haze — the
+// serial-experiments mood, built entirely from analytic geometry (no model
+// files, no textures: every cylinder, catenary and quad is generated on the CPU
+// at startup).
 //
-// Like src/scene2.cxx, this translation unit is NOT a program of its own.
-// It exports RunPoolScene(), which main.cxx calls as the third scene of the
-// one and only ElectroBench executable.
-
+// Like src/scene1.cxx and src/scene2.cxx, this translation unit is NOT a
+// program of its own. It exports RunPoleScene(), which main.cxx calls as the
+// third scene of the one and only ElectroBench executable.
+//
 
 #include <algorithm>
 #include <array>
@@ -32,114 +34,77 @@
 #include "post.hxx"
 
 extern bool gWindowedMode;
-#include "font_atlas.hxx" 
-
-enum LodePNGColorType { LCT_GREY = 0, LCT_RGB = 2, LCT_PALETTE = 3,
-                        LCT_GREY_ALPHA = 4, LCT_RGBA = 6 };
-unsigned lodepng_decode_file(unsigned char **out, unsigned *w, unsigned *h,
-                             const char *filename, LodePNGColorType colorType,
-                             unsigned bitdepth);
-
-// ------------------------------------------------------------------ constants
-#define NAME "ElectroBench - Scene 3 (Pool Room)"
-#define WIDTH 1366
-#define HEIGHT 768
-#define BENCH_MILLISECONDS 45000 
-
-#define MAX_RINGS 54             
-#define MAX_BUBBLES 48     
-                      
-static const int kWaterResolution = 32;   
-static const float kWaterSize = 300.0f;   
-static const int kDomeSeg = 48, kDomeRings = 28;
-static const float kDomeRadius = 800.0f; 
-
-
-static const float kTileA[3] = {2.30f, 2.30f, 2.26f}; 
-static const float kTileB[3] = {1.50f, 0.008f, 0.010f};
-static const float kLightTint[3] = {0.86f, 0.95f, 1.05f};
-
-
-static const float kLightDir[3] = {-0.30f, 0.52f, -0.80f};
-
-// ------------------------------------------------------------ tiny math utils
+Uint32 BenchCreateFullscreenFlag();
+void BenchApplyDesktopFullscreen(SDL_Window *win);
+#include "font_atlas.hxx"
+// --------------------------------------------------------------- math block
 struct Vec3 {
   float x, y, z;
 };
-
 static inline Vec3 Vec3Add(const Vec3 &a, const Vec3 &b) { return {a.x + b.x, a.y + b.y, a.z + b.z}; }
-static inline Vec3 Vec3Sub(const Vec3 &a, const Vec3 &b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
 static inline Vec3 Vec3Scale(const Vec3 &a, float s) { return {a.x * s, a.y * s, a.z * s}; }
+static inline Vec3 Vec3Sub(const Vec3 &a, const Vec3 &b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
 static inline float Vec3Dot(const Vec3 &a, const Vec3 &b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
 static inline Vec3 Vec3Cross(const Vec3 &a, const Vec3 &b) {
   return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
 }
-static inline Vec3 Vec3Normalize(const Vec3 &v) {
-  float len = std::sqrt(Vec3Dot(v, v));
-  if (len <= 1e-8f) return {0.0f, 0.0f, 0.0f};
-  return {v.x / len, v.y / len, v.z / len};
+static inline float Vec3Len(const Vec3 &a) {
+  return std::sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
+}
+static inline Vec3 Vec3Norm(const Vec3 &a) {
+  float l = Vec3Len(a);
+  return l > 1e-8f ? Vec3Scale(a, 1.0f / l) : Vec3{0.0f, 1.0f, 0.0f};
+}
+static inline Vec3 Vec3PerpTo(const Vec3 &v) {
+  const Vec3 ref = (std::fabs(v.y) < 0.9f) ? Vec3{0, 1, 0} : Vec3{1, 0, 0};
+  return Vec3Norm(Vec3Cross(v, ref));
 }
 
 using Mat4 = std::array<float, 16>;
-
 static void Mat4Identity(Mat4 &m) { m.fill(0.0f); m[0] = m[5] = m[10] = m[15] = 1.0f; }
-
 static void Mat4Multiply(Mat4 &out, const Mat4 &a, const Mat4 &b) {
-  Mat4 r;
+  Mat4 r{};
   for (int c = 0; c < 4; c++)
-    for (int row = 0; row < 4; row++) {
+    for (int rw = 0; rw < 4; rw++) {
       float s = 0.0f;
-      for (int k = 0; k < 4; k++) s += a[k * 4 + row] * b[c * 4 + k];
-      r[c * 4 + row] = s;
+      for (int k = 0; k < 4; k++) s += a[k * 4 + rw] * b[c * 4 + k];
+      r[c * 4 + rw] = s;
     }
   out = r;
 }
-
 static void Mat4Perspective(Mat4 &m, float fovYDeg, float aspect, float zNear, float zFar) {
   m.fill(0.0f);
-  float f = 1.0f / std::tan(fovYDeg * 3.14159265358979f / 360.0f);
+  float f = 1.0f / std::tan(fovYDeg * 3.14159265f / 360.0f);
   m[0] = f / aspect;
   m[5] = f;
   m[10] = (zFar + zNear) / (zNear - zFar);
   m[11] = -1.0f;
   m[14] = (2.0f * zFar * zNear) / (zNear - zFar);
 }
-
 static void Mat4LookAt(Mat4 &m, const Vec3 &eye, const Vec3 &center, const Vec3 &up) {
-  Vec3 f = Vec3Normalize(Vec3Sub(center, eye));
-  Vec3 s = Vec3Normalize(Vec3Cross(f, up));
+  Vec3 f = Vec3Norm(Vec3Sub(center, eye));
+  Vec3 s = Vec3Norm(Vec3Cross(f, up));
   Vec3 u = Vec3Cross(s, f);
-  Mat4Identity(m);
-  m[0] = s.x;   m[4] = s.y;   m[8]  = s.z;
-  m[1] = u.x;   m[5] = u.y;   m[9]  = u.z;
-  m[2] = -f.x;  m[6] = -f.y;  m[10] = -f.z;
-  m[12] = -Vec3Dot(s, eye);
-  m[13] = -Vec3Dot(u, eye);
-  m[14] = Vec3Dot(f, eye);
-}
-static void Mat4Model(Mat4 &m, const Vec3 &pos, float yaw, float scale,
-                      float pitch = 0.0f) {
-  float c = std::cos(yaw), s = std::sin(yaw);
-  float cp = std::cos(pitch), sp = std::sin(pitch);
-  Mat4Identity(m);
-  m[0] = c * scale;        m[4] = s * sp * scale;  m[8]  = -s * cp * scale;  m[12] = pos.x;
-  m[1] = 0.0f;             m[5] = cp * scale;      m[9]  = sp * scale;       m[13] = pos.y;
-  m[2] = s * scale;        m[6] = -c * sp * scale; m[10] = c * cp * scale;   m[14] = pos.z;
-  m[3] = 0.0f;             m[7] = 0.0f;            m[11] = 0.0f;             m[15] = 1.0f;
+  Mat4 r{};
+  r[0] = s.x;  r[4] = s.y;  r[8] = s.z;
+  r[1] = u.x;  r[5] = u.y;  r[9] = u.z;
+  r[2] = -f.x; r[6] = -f.y; r[10] = -f.z;
+  r[12] = -Vec3Dot(s, eye);
+  r[13] = -Vec3Dot(u, eye);
+  r[14] = Vec3Dot(f, eye);
+  r[15] = 1.0f;
+  m = r;
 }
 
-// --------------------------------------------------------------- file helpers
-static char *ReadTextFile(const char *filename) {
-  FILE *f = std::fopen(filename, "rb");
-  if (!f) return nullptr;
-  std::fseek(f, 0, SEEK_END);
-  long size = std::ftell(f);
-  std::fseek(f, 0, SEEK_SET);
-  char *buf = (char *)std::malloc((size_t)size + 1);
-  size_t rd = std::fread(buf, 1, (size_t)size, f);
-  buf[rd] = '\0';
-  std::fclose(f);
-  return buf;
+static void Mat4Ortho(Mat4 &m, float l, float r, float b, float t, float n, float f) {
+  m.fill(0.0f);
+  m[0] = 2.0f / (r - l);
+  m[5] = 2.0f / (t - b);
+  m[10] = -2.0f / (f - n);
+  m[12] = -(r + l) / (r - l);
+  m[13] = -(t + b) / (t - b);
+  m[14] = -(f + n) / (f - n);
+  m[15] = 1.0f;
 }
 
 static double NowSeconds() {
@@ -164,374 +129,1207 @@ static GLuint CompileShader(GLenum type, const char *src, const char *name) {
   GLuint sh = glCreateShader(type);
   glShaderSource(sh, 1, &src, nullptr);
   glCompileShader(sh);
-  GLint ok = GL_FALSE;
+  GLint ok = 0;
   glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
   if (!ok) {
-    char log[4096];
+    char log[2048];
     glGetShaderInfoLog(sh, sizeof(log), nullptr, log);
-    std::fprintf(stderr, "%s shader (%s) failed to compile:\n%s\n",
-                 type == GL_VERTEX_SHADER ? "Vertex" : "Fragment", name, log);
+    std::fprintf(stderr, "pole scene: shader %s failed:\n%s\n", name, log);
   }
   return sh;
 }
 
 static Program LinkProgram(const char *vsPath, const char *fsPath) {
-  Program p;
-  char *vs = ReadTextFile(vsPath);
-  char *fs = ReadTextFile(fsPath);
-  if (!vs || !fs) {
-    std::fprintf(stderr, "Cannot read shaders %s / %s (run from the repo root)\n", vsPath, fsPath);
-    std::exit(EXIT_FAILURE);
+  FILE *f = std::fopen(vsPath, "rb");
+  if (!f) { std::fprintf(stderr, "pole scene: cannot open %s\n", vsPath); return {}; }
+  std::string vs;
+  {
+    char buf[8192];
+    size_t n;
+    while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) vs.append(buf, n);
   }
-  GLuint v = CompileShader(GL_VERTEX_SHADER, vs, vsPath);
-  GLuint f = CompileShader(GL_FRAGMENT_SHADER, fs, fsPath);
-  p.handle = glCreateProgram();
-  glAttachShader(p.handle, v);
-  glAttachShader(p.handle, f);
-  glLinkProgram(p.handle);
-  GLint ok = GL_FALSE;
-  glGetProgramiv(p.handle, GL_LINK_STATUS, &ok);
-  if (!ok) {
-    char log[4096];
-    glGetProgramInfoLog(p.handle, sizeof(log), nullptr, log);
-    std::fprintf(stderr, "Program %s/%s failed to link:\n%s\n", vsPath, fsPath, log);
-  }
-  glDeleteShader(v);
-  glDeleteShader(f);
-  std::free(vs);
-  std::free(fs);
-  return p;
-}
-
-// minimal obj loading
-struct TeapotMesh {
-  GLuint vao = 0, vbo = 0;
-  int indexCount = 0;
-};
-
-static TeapotMesh LoadObjMesh(const char *path, float targetRadius) {
-  FILE *f = std::fopen(path, "rb");
-  if (!f) {
-    std::fprintf(stderr, "Cannot open OBJ %s\n", path);
-    std::exit(EXIT_FAILURE);
-  }
-  std::vector<float> vp, vt, vn;
-  char line[512];
-  while (std::fgets(line, sizeof(line), f)) {
-    if (line[0] == 'v' && line[1] == ' ') {
-      float x, y, z;
-      if (std::sscanf(line, "v %f %f %f", &x, &y, &z) == 3) {
-        vp.push_back(x); vp.push_back(y); vp.push_back(z);
-      }
-    } else if (line[0] == 'v' && line[1] == 't') {
-      float u, v;
-      if (std::sscanf(line, "vt %f %f", &u, &v) == 2) vt.push_back(u), vt.push_back(v);
-    } else if (line[0] == 'v' && line[1] == 'n') {
-      float x, y, z;
-      if (std::sscanf(line, "vn %f %f %f", &x, &y, &z) == 3) vn.push_back(x), vn.push_back(y), vn.push_back(z);
-    }
-  }
-  std::rewind(f);
-
-  // face parsing needs the bbox, so scan it first
-  float minv[3] = {1e9f, 1e9f, 1e9f}, maxv[3] = {-1e9f, -1e9f, -1e9f};
-  for (size_t i = 0; i + 2 < vp.size(); i += 3) {
-    for (int k = 0; k < 3; k++) {
-      if (vp[i + k] < minv[k]) minv[k] = vp[i + k];
-      if (vp[i + k] > maxv[k]) maxv[k] = vp[i + k];
-    }
-  }
-  float ctrX = (minv[0] + maxv[0]) * 0.5f;
-  float ctrZ = (minv[2] + maxv[2]) * 0.5f;
-  float baseY = minv[1];
-  float ext[3] = {maxv[0] - minv[0], maxv[1] - minv[1], maxv[2] - minv[2]};
-  float maxDim = ext[0];
-  if (ext[1] > maxDim) maxDim = ext[1];
-  if (ext[2] > maxDim) maxDim = ext[2];
-  float s = targetRadius / (maxDim * 0.5f);
-
-  struct WeldKey {
-    int vi;
-    int uvGen;  
-    float u, v;  
-    bool operator==(const WeldKey &o) const {
-      return vi == o.vi && uvGen == o.uvGen && u == o.u && v == o.v;
-    }
-  };
-  struct WeldKeyHash {
-    size_t operator()(const WeldKey &k) const {
-      size_t h = std::hash<int>()(k.vi * 31 + k.uvGen);
-      h ^= std::hash<float>()(k.u) + 0x9e3779b9u + (h << 6) + (h >> 2);
-      h ^= std::hash<float>()(k.v) + 0x9e3779b9u + (h << 6) + (h >> 2);
-      return h;
-    }
-  };
-  struct WeldVal { int slot; float nx, ny, nz; };
-  std::unordered_map<WeldKey, WeldVal, WeldKeyHash> weld;
-
-  std::vector<float> data; // interleaved pos3/normal3/uv2
-  std::vector<unsigned> idx;
-  data.reserve(64 * 1024);
-  idx.reserve(32 * 1024);
-
-  struct Corner { int vi, ti, ni; };
-  std::vector<std::array<Corner, 3>> faceTris;
-  while (std::fgets(line, sizeof(line), f)) {
-    if (line[0] != 'f' || line[1] != ' ') continue;
-    Corner c[16];
-    int nc = 0;
-    const char *p = line + 2;
-    while (*p && nc < 16) {
-      int vi = 0, ti = 0, ni = 0;
-      int n = std::sscanf(p, "%d/%d/%d", &vi, &ti, &ni);
-      if (n <= 0) break;
-      if (n == 1) { ti = 0; ni = 0; }
-      c[nc++] = {vi, ti, ni};
-      while (*p && *p != ' ') p++;
-      while (*p == ' ') p++;
-    }
-    if (nc < 3) continue;
-    for (int k = 1; k + 1 < nc; k++) {
-      faceTris.push_back({c[0], c[k], c[k + 1]});
-    }
-  }
-  std::rewind(f);
-
-  // pass 1: accumulate face normals into every welded corner
-  auto accumulateNormals = [&]() {
-    for (const auto &tri : faceTris) {
-      const Corner &A = tri[0], &B = tri[1], &C = tri[2];
-      if (A.vi <= 0 || B.vi <= 0 || C.vi <= 0) continue;
-      if ((size_t)A.vi * 3 - 2 >= vp.size() || (size_t)B.vi * 3 - 2 >= vp.size() ||
-          (size_t)C.vi * 3 - 2 >= vp.size())
-        continue;
-      const float *pa = &vp[(A.vi - 1) * 3];
-      const float *pb = &vp[(B.vi - 1) * 3];
-      const float *pc = &vp[(C.vi - 1) * 3];
-      float ux = (pb[0] - pa[0]) * s, uy = (pb[1] - pa[1]) * s, uz = (pb[2] - pa[2]) * s;
-      float wx = (pc[0] - pa[0]) * s, wy = (pc[1] - pa[1]) * s, wz = (pc[2] - pa[2]) * s;
-      float fnx = uy * wz - uz * wy;
-      float fny = uz * wx - ux * wz;
-      float fnz = ux * wy - uy * wx;
-      for (const Corner &cn : tri) {
-        if (cn.vi <= 0 || (size_t)(cn.vi - 1) * 3 + 2 >= vp.size()) continue;
-        float px = (vp[(cn.vi - 1) * 3 + 0] - ctrX) * s;
-        float py = (vp[(cn.vi - 1) * 3 + 1] - baseY) * s;
-        float pz = (vp[(cn.vi - 1) * 3 + 2] - ctrZ) * s;
-        float u, v;
-        int uvGen;
-        if (cn.ti > 0 && (size_t)(cn.ti - 1) * 2 + 1 < vt.size()) {
-          u = vt[(cn.ti - 1) * 2 + 0]; v = vt[(cn.ti - 1) * 2 + 1];
-          uvGen = 0;
-        } else {
-          float ang = std::atan2(pz, px);
-          u = (ang / 6.2831853f) + 0.5f;
-          v = py / (maxDim * s) + 0.5f;
-          uvGen = 1;
-        }
-        WeldKey key{cn.vi, uvGen, u, v};
-        auto it = weld.find(key);
-        if (it == weld.end()) continue;
-        if (cn.ni > 0 && (size_t)(cn.ni - 1) * 3 + 2 < vn.size()) {
-          it->second.nx += vn[(cn.ni - 1) * 3 + 0];
-          it->second.ny += vn[(cn.ni - 1) * 3 + 1];
-          it->second.nz += vn[(cn.ni - 1) * 3 + 2];
-        } else {
-          it->second.nx += fnx; it->second.ny += fny; it->second.nz += fnz;
-        }
-      }
-    }
-  };
-
-  // build the weld entries first (positions + UVs) so pass 1 can find them
-  auto ensureEntries = [&]() {
-    for (const auto &tri : faceTris) {
-      for (const Corner &cn : tri) {
-        if (cn.vi <= 0 || (size_t)(cn.vi - 1) * 3 + 2 >= vp.size()) continue;
-        float px = (vp[(cn.vi - 1) * 3 + 0] - ctrX) * s;
-        float py = (vp[(cn.vi - 1) * 3 + 1] - baseY) * s;
-        float pz = (vp[(cn.vi - 1) * 3 + 2] - ctrZ) * s;
-        float u, v;
-        int uvGen;
-        if (cn.ti > 0 && (size_t)(cn.ti - 1) * 2 + 1 < vt.size()) {
-          u = vt[(cn.ti - 1) * 2 + 0]; v = vt[(cn.ti - 1) * 2 + 1];
-          uvGen = 0;
-        } else {
-          float ang = std::atan2(pz, px);
-          u = (ang / 6.2831853f) + 0.5f;
-          v = py / (maxDim * s) + 0.5f;
-          uvGen = 1;
-        }
-        WeldKey key{cn.vi, uvGen, u, v};
-        if (weld.find(key) == weld.end()) {
-          weld.emplace(key, WeldVal{(int)(data.size() / 8), 0.0f, 1.0f, 0.0f});
-          data.push_back(px); data.push_back(py); data.push_back(pz);
-          data.push_back(0.0f); data.push_back(1.0f); data.push_back(0.0f);
-          data.push_back(u); data.push_back(v);
-        }
-      }
-    }
-  };
-  ensureEntries();
-  accumulateNormals();
-
-  // write the smoothed normals back into the interleaved buffer
-  for (const auto &kv : weld) {
-    float nx = kv.second.nx, ny = kv.second.ny, nz = kv.second.nz;
-    float len = std::sqrt(nx * nx + ny * ny + nz * nz);
-    int slot = kv.second.slot;
-    if (len > 1e-9f) {
-      data[slot * 8 + 3] = nx / len;
-      data[slot * 8 + 4] = ny / len;
-      data[slot * 8 + 5] = nz / len;
-    }
-  }
-
-  // pass 2: emit indices in original winding order (culling is disabled for
-  // teapots, so mixed winding cannot punch holes)
-  for (const auto &tri : faceTris) {
-    for (const Corner &cn : tri) {
-      if (cn.vi <= 0 || (size_t)(cn.vi - 1) * 3 + 2 >= vp.size()) { idx.push_back(0); continue; }
-      float px = (vp[(cn.vi - 1) * 3 + 0] - ctrX) * s;
-      float py = (vp[(cn.vi - 1) * 3 + 1] - baseY) * s;
-      float pz = (vp[(cn.vi - 1) * 3 + 2] - ctrZ) * s;
-      float u, v;
-      int uvGen;
-      if (cn.ti > 0 && (size_t)(cn.ti - 1) * 2 + 1 < vt.size()) {
-        u = vt[(cn.ti - 1) * 2 + 0]; v = vt[(cn.ti - 1) * 2 + 1];
-        uvGen = 0;
-      } else {
-        float ang = std::atan2(pz, px);
-        u = (ang / 6.2831853f) + 0.5f;
-        v = py / (maxDim * s) + 0.5f;
-        uvGen = 1;
-      }
-      auto it = weld.find(WeldKey{cn.vi, uvGen, u, v});
-      idx.push_back(it != weld.end() ? (unsigned)it->second.slot : 0);
-    }
+  std::fclose(f);
+  f = std::fopen(fsPath, "rb");
+  if (!f) { std::fprintf(stderr, "pole scene: cannot open %s\n", fsPath); return {}; }
+  std::string fs;
+  {
+    char buf[8192];
+    size_t n;
+    while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) fs.append(buf, n);
   }
   std::fclose(f);
 
-  TeapotMesh m;
-  glGenVertexArrays(1, &m.vao);
-  glGenBuffers(1, &m.vbo);
-  glBindVertexArray(m.vao);
-  glBindBuffer(GL_ARRAY_BUFFER, m.vbo);
-  glBufferData(GL_ARRAY_BUFFER, data.size() * sizeof(float), data.data(), GL_STATIC_DRAW);
-  GLuint ebo;
-  glGenBuffers(1, &ebo);
-  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
-  glBufferData(GL_ELEMENT_ARRAY_BUFFER, idx.size() * sizeof(unsigned), idx.data(), GL_STATIC_DRAW);
-  glEnableVertexAttribArray(0);
-  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void *)0);
-  glEnableVertexAttribArray(1);
-  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void *)(3 * sizeof(float)));
-  glEnableVertexAttribArray(2);
-  glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void *)(6 * sizeof(float)));
-  glBindVertexArray(0);
-  (void)ebo;
-  m.indexCount = (int)idx.size();
-  return m;
-}
-
-// ------------------------------------------------------------------- textures
-static GLuint LoadTextureRGBA(const char *path) {
-  std::string resolved = resolveAssetPath(path);
-  unsigned char *img = nullptr;
-  unsigned w = 0, h = 0;
-  unsigned err = lodepng_decode_file(&img, &w, &h, resolved.c_str(), LCT_RGBA, 8);
-  if (err) {
-    std::fprintf(stderr, "Cannot load texture %s (lodepng error %u)\n", resolved.c_str(), err);
-    std::exit(EXIT_FAILURE);
+  Program p;
+  p.handle = glCreateProgram();
+  GLuint v = CompileShader(GL_VERTEX_SHADER, vs.c_str(), vsPath);
+  GLuint fr = CompileShader(GL_FRAGMENT_SHADER, fs.c_str(), fsPath);
+  glAttachShader(p.handle, v);
+  glAttachShader(p.handle, fr);
+  glLinkProgram(p.handle);
+  GLint ok = 0;
+  glGetProgramiv(p.handle, GL_LINK_STATUS, &ok);
+  if (!ok) {
+    char log[2048];
+    glGetProgramInfoLog(p.handle, sizeof(log), nullptr, log);
+    std::fprintf(stderr, "pole scene: link %s+%s failed:\n%s\n", vsPath, fsPath, log);
   }
-  GLuint tex = 0;
-  glGenTextures(1, &tex);
-  glBindTexture(GL_TEXTURE_2D, tex);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, img);
-  glGenerateMipmap(GL_TEXTURE_2D);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-  std::free(img);
-  return tex;
+  glDeleteShader(v);
+  glDeleteShader(fr);
+  return p;
 }
 
-// ------------------------------------------------------------------- meshes
-struct Mesh {
-  GLuint vao = 0;
-  GLuint vbo = 0;
-  int indexCount = 0;
+// ------------------------------------------------------------------ constants
+static const char *const gName = "ElectroBench - Scene 3 (Lain)";
+static const int WIDTH = 1280, HEIGHT = 720;
+static const float kGroundY = 0.0f;
+// Fixed sun. It used to creep down with simulated time, so the shadows (and the
+// sun disk in the sky) drifted on their own while the camera dollied. The
+// corridor is graded and lit for one late-afternoon angle, so it stays put.
+static Vec3 SunDir() {
+  const Vec3 s{0.30f, 0.20f, 0.93f};
+  return Vec3Norm(s);
+}
+
+// ---------------------------------------------------------------- scene state
+static Program gSkyProg, gObjProg, gHudProg;
+
+// Scene 3 is drawn into a half-float MSAA target and finished by the shared
+// camera pipeline: every pass writes linear radiance and one ACES composite
+// puts the frame on screen, with the bloom pyramid carrying the glare the
+// sun, the wet kerb and the galvanised steel actually throw.
+static postproc::Pipeline gPost;
+static postproc::Settings gPostSettings;
+
+static GLuint gFontTex = 0;
+static GLuint gSkyVao = 0, gSkyVbo = 0, gSkyIbo = 0;
+static int gSkyIndexCount = 0;
+
+// The sky cubemap the materials reflect, rebuilt from the camera every frame.
+//
+// The sun shadow map is the opposite: its frustum is fitted to the scene's own
+// static world bounds and the sun direction, and the eye is deliberately not an
+// input. That is the whole point - the old map re-centred itself on the camera
+// every frame and its shadow edges crept along the ground whenever the view
+// moved. A frustum that never looks at the camera cannot do that.
+static const float kShadowTexelTarget = 0.055f; // metres per texel, before rounding
+// The map covers the corridor the camera lives in, not the whole skyline: the
+// scene's own bounds run out to 700 m of backdrop blocks, which would push a
+// single map to 21 cm per texel. These numbers are world constants, never
+// derived from the eye, which is what keeps the shadows tied to the ground.
+static const Vec3 kShadowMin{-140.0f, 0.0f, -120.0f};
+static const Vec3 kShadowMax{140.0f, 40.0f, 360.0f};
+static GLuint gShadowFbo = 0, gShadowTex = 0, gShadowProg = 0;
+static GLuint gShadowVao = 0, gShadowIbo = 0;
+static int gShadowTexSize = 0, gShadowIndexCount = 0;
+static bool gShadowReady = false;
+static Mat4 gLightVP;
+static float gShadowTexelWorld = kShadowTexelTarget, gShadowBias = 0.0f;
+static float gShadowNear = 0.0f, gShadowFar = 1.0f; // light-space depth range
+static bool gShadowBuilt = false;
+static std::vector<unsigned int> gCasterIdx;
+
+static const int kEnvSize = 256;
+static GLuint gSkyCube = 0, gSkyEnvFbo = 0, gSkyEnvDepth = 0;
+static bool gSkyEnvReady = false;
+static GLuint gObjVao = 0, gObjVbo = 0, gObjIbo = 0;
+static int gObjIndexCount = 0;
+static SDL_Window *gWindow = nullptr;
+static SDL_GLContext gContext = nullptr;
+static int gWindowWidth = WIDTH, gWindowHeight = HEIGHT;
+
+static int gFrame = 0, gFps = 0, gFrameAccum = 0;
+static double gFpsTimer = 0.0;
+static double gStartTime = 0.0;
+static double gSimTime = 0.0;      // SIM seconds: screenshot times are sim-based
+static bool gQuit = false;
+static bool gFusedDone = false;
+static bool gStandaloneScene = false;
+static double gResultsShownAt = 0.0;
+static bool gResultsShown = false;
+static double gResultsElapsed = 0.0, gResultsFps = 0.0, gResultsScore = 0.0;
+static const double kResultsScreenSeconds = 4.0;
+double gFusedPoleScore = 0.0;      // read by main.cxx for the combined screen
+
+static const char *gScreenshotPath = nullptr;
+static const char *gDumpShadowPath = nullptr; // --dump-shadow-map FILE
+static std::vector<float> gShotTimes;
+static size_t gNextShot = 0;
+static int gWindowWidthOverride = 0;
+
+// ------------------------------------------------------------------- camera
+static bool gAutoCam = true;
+static Vec3 gCamPos{0.0f, 2.0f, 4.0f};
+static float gCamYaw = 0.0f, gCamPitch = -0.06f, gCamDist = 7.0f;
+
+static void UpdateAutoCamera(float t) {
+  const float span = 161.0f;   // 13 spans of the 15-pole corridor
+  float z = 4.0f + std::fmod(t * 2.6f, span);
+  gCamPos = {2.0f + std::sin(t * 0.05f) * 0.30f,         // gentle weave
+             1.55f + 0.18f * std::sin(t * 0.11f),        // breathing height
+             z};
+  Vec3 target{-1.15f, 7.6f, z + 17.0f};
+  Vec3 f = Vec3Norm(Vec3Sub(target, gCamPos));
+  gCamYaw = std::atan2(-f.x, -f.z);
+  gCamPitch = std::asin(f.y) * -1.0f;   // negative = looking up
+}
+
+static Vec3 OrbitCamPos() {
+  float cp = std::cos(gCamPitch), sp = std::sin(gCamPitch);
+  Vec3 pos;
+  pos.x = gCamPos.x + std::sin(gCamYaw) * cp * gCamDist;
+  pos.y = gCamPos.y + sp * gCamDist;
+  pos.z = gCamPos.z + std::cos(gCamYaw) * cp * gCamDist;
+  if (pos.y < 0.5f) pos.y = 0.5f;                        // never under the ground
+  return pos;
+}
+struct ObjVertex { float x, y, z, nx, ny, nz, r, g, b, mat, alpha; };
+static std::vector<ObjVertex> gVerts;
+static std::vector<unsigned int> gIdx;
+
+static const float kMatPaint = 0.0f;      // generic, no detail
+static const float kMatWood = 1.0f;
+static const float kMatGround = 2.0f;
+static const float kMatShadow = 12.0f; // black, alpha blended: the pole's ground shadow
+static const float kMatRoad = 3.0f;
+static const float kMatLine = 4.0f;       // road paint
+static const float kMatCable = 5.0f;
+static const float kMatCeramic = 6.0f;
+static const float kMatMetal = 7.0f;
+static const float kMatWall = 8.0f;
+static const float kMatRoof = 9.0f;
+static const float kMatGlass = 10.0f;
+static const float kMatLeaf = 11.0f;
+static const float kMatGlow = 13.0f;     
+static const float kMatSteel = 14.0f;
+static const float kMatKerb = 15.0f;
+static const float kMatConcrete = 16.0f;
+static const Vec3 kConcreteGrey{0.212f, 0.216f, 0.218f};
+
+static const Vec3 kWoodDark{0.165f, 0.115f, 0.085f};   // creosote (treeline)
+static const Vec3 kWoodOld{0.230f, 0.180f, 0.140f};   // weathered timber
+static const Vec3 kCeramic{0.780f, 0.760f, 0.700f};   // insulator glaze
+static const Vec3 kCable{0.055f, 0.050f, 0.055f};    // rubber wire
+static const Vec3 kCableOld{0.085f, 0.075f, 0.070f};
+static const Vec3 kMetal{0.190f, 0.195f, 0.200f};   
+static const Vec3 kSteelGalv{0.252f, 0.261f, 0.273f}; // hot-dip zinc, trunk
+static const Vec3 kSteelArm{0.265f, 0.272f, 0.282f};  // angle iron, brackets
+static const Vec3 kSteelPlate{0.560f, 0.545f, 0.505f};// pole number plate
+static const Vec3 kGravel{0.330f, 0.272f, 0.205f};  
+static const float kRoadX = 2.6f;       // road centre (matches uRoadX)
+static const float kRoadHalf = 2.7f;    // 5.4 m carriageway
+static const float kRoadY = 0.030f;
+static const float kPaintY = 0.050f;
+static const float kKerbTopY = 0.190f;
+
+static void PushVert(const Vec3 &p, const Vec3 &n, const Vec3 &c,
+                     float mat = kMatPaint, float alpha = 1.0f) {
+  gVerts.push_back({p.x, p.y, p.z, n.x, n.y, n.z, c.x, c.y, c.z, mat, alpha});
+}
+static void AddCylinder(const Vec3 &base, const Vec3 &top, float rBase, float rTop,
+                        int segs, const Vec3 &color, float mat = kMatPaint) {
+  Vec3 axis = Vec3Norm(Vec3Sub(top, base));
+  Vec3 helper = std::abs(axis.y) > 0.9f ? Vec3{1, 0, 0} : Vec3{0, 1, 0};
+  Vec3 s = Vec3Norm(Vec3Cross(axis, helper));
+  Vec3 u = Vec3Cross(axis, s);
+  unsigned int start = (unsigned int)gVerts.size();
+  for (int i = 0; i <= segs; i++) {
+    float a = (float)i / segs * 6.2831853f;
+    Vec3 dir = Vec3Add(Vec3Scale(s, std::cos(a)), Vec3Scale(u, std::sin(a)));
+    Vec3 n = dir;
+    PushVert(Vec3Add(base, Vec3Scale(dir, rBase)), n, color, mat);
+    PushVert(Vec3Add(top, Vec3Scale(dir, rTop)), n, color, mat);
+  }
+  for (int i = 0; i < segs; i++) {
+    unsigned int a = start + (unsigned int)i * 2;
+    gIdx.push_back(a); gIdx.push_back(a + 1); gIdx.push_back(a + 2);
+    gIdx.push_back(a + 1); gIdx.push_back(a + 3); gIdx.push_back(a + 2);
+  }
+  // caps (fan around the centre vertex)
+  for (int cap = 0; cap < 2; cap++) {
+    Vec3 c = cap ? top : base;
+    Vec3 n = cap ? axis : Vec3Scale(axis, -1.0f);
+    float r = cap ? rTop : rBase;
+    unsigned int ci = (unsigned int)gVerts.size();
+    PushVert(c, n, color, mat);
+    for (int i = 0; i <= segs; i++) {
+      float a = (float)i / segs * 6.2831853f;
+      Vec3 dir = Vec3Add(Vec3Scale(s, std::cos(a)), Vec3Scale(u, std::sin(a)));
+      PushVert(Vec3Add(c, Vec3Scale(dir, r)), n, color, mat);
+    }
+    for (int i = 0; i < segs; i++) {
+      unsigned int a = ci + 1 + (unsigned int)i;
+      if (cap) { gIdx.push_back(ci); gIdx.push_back(a); gIdx.push_back(a + 1); }
+      else     { gIdx.push_back(ci); gIdx.push_back(a + 1); gIdx.push_back(a); }
+    }
+  }
+}
+
+static void AddWire(const Vec3 &a, const Vec3 &b, float sag, float radius,
+                    int samples, const Vec3 &color, float mat = kMatCable);
+
+static Vec3 WirePoint(const Vec3 &a, const Vec3 &b, float sag, float t) {
+  Vec3 delta = Vec3Sub(b, a);
+  float len = Vec3Len(delta);
+  if (len < 1e-3f) return a;
+  Vec3 dir = Vec3Scale(delta, 1.0f / len);
+  Vec3 side = Vec3PerpTo(dir);
+  Vec3 up = Vec3Norm(Vec3Cross(side, dir));
+  float halfSpan = len * 0.5f;
+  Vec3 mid = Vec3Add(a, Vec3Scale(delta, 0.5f));
+  float x = (t - 0.5f) * len;
+  float y = sag * (1.0f - 4.0f * (t - 0.5f) * (t - 0.5f));
+  float tail = sag * 0.06f * (std::cosh(x / (halfSpan * 0.72f)) - 1.0f)
+             / (float)std::cosh(halfSpan / (halfSpan * 0.72f));
+  return Vec3Add(Vec3Add(mid, Vec3Scale(dir, x)), Vec3Scale(up, -y - tail));
+}
+
+static std::vector<Vec3> gDropAnchors;
+static void AddTelecomBundle(const Vec3 &a, const Vec3 &b, int seed,
+                             float radius, int samples, const Vec3 &color) {
+  float sag = 0.55f + 0.10f * ((seed * 7) % 3);
+  AddWire(a, b, sag, radius, samples, color, kMatCable);
+  int drops = 2 + (seed % 2);                    
+  for (int i = 0; i < drops; i++) {
+    float t = 0.18f + 0.62f * (float)((seed * 13 + i * 29) % 100) / 100.0f;
+    Vec3 peel = WirePoint(a, b, sag, t);
+    Vec3 p{peel.x, peel.y - 0.035f, peel.z};
+    AddCylinder(Vec3Add(peel, Vec3{0, -0.035f, 0}), Vec3Add(peel, Vec3{0, 0.035f, 0}),
+                0.030f, 0.030f, 6, kMetal, kMatMetal);
+    int best = -1;
+    float bestD = 1e9f;
+    const size_t n = gDropAnchors.size();
+    for (size_t kk = 0; kk < n; kk++) {
+      const Vec3 &q = gDropAnchors[(kk + (size_t)seed * 3 + (size_t)i) % n];
+      float dxz = std::sqrt((q.x - p.x) * (q.x - p.x) + (q.z - p.z) * (q.z - p.z));
+      if (dxz > 11.0f || q.y > p.y - 1.6f) continue;   // too far / uphill
+      if (dxz < bestD) { bestD = dxz; best = (int)((kk + (size_t)seed * 3 +
+                                                   (size_t)i) % n); }
+    }
+    if (best >= 0) {
+      const Vec3 &q = gDropAnchors[best];
+      AddWire(p, q, 0.16f + 0.10f * (float)(i % 2), radius * 0.55f, 9, color,
+              kMatCable);
+    } else {
+      float len = 1.05f + 0.85f * (float)((seed * 23 + i * 13) % 100) / 100.0f;
+      Vec3 q{p.x, p.y - len, p.z};
+      AddWire(p, q, 0.08f, radius * 0.55f, 5, color, kMatCable);
+      AddCylinder(q, Vec3Add(q, Vec3{0, -0.11f, 0}), 0.030f, 0.022f, 6,
+                  kCableOld, kMatMetal);
+      AddCylinder(Vec3Add(q, Vec3{0, -0.01f, 0}), Vec3Add(q, Vec3{0, 0.06f, 0}),
+                  0.026f, 0.026f, 6, kCeramic, kMatCeramic);
+    }
+  }
+}
+
+
+static void AddWire(const Vec3 &a, const Vec3 &b, float sag, float radius,
+                    int samples, const Vec3 &color, float mat) {
+  Vec3 delta = Vec3Sub(b, a);
+  float len = Vec3Len(delta);
+  if (len < 1e-3f) return;
+
+  std::vector<Vec3> centres(samples + 1);
+  for (int i = 0; i <= samples; i++) {
+    centres[i] = WirePoint(a, b, sag, (float)i / samples);
+  }
+  unsigned int start = (unsigned int)gVerts.size();
+  for (int i = 0; i <= samples; i++) {
+    Vec3 t0 = centres[i < samples ? i + 1 : i];
+    Vec3 t1 = centres[i > 0 ? i - 1 : i];
+    Vec3 tang = Vec3Norm(Vec3Sub(t0, t1));
+    Vec3 s2 = Vec3PerpTo(tang);
+    Vec3 u2 = Vec3Norm(Vec3Cross(s2, tang));
+    for (int k = 0; k < 4; k++) {
+      float a2 = (float)k * 1.5707963f;
+      Vec3 n = Vec3Add(Vec3Scale(s2, std::cos(a2)), Vec3Scale(u2, std::sin(a2)));
+      PushVert(Vec3Add(centres[i], Vec3Scale(n, radius)), n, color, mat);
+    }
+  }
+  for (int i = 0; i < samples; i++) {
+    unsigned int r0 = start + (unsigned int)i * 4;
+    unsigned int r1 = r0 + 4;
+    for (int k = 0; k < 4; k++) {
+      unsigned int p0 = r0 + (unsigned int)k;
+      unsigned int p1 = r0 + (unsigned int)((k + 1) % 4);
+      unsigned int q0 = r1 + (unsigned int)k;
+      unsigned int q1 = r1 + (unsigned int)((k + 1) % 4);
+      gIdx.push_back(p0); gIdx.push_back(q0); gIdx.push_back(q1);
+      gIdx.push_back(p0); gIdx.push_back(q1); gIdx.push_back(p1);
+    }
+  }
+}
+
+// Box via 6 quads (crossarms, transformer fins).
+static void AddBox(const Vec3 &center, const Vec3 &half, const Vec3 &color,
+                   float mat = kMatPaint) {
+  static const int quads[6][4] = {
+      {0, 1, 3, 2}, {4, 6, 7, 5}, {0, 4, 5, 1},
+      {2, 3, 7, 6}, {0, 2, 6, 4}, {1, 5, 7, 3}};
+  static const Vec3 norms[6] = {{0, 0, 1},  {0, 0, -1}, {1, 0, 0},
+                                {-1, 0, 0}, {0, 1, 0},  {0, -1, 0}};
+  Vec3 c[8];
+  int m = 0;
+  for (int dz = -1; dz <= 1; dz += 2)
+    for (int dy = -1; dy <= 1; dy += 2)
+      for (int dx = -1; dx <= 1; dx += 2)
+        c[m++] = {center.x + half.x * dx, center.y + half.y * dy, center.z + half.z * dz};
+  for (int q = 0; q < 6; q++) {
+    unsigned int s = (unsigned int)gVerts.size();
+    for (int k = 0; k < 4; k++) PushVert(c[quads[q][k]], norms[q], color, mat);
+    gIdx.push_back(s); gIdx.push_back(s + 1); gIdx.push_back(s + 2);
+    gIdx.push_back(s); gIdx.push_back(s + 2); gIdx.push_back(s + 3);
+  }
+}
+
+struct PoleSpec {
+  float x, z; float height; bool transformer; bool serviceSpool;
+  float leanX, leanZ;
 };
-
-static Mesh gWaterMesh, gDomeMesh;
-static TeapotMesh gTeapotMesh;
-static GLuint gDropletVao = 0, gDropletVbo = 0;
-static int gDropletVertexFloats = 0; // floats currently streamed
-static GLuint gCrownVao = 0, gCrownVbo = 0;
-static int gCrownVertexCount = 0;
-static GLuint gJetVao = 0, gJetVbo = 0;
-static int gJetVertexFloats = 0;
-
-static void BuildWaterMesh() {
-  const int res = kWaterResolution;
-  const float size = kWaterSize;
-  const int quads = res - 1;
-  std::vector<float> verts;
-  std::vector<unsigned int> idx;
-  verts.reserve((size_t)res * res * 8);
-  idx.reserve((size_t)quads * quads * 6);
-  for (int z = 0; z < res; z++) {
-    for (int x = 0; x < res; x++) {
-      float fx = ((float)x / (float)quads - 0.5f) * 2.0f * size;
-      float fz = ((float)z / (float)quads - 0.5f) * 2.0f * size;
-      verts.push_back(fx);
-      verts.push_back(0.0f);
-      verts.push_back(fz);
-      verts.push_back(0.0f); verts.push_back(1.0f); verts.push_back(0.0f); // normal
-      verts.push_back(x / (float)quads); // uv
-      verts.push_back(z / (float)quads);
-    }
-  }
-  for (int z = 0; z < quads; z++)
-    for (int x = 0; x < quads; x++) {
-      unsigned int i0 = (unsigned int)(z * res + x);
-      idx.push_back(i0); idx.push_back(i0 + res); idx.push_back(i0 + 1);
-      idx.push_back(i0 + 1); idx.push_back(i0 + res); idx.push_back(i0 + res + 1);
-    }
-  gWaterMesh.indexCount = (int)idx.size();
-  glGenVertexArrays(1, &gWaterMesh.vao);
-  glGenBuffers(1, &gWaterMesh.vbo);
-  glBindVertexArray(gWaterMesh.vao);
-  glBindBuffer(GL_ARRAY_BUFFER, gWaterMesh.vbo);
-  glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(float), verts.data(), GL_STATIC_DRAW);
-  GLuint ebo;
-  glGenBuffers(1, &ebo);
-  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
-  glBufferData(GL_ELEMENT_ARRAY_BUFFER, idx.size() * sizeof(unsigned int), idx.data(), GL_STATIC_DRAW);
-  glEnableVertexAttribArray(0);
-  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void *)0);
-  glEnableVertexAttribArray(1);
-  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void *)(3 * sizeof(float)));
-  glEnableVertexAttribArray(2);
-  glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void *)(6 * sizeof(float)));
-  glBindVertexArray(0);
-  (void)ebo;
+static Vec3 PoleAxisAt(const PoleSpec &p, float h) {
+  float f = h / p.height;
+  return {p.x + p.leanX * f, h, p.z + p.leanZ * f};
+}
+static const float kShaftRBase = 0.132f;
+static const float kShaftRTop  = 0.086f;
+static float TrunkRadius(const PoleSpec &p, float h) {
+  float f = h / p.height;
+  return kShaftRBase + (kShaftRTop - kShaftRBase) * f;
+}
+static Vec3 TelecomBracketTop(const PoleSpec &p, float off) {
+  float telY = p.height - 0.55f - 1.30f;
+  Vec3 a = PoleAxisAt(p, telY);
+  return {a.x + off, telY + 0.15f, a.z};
+}
+static Vec3 ArmInsulatorTop(const PoleSpec &p, float off) {
+  Vec3 a = PoleAxisAt(p, p.height - 0.25f);
+  return {a.x + off, p.height - 0.25f, a.z};
+}
+static Vec3 PoleTopInsulatorTop(const PoleSpec &p) {
+  Vec3 a = PoleAxisAt(p, p.height + 0.24f);
+  return {a.x, p.height + 0.24f, a.z};
+}
+static Vec3 Arm2InsulatorTop(const PoleSpec &p, float off) {
+  Vec3 a = PoleAxisAt(p, p.height - 0.87f);
+  return {a.x + off, p.height - 0.87f, a.z};
 }
 
-static void BuildDomeMesh() {
+static std::vector<PoleSpec> gLineA, gLineB;  
+static float PoleRoadSide(const PoleSpec &p) { return p.x < kRoadX ? 1.0f : -1.0f; }
+
+
+// geometry and the wire attachment cannot drift apart again.
+static void AddInsulator(const Vec3 &ib) {
+  AddCylinder(ib, Vec3Add(ib, Vec3{0, 0.055f, 0}), 0.044f, 0.040f, 6, kMetal,
+              kMatMetal);
+  AddCylinder(Vec3Add(ib, Vec3{0, 0.055f, 0}), Vec3Add(ib, Vec3{0, 0.175f, 0}),
+              0.050f, 0.061f, 8, kCeramic, kMatCeramic);
+  AddCylinder(Vec3Add(ib, Vec3{0, 0.175f, 0}), Vec3Add(ib, Vec3{0, 0.213f, 0}),
+              0.061f, 0.038f, 8, kCeramic, kMatCeramic);
+}
+
+static void AddStepBolts(const PoleSpec &p, float from, float to, float side) {
+  int i = 0;
+  for (float h = from; h <= to + 1e-3f; h += 0.30f, i++) {
+    float s = (i & 1) ? -side : side;
+    Vec3 a = PoleAxisAt(p, h);
+    float r = TrunkRadius(p, h);
+    AddCylinder({a.x + s * (r - 0.02f), h, a.z}, {a.x + s * (r + 0.10f), h, a.z},
+                0.024f, 0.019f, 5, kSteelArm, kMatSteel);
+  }
+}
+
+static void AddGuyWire(const PoleSpec &p, float side, float zSign) {
+  float hAtt = p.height - 0.95f;
+  Vec3 att = PoleAxisAt(p, hAtt);
+  float r = TrunkRadius(p, hAtt);
+  att.x += side * (r + 0.11f);
+  AddBox({att.x - side * 0.06f, att.y, att.z}, {0.05f, 0.13f, 0.09f}, kSteelArm,
+         kMatSteel);
+  Vec3 mid{att.x + side * 0.13f, att.y - 0.44f, att.z + zSign * 0.28f};
+  AddCylinder(att, mid, 0.026f, 0.023f, 5, kSteelGalv, kMatSteel);
+  Vec3 anc{p.x + side * 0.62f, 0.34f, p.z + zSign * 3.40f};
+  AddWire(mid, anc, 0.03f, 0.015f, 5, kSteelGalv, kMatSteel);
+  AddCylinder({anc.x - side * 0.30f, -0.10f, anc.z}, {anc.x, 0.42f, anc.z},
+              0.042f, 0.032f, 6, kSteelGalv, kMatSteel);
+  AddBox({anc.x - side * 0.13f, 0.14f, anc.z}, {0.36f, 0.14f, 0.36f},
+         {0.230f, 0.222f, 0.208f}, kMatPaint);
+}
+static void AddSlackCoil(const PoleSpec &p, float h, float side, int turns,
+                         float radius, float pitch) {
+  float r0 = TrunkRadius(p, h);
+  Vec3 a = PoleAxisAt(p, h);
+  float cx = a.x + side * (r0 + radius);
+  const int steps = turns * 12;
+  const float coilRun = (float)turns * radius * 0.62f;
+  AddCylinder({a.x + side * (r0 - 0.02f), h + pitch * 0.5f, a.z},
+              {cx, h + pitch * 0.5f, a.z}, 0.022f, 0.022f, 5, kSteelArm,
+              kMatSteel);
+  Vec3 prev{cx + radius * 0.28f, h + pitch * 0.5f, a.z};
+  for (int i = 1; i <= steps; i++) {
+    float t = (float)i / (float)steps;
+    float ang = t * (float)turns * 6.28318f;
+    Vec3 cur{cx + radius * 0.28f * std::cos(ang),
+             h + pitch * 0.5f + radius * std::sin(ang),
+             a.z + coilRun * t};
+    AddWire(prev, cur, 0.0f, 0.0115f, 2, kCable, kMatCable);
+    prev = cur;
+  }
+  AddWire(prev, {a.x + side * (r0 + 0.03f), h + pitch * 0.5f + 0.06f, a.z},
+          0.05f, 0.0115f, 8, kCable, kMatCable);
+}
+
+static void AddSlackLoop(const PoleSpec &p, float h, float side, float radius) {
+  float r0 = TrunkRadius(p, h);
+  Vec3 a = PoleAxisAt(p, h);
+  const int steps = 22;
+  Vec3 prev = a;
+  for (int i = 1; i <= steps; i++) {
+    float t = (float)i / (float)steps;
+    float ang = 3.14159f * t;
+    Vec3 cur{a.x + side * (r0 + 0.10f + radius * std::sin(ang) * 0.85f),
+             h - radius * (1.0f - std::cos(ang)) * 0.5f,
+             a.z};
+    AddWire(prev, cur, 0.0f, 0.0115f, 2, kCable, kMatCable);
+    prev = cur;
+  }
+  AddWire(prev, a, 0.0f, 0.0115f, 2, kCable, kMatCable);
+}
+static void AddPylon(float x, float z, float height) {
+  const Vec3 steel{0.170f, 0.172f, 0.180f};
+  const Vec3 galv{0.215f, 0.220f, 0.232f};
+  const float footHalf = height * 0.175f;   // splayed feet
+  const float kneeY = height * 0.34f;       // where the A-frame closes
+  const float kneeHalf = footHalf * 0.46f;
+  const float topHalf = height * 0.048f;
+  for (int c = 0; c < 4; c++) {
+    float sx = (c == 0 || c == 3) ? -1.0f : 1.0f;
+    float sz = (c < 2) ? -1.0f : 1.0f;
+    AddBox({x + sx * footHalf, 0.16f, z + sz * footHalf},
+           {0.78f, 0.16f, 0.78f}, {0.255f, 0.250f, 0.238f}, kMatConcrete);
+  }
+  for (int c = 0; c < 4; c++) {
+    float sx = (c == 0 || c == 3) ? -1.0f : 1.0f;
+    float sz = (c < 2) ? -1.0f : 1.0f;
+    AddCylinder({x + sx * footHalf, 0.12f, z + sz * footHalf},
+                {x + sx * kneeHalf, kneeY, z + sz * kneeHalf}, 0.195f,
+                0.145f, 5, steel, kMatSteel);
+  }
+  for (int c = 0; c < 4; c++) {
+    float sx = (c == 0 || c == 3) ? -1.0f : 1.0f;
+    float sz = (c < 2) ? -1.0f : 1.0f;
+    AddCylinder({x + sx * kneeHalf, kneeY, z + sz * kneeHalf},
+                {x + sx * topHalf, height, z + sz * topHalf}, 0.145f, 0.095f,
+                5, steel, kMatSteel);
+  }
+  for (int s = 0; s < 4; s++) {
+    float ax = (s == 0 || s == 3) ? -kneeHalf : kneeHalf;
+    float az = (s < 2) ? -kneeHalf : kneeHalf;
+    AddCylinder({x + ax, kneeY, z + az}, {x - ax, kneeY, z + az}, 0.105f,
+                0.105f, 4, steel, kMatSteel);
+    AddCylinder({x + ax, kneeY, z + az}, {x + ax, kneeY, z - az}, 0.105f,
+                0.105f, 4, steel, kMatSteel);
+  }
+  for (float t = 0.0f; t < 0.94f; t += 0.235f) {
+    float h = kneeY * (t + 0.118f);
+    float hb = footHalf + (kneeHalf - footHalf) * ((t + 0.118f));
+    for (int s = 0; s < 4; s++) {
+      int n = (s + 1) & 3;
+      float a0x = (s == 0 || s == 3) ? -hb : hb;
+      float a0z = (s < 2) ? -hb : hb;
+      float a1x = (n == 0 || n == 3) ? -hb : hb;
+      float a1z = (n < 2) ? -hb : hb;
+      AddCylinder({x + a0x, h, z + a0z}, {x + a1x, h + kneeY * 0.235f,
+                                         z + a1z}, 0.085f, 0.085f, 3, steel,
+                  kMatSteel);
+    }
+  }
+  auto crossarm = [&](float y, float halfLen) {
+    AddBox({x, y + 0.38f, z}, {halfLen, 0.38f, 0.42f}, steel, kMatSteel);
+    AddBox({x, y - 0.34f, z}, {halfLen, 0.34f, 0.38f}, steel, kMatSteel);
+    int bays = (int)(halfLen / 1.9f);
+    for (int b = -bays; b <= bays; b++) {
+      float bx = b * 1.9f;
+      AddCylinder({x + bx, y - 0.34f, z}, {x + bx, y + 0.38f, z}, 0.105f,
+                  0.105f, 4, steel, kMatSteel);
+      if (std::fabs(bx) > topHalf + 0.4f && std::fabs(bx) < halfLen - 1.0f) {
+        float sgn = bx < 0.0f ? -1.0f : 1.0f;
+        AddCylinder({x + bx, y - 0.34f, z},
+                    {x + bx - sgn * 1.9f, y - 1.45f, z}, 0.085f, 0.085f, 3,
+                    steel, kMatSteel);
+      }
+    }
+  };
+  const float upperY = height * 0.735f, lowerY = height * 0.545f;
+  crossarm(upperY, height * 0.345f);
+  crossarm(lowerY, height * 0.265f);
+
+  const Vec3 shed{0.300f, 0.288f, 0.262f};  
+  auto insulator = [&](float ix, float iy) {
+    AddBox({ix, iy + 0.13f, z}, {0.24f, 0.19f, 0.24f}, galv, kMatSteel);
+    const float drop = 1.55f;             
+    AddCylinder({ix, iy - 0.05f, z}, {ix, iy - drop - 0.05f, z}, 0.055f,
+                0.046f, 5, steel, kMatSteel);
+    const int sheds = 7;
+    for (int i = 0; i < sheds; i++) {
+      float t = (float)(i + 1) / (float)(sheds + 1);
+      float y = iy - 0.05f - drop * t;
+      float rr = 0.150f - 0.052f * t;     
+      AddCylinder({ix, y - 0.042f, z}, {ix, y + 0.042f, z}, rr, rr, 6,
+                  shed, kMatCeramic);
+    }
+    AddCylinder({ix, iy - drop - 0.04f, z}, {ix, iy - drop - 0.34f, z},
+                0.050f, 0.040f, 6, steel, kMatSteel);
+  };
+  {
+    const float uh = height * 0.345f, lh = height * 0.265f;
+    for (float f : {0.94f, 0.66f, 0.38f})
+      insulator(x + uh * f, upperY + 0.02f);
+    for (float f : {0.90f, 0.58f})
+      insulator(x - lh * f, lowerY + 0.02f);
+  }
+}
+
+static void AddPole(const PoleSpec &p, bool concrete = false) {
+  Vec3 base = PoleAxisAt(p, kGroundY);
+  Vec3 top = PoleAxisAt(p, p.height);
+  const float side = PoleRoadSide(p);
+  if (concrete)
+    AddCylinder(base, top, kShaftRBase, kShaftRTop, 10, kConcreteGrey, kMatConcrete);
+  else
+    AddCylinder(base, top, kShaftRBase, kShaftRTop, 10, kSteelGalv, kMatSteel);
+  AddCylinder({base.x, kGroundY - 0.02f, base.z}, {base.x, 0.10f, base.z},
+              0.52f, 0.34f, 8, {0.30f, 0.24f, 0.18f}, kMatGround);
+  AddCylinder({base.x, 0.03f, base.z}, {base.x, 0.29f, base.z}, 0.235f, 0.205f,
+              8, kSteelArm, kMatSteel);
+
+  float armY = p.height - 0.55f;
+  Vec3 armC = PoleAxisAt(p, armY);
+  AddBox({armC.x, armY, armC.z}, {1.25f, 0.075f, 0.013f}, kSteelArm, kMatSteel);
+  AddBox({armC.x, armY + 0.072f, armC.z}, {1.25f, 0.013f, 0.058f}, kSteelArm,
+         kMatSteel);
+  AddBox({armC.x, armY - 0.072f, armC.z}, {1.25f, 0.013f, 0.058f}, kSteelArm,
+         kMatSteel);
+  float arm2Y = armY - 0.62f;
+  Vec3 arm2C = PoleAxisAt(p, arm2Y);
+  AddBox({arm2C.x, arm2Y, arm2C.z}, {0.85f, 0.075f, 0.013f}, kSteelArm, kMatSteel);
+  AddBox({arm2C.x, arm2Y + 0.072f, arm2C.z}, {0.85f, 0.013f, 0.052f}, kSteelArm,
+         kMatSteel);
+  AddBox({arm2C.x, arm2Y - 0.072f, arm2C.z}, {0.85f, 0.013f, 0.052f}, kSteelArm,
+         kMatSteel);
+  // diagonal knee braces, flat bar this time
+  Vec3 brT = PoleAxisAt(p, armY - 0.05f);
+  Vec3 brB = PoleAxisAt(p, armY - 0.57f);
+  AddCylinder({brT.x - 0.34f, brT.y, brT.z + 0.05f},
+              {brB.x - 0.94f, brB.y, brB.z + 0.05f}, 0.028f, 0.028f, 6,
+              kSteelArm, kMatSteel);
+  AddCylinder({brT.x + 0.34f, brT.y, brT.z + 0.05f},
+              {brB.x + 0.94f, brB.y, brB.z + 0.05f}, 0.028f, 0.028f, 6,
+              kSteelArm, kMatSteel);
+  // bolted arm-to-shaft clamps: two bands and a nut each
+  for (float by : {armY + 0.075f, arm2Y + 0.075f}) {
+    Vec3 ba = PoleAxisAt(p, by);
+    float br2 = TrunkRadius(p, by);
+    AddCylinder({ba.x, by - 0.030f, ba.z}, {ba.x, by + 0.030f, ba.z},
+                br2 + 0.035f, br2 + 0.035f, 8, kSteelArm, kMatSteel);
+  }
+  for (float off : {-1.05f, 0.0f, 1.05f})
+    AddInsulator({armC.x + off, armY + 0.087f, armC.z});
+  for (float off : {-0.55f, 0.55f})
+    AddInsulator({arm2C.x + off, arm2Y + 0.087f, arm2C.z});
+  AddCylinder(top, Vec3Add(top, Vec3{0, 0.18f, 0}), 0.05f, 0.058f, 8, kCeramic,
+              kMatCeramic);
+  AddCylinder(Vec3Add(top, Vec3{0, 0.18f, 0}), Vec3Add(top, Vec3{0, 0.24f, 0}),
+              0.058f, 0.038f, 8, kCeramic, kMatCeramic);
+  AddCylinder({top.x + 0.06f, p.height - 0.20f, top.z},
+              {top.x + 0.13f, p.height + 0.60f, top.z}, 0.021f, 0.010f, 5,
+              kSteelGalv, kMatSteel);
+
+  {
+    const float eside = -side;
+    Vec3 prev = PoleAxisAt(p, 0.32f);
+    prev.x += eside * (TrunkRadius(p, 0.32f) + 0.024f);
+    AddWire(prev, {base.x + eside * 0.19f, 0.14f, base.z}, 0.01f, 0.012f, 3,
+            kSteelGalv, kMatCable);
+    for (float h = 1.4f; h <= 5.01f; h += 1.2f) {
+      Vec3 cur = PoleAxisAt(p, h);
+      cur.x += eside * (TrunkRadius(p, h) + 0.024f);
+      AddWire(prev, cur, 0.012f, 0.012f, 3, kSteelGalv, kMatCable);
+      Vec3 mid{(prev.x + cur.x) * 0.5f, (prev.y + cur.y) * 0.5f,
+               (prev.z + cur.z) * 0.5f};
+      Vec3 clip0 = PoleAxisAt(p, mid.y);   
+      AddCylinder(clip0, mid, 0.019f, 0.019f, 4, kSteelArm, kMatSteel);
+      prev = cur;
+    }
+  }
+
+  // BUILD-P9: pole hardware on the road face — step bolts, the asset number
+  // plate with its band strap, and (on a deterministic scatter) the guy wire.
+  AddStepBolts(p, 3.15f, 6.15f, side);
+  {
+    Vec3 pa = PoleAxisAt(p, 2.35f);
+    float pr = TrunkRadius(p, 2.35f);
+    AddCylinder({pa.x + pr, 2.35f, pa.z}, {pa.x + pr + 0.035f, 2.35f, pa.z},
+                pr + 0.030f, pr + 0.030f, 8, kSteelArm, kMatSteel);
+    // the plate itself stands proud of the band, with a dark legend block
+    AddBox({pa.x + pr + 0.042f, 2.62f, pa.z}, {0.012f, 0.085f, 0.062f},
+           kSteelPlate, kMatMetal);
+    AddBox({pa.x + pr + 0.058f, 2.62f, pa.z}, {0.006f, 0.020f, 0.050f},
+           {0.075f, 0.070f, 0.065f}, kMatMetal);
+    AddBox({pa.x + pr + 0.058f, 2.545f, pa.z}, {0.006f, 0.012f, 0.050f},
+           {0.075f, 0.070f, 0.065f}, kMatMetal);
+  }
+  if (concrete && ((((int)(p.z * 0.5f)) % 3) == 0))
+    AddSlackCoil(p, 5.2f, -side, 6, 0.30f, 1.15f);
+  if (concrete && ((((int)(p.z * 0.7f)) % 4) == 1))
+    AddSlackLoop(p, 6.5f, side, 0.85f);
+  if ((((int)(p.z * 0.4f)) % 3) == 0) {
+    AddGuyWire(p, side, 1.0f);
+    if ((((int)(p.z * 0.8f)) % 5) == 0) AddGuyWire(p, side, -1.0f);
+  }
+
+  if (p.serviceSpool) {
+    Vec3 sa = PoleAxisAt(p, 5.4f);
+    float sr = TrunkRadius(p, 5.4f);
+    AddCylinder({sa.x - sr, 5.4f, sa.z}, {sa.x - sr - 0.10f, 5.4f, sa.z}, 0.035f,
+                0.035f, 6, kMetal, kMatMetal);
+    AddCylinder({sa.x - sr - 0.10f, 5.4f, sa.z}, {sa.x - sr - 0.13f, 5.4f, sa.z},
+                0.135f, 0.135f, 10, kSteelArm, kMatSteel);
+    AddCylinder({sa.x - sr - 0.13f, 5.4f, sa.z}, {sa.x - sr - 0.24f, 5.4f, sa.z},
+                0.135f, 0.135f, 10, kSteelArm, kMatSteel);
+    AddCylinder({sa.x - sr - 0.17f, 5.4f, sa.z}, {sa.x - sr - 0.22f, 5.4f, sa.z},
+                0.052f, 0.052f, 8, kMetal, kMatMetal);
+  }
+  float telY = armY - 1.30f;
+  Vec3 telC = PoleAxisAt(p, telY);
+  AddBox({telC.x, telY, telC.z}, {0.95f, 0.05f, 0.014f}, kSteelArm, kMatSteel);
+  AddBox({telC.x, telY + 0.045f, telC.z}, {0.95f, 0.012f, 0.048f}, kSteelArm,
+         kMatSteel);
+  for (float off : {-0.70f, 0.0f, 0.70f}) {
+    AddCylinder({telC.x + off, telY + 0.05f, telC.z},
+                {telC.x + off, telY + 0.15f, telC.z}, 0.038f, 0.032f, 6, kMetal,
+                kMatMetal);
+  }
+  if (((int(p.z * 7.0f)) % 3) == 0) {
+    Vec3 ca = PoleAxisAt(p, 3.9f);
+    float cr = TrunkRadius(p, 3.9f);
+    float cx = ca.x + cr + 0.075f;
+    for (float by : {3.99f, 4.41f})
+      AddBox({ca.x + cr * 0.5f, by, ca.z}, {0.075f, 0.030f, 0.075f}, kSteelArm,
+             kMatSteel);
+    AddCylinder({cx, 3.9f, ca.z}, {cx, 4.5f, ca.z}, 0.11f, 0.11f, 8, kMetal,
+                kMatMetal);
+    AddCylinder({cx, 4.36f, ca.z}, {cx, 4.40f, ca.z}, 0.125f, 0.125f, 8,
+                kSteelArm, kMatSteel);
+    AddBox({cx, 4.06f, ca.z}, {0.055f, 0.045f, 0.115f}, kSteelArm, kMatSteel);
+  }
+
+  if (p.transformer) {
+    Vec3 tc{armC.x + 0.62f, armY - 1.42f, armC.z + 0.44f};
+    for (float bz : {-0.13f, 0.13f})
+      AddBox({tc.x + bz, armY - 0.44f, (tc.z + armC.z) * 0.5f},
+             {0.045f, 0.47f, 0.24f}, kSteelArm, kMatSteel);
+    AddCylinder(Vec3Add(tc, Vec3{-0.1f, -0.55f, 0}),
+                Vec3Add(tc, Vec3{0.1f, 0.55f, 0}), 0.34f, 0.34f, 10, kMetal,
+                kMatMetal);
+    for (int fi = 0; fi < 5; fi++) {
+      float fy = tc.y - 0.40f + 0.20f * fi;
+      AddBox({tc.x, fy, tc.z + 0.34f}, {0.30f, 0.028f, 0.085f}, kSteelArm,
+             kMatSteel);
+      AddBox({tc.x, fy, tc.z - 0.34f}, {0.30f, 0.028f, 0.085f}, kSteelArm,
+             kMatSteel);
+    }
+    AddBox({tc.x, tc.y + 0.30f, tc.z}, {0.40f, 0.16f, 0.16f}, kMetal, kMatMetal);
+    AddBox({tc.x, tc.y - 0.34f, tc.z}, {0.10f, 0.22f, 0.10f}, kMetal, kMatMetal);
+    AddBox({tc.x + 0.30f, tc.y - 0.10f, tc.z + 0.10f}, {0.10f, 0.16f, 0.13f},
+           kSteelArm, kMatSteel);
+    for (float bz : {-0.12f, 0.12f}) {
+      Vec3 bt{tc.x, tc.y + 0.46f, tc.z + bz};
+      AddCylinder(bt, Vec3Add(bt, Vec3{0, 0.16f, 0}), 0.045f, 0.038f, 6,
+                  kCeramic, kMatCeramic);
+      AddWire(Vec3Add(bt, Vec3{0, 0.17f, 0}),
+              ArmInsulatorTop(p, bz < 0.0f ? 0.0f : 1.05f), 0.05f, 0.011f, 6,
+              kCable, kMatCable);
+    }
+    for (float cx : {-0.42f, 0.42f}) {
+      AddCylinder({armC.x + cx, armY - 0.04f, armC.z},
+                  {armC.x + cx, armY - 0.04f, armC.z + 0.17f}, 0.020f, 0.020f,
+                  5, kSteelArm, kMatSteel);
+      Vec3 ct{armC.x + cx, armY - 0.05f, armC.z + 0.17f};
+      AddCylinder(ct, Vec3Add(ct, Vec3{0, -0.30f, 0}), 0.030f, 0.036f, 6,
+                  kCeramic, kMatCeramic);
+      AddCylinder(Vec3Add(ct, Vec3{0, -0.30f, 0}), Vec3Add(ct, Vec3{0, -0.36f, 0}),
+                  0.038f, 0.028f, 6, kMetal, kMatMetal);
+    }
+    for (float ax : {-0.78f, 0.78f}) {
+      AddCylinder({armC.x + ax, armY - 0.04f, armC.z},
+                  {armC.x + ax, armY - 0.04f, armC.z + 0.15f}, 0.018f, 0.018f,
+                  5, kSteelArm, kMatSteel);
+      Vec3 at{armC.x + ax, armY - 0.05f, armC.z + 0.15f};
+      AddCylinder(at, Vec3Add(at, Vec3{0, -0.22f, 0}), 0.032f, 0.038f, 6,
+                  kCeramic, kMatCeramic);
+    }
+  }
+}
+static void AddQuad(const Vec3 &p0, const Vec3 &p1, const Vec3 &p2,
+                    const Vec3 &p3, const Vec3 &color, float mat) {
+  Vec3 n = Vec3Norm(Vec3Cross(Vec3Sub(p1, p0), Vec3Sub(p3, p0)));
+  unsigned int s = (unsigned int)gVerts.size();
+  PushVert(p0, n, color, mat);
+  PushVert(p1, n, color, mat);
+  PushVert(p2, n, color, mat);
+  PushVert(p3, n, color, mat);
+  gIdx.push_back(s); gIdx.push_back(s + 1); gIdx.push_back(s + 2);
+  gIdx.push_back(s); gIdx.push_back(s + 2); gIdx.push_back(s + 3);
+}
+static const Vec3 kWallTints[5] = {
+    {0.235f, 0.208f, 0.178f}, {0.285f, 0.256f, 0.214f}, {0.185f, 0.170f, 0.158f},
+    {0.330f, 0.300f, 0.246f}, {0.160f, 0.152f, 0.148f}};
+static const Vec3 kRoofTints[3] = {
+    {0.095f, 0.084f, 0.082f}, {0.215f, 0.112f, 0.066f}, {0.125f, 0.118f, 0.115f}};
+
+static void AddHouse(float x, float z, float w, float d, float h, float face) {
+  int pick = (int)std::fmod(std::fabs(std::sin(x * 12.9898f + z * 78.233f)) *
+                                43758.5453f,
+                            5.0f);
+  const Vec3 &wall = kWallTints[pick];
+  const Vec3 &roof = kRoofTints[pick % 3];
+  float streetX = face * w * 0.5f;         
+
+  AddBox({x, 0.09f, z}, {w * 0.5f + 0.07f, 0.09f, d * 0.5f + 0.07f},
+         {0.150f, 0.142f, 0.132f}, kMatPaint);
+  AddBox({x, 0.10f + h * 0.5f, z}, {w * 0.5f, h * 0.5f, d * 0.5f}, wall,
+         kMatWall);
+
+  const float ov = 0.42f;                    
+  const float rh = 0.55f + 0.06f * (float)(pick % 3);
+  float yEave = 0.10f + h;
+  float yRidge = yEave + rh;
+  float x0 = x - w * 0.5f - ov, x1 = x + w * 0.5f + ov;
+  float zA = z - d * 0.5f - ov, zB = z + d * 0.5f + ov;
+  Vec3 r0{x0, yRidge, z}, r1{x1, yRidge, z};
+  Vec3 eA{x0, yEave, zA}, eB{x1, yEave, zA};
+  Vec3 eC{x1, yEave, zB}, eD{x0, yEave, zB};
+  AddQuad(r0, r1, eB, eA, roof, kMatRoof);
+  AddQuad(r1, r0, eD, eC, roof, kMatRoof);
+  AddQuad(eA, eB, eC, eD, Vec3Add(roof, Vec3{0, 0.10f, 0}), kMatRoof);
+  AddCylinder({x0, yRidge + 0.02f, z}, {x1, yRidge + 0.02f, z}, 0.055f, 0.055f,
+              5, Vec3Add(roof, Vec3{0.05f, 0.03f, 0.02f}), kMatRoof);
+  if (pick % 3 != 1) {
+    float tx = x - w * 0.22f, tz = z + d * 0.10f;
+    const Vec3 tank{0.055f, 0.058f, 0.062f};
+    for (int l = 0; l < 4; l++) {
+      float lx = tx + (l & 1 ? 0.26f : -0.26f);
+      float lz = tz + (l & 2 ? 0.22f : -0.22f);
+      AddCylinder({lx, yRidge - 0.45f, lz}, {lx, yRidge + 0.52f, lz}, 0.045f,
+                  0.045f, 4, {0.090f, 0.086f, 0.082f}, kMatMetal);
+    }
+    AddCylinder({tx, yRidge + 0.52f, tz}, {tx, yRidge + 1.02f, tz}, 0.34f, 0.31f,
+                8, tank, kMatMetal);
+  }
+  {   
+    float ax = x + w * 0.28f, az = z - d * 0.06f;
+    AddCylinder({ax, yRidge - 0.45f, az}, {ax, yRidge + 0.95f, az}, 0.028f,
+                0.020f, 4, {0.120f, 0.118f, 0.115f}, kMatMetal);
+    for (int k = 0; k < 2; k++)
+      AddBox({ax, yRidge + 0.62f + 0.24f * k, az}, {0.30f, 0.016f, 0.016f},
+             {0.120f, 0.118f, 0.115f}, kMatMetal);
+  }
+  if (pick % 2 == 0) { 
+    float cx2 = x + streetX + face * 0.15f;
+    AddBox({cx2, 1.85f, z + d * 0.12f}, {0.20f, 0.17f, 0.28f},
+           {0.165f, 0.160f, 0.155f}, kMatMetal);
+  }
+
+  const Vec3 frame{0.320f, 0.300f, 0.270f};
+  const Vec3 glass{0.060f, 0.075f, 0.095f};
+  for (int i = 0; i < 3; i++) {
+    float wx = x + streetX + face * 0.03f;
+    float wz = z + (float)(i - 1) * (d * 0.30f);
+    float wy = 0.10f + h * 0.60f;
+    AddBox({wx + face * 0.02f, wy, wz}, {0.05f, 0.26f, 0.34f}, frame, kMatPaint);
+    bool lit = ((i + pick) % 3) == 0;
+    AddBox({wx + face * 0.06f, wy, wz}, {0.02f, 0.21f, 0.29f},
+           lit ? Vec3{0.96f, 0.71f, 0.40f} : glass, lit ? kMatGlow : kMatGlass);
+    if (lit) { 
+      AddBox({wx + face * 0.082f, wy, wz}, {0.012f, 0.21f, 0.020f}, frame,
+             kMatPaint);
+      AddBox({wx + face * 0.082f, wy, wz}, {0.012f, 0.020f, 0.29f}, frame,
+             kMatPaint);
+    }
+    AddBox({wx + face * 0.09f, wy - 0.28f, wz}, {0.07f, 0.035f, 0.40f}, frame,
+           kMatPaint);
+  }
+  AddBox({x - w * 0.5f + 0.03f * face, 0.10f + h * 0.55f, z + d * 0.22f},
+         {0.03f, 0.20f, 0.28f}, frame, kMatPaint);
+  AddBox({x - w * 0.5f + 0.06f * face, 0.10f + h * 0.55f, z + d * 0.22f},
+         {0.02f, 0.16f, 0.24f}, glass, kMatGlass);
+
+  if (pick % 2 == 0) {
+    Vec3 deck{0.290f, 0.270f, 0.240f};
+    AddBox({x + streetX + face * 0.55f, 2.32f, z - d * 0.18f},
+           {0.55f, 0.05f, 0.62f}, deck, kMatRoof);
+    AddCylinder({x + streetX + face * 1.02f, 0.0f, z - d * 0.18f},
+                {x + streetX + face * 1.02f, 2.30f, z - d * 0.18f}, 0.055f,
+                0.045f, 6, deck, kMatPaint);
+    AddBox({x + streetX + face * 0.02f, 1.20f, z - d * 0.18f},
+           {0.04f, 0.55f, 0.34f}, frame, kMatPaint);
+  }
+  Vec3 anchor{x + streetX + face * 0.16f, 0.10f + h * 0.78f, z + d * 0.30f};
+  AddBox({anchor.x - face * 0.04f, anchor.y, anchor.z}, {0.07f, 0.045f, 0.045f},
+         kMetal, kMatMetal);
+  AddCylinder({anchor.x, anchor.y + 0.04f, anchor.z},
+              {anchor.x, anchor.y + 0.17f, anchor.z}, 0.030f, 0.026f, 6,
+              kCeramic, kMatCeramic);
+  gDropAnchors.push_back({anchor.x, anchor.y + 0.17f, anchor.z});
+}
+
+static void AddPropertyLine(float x, float z0, float z1, float mirror) {
+  const Vec3 wall{0.150f, 0.145f, 0.135f};
+  const Vec3 cap{0.190f, 0.176f, 0.158f};
+  float z = z0;
+  int i = 0;
+  while (z < z1) {
+    float seg = 7.0f + 3.0f * (float)((i * 7) % 4) / 4.0f;
+    float h = 1.50f + 0.26f * (float)((i * 5) % 3) / 3.0f;
+    float cz = z + seg * 0.5f;
+    AddBox({x, h * 0.5f, cz}, {0.11f, h * 0.5f, seg * 0.5f}, wall, kMatPaint);
+    AddBox({x, h + 0.045f, cz}, {0.17f, 0.045f, seg * 0.5f}, cap, kMatRoof);
+    if ((i % 3) == 1) {                     
+      AddBox({x, 1.05f, z}, {0.17f, 1.05f, 0.17f}, cap, kMatPaint);
+      AddBox({x, 2.14f, z}, {0.22f, 0.05f, 0.22f}, cap, kMatRoof);
+    }
+    if ((i % 2) == 0) {                     
+      float hx = x + mirror * (0.95f + 0.55f * (float)((i * 3) % 3) / 3.0f);
+      AddBox({hx, 0.58f, cz}, {0.46f, 0.58f, seg * 0.40f},
+             {0.048f, 0.078f, 0.040f}, kMatLeaf);
+    }
+    z += seg + 0.35f;
+    i++;
+  }
+}
+
+static void AddStreetLight(const PoleSpec &p, float side) {
+  float armY = p.height - 2.35f;
+  Vec3 a = PoleAxisAt(p, armY);
+  float tipx = a.x + side * 2.15f;
+  AddCylinder({a.x, armY, a.z}, {tipx, armY + 0.30f, a.z}, 0.055f, 0.045f, 6,
+              {0.140f, 0.138f, 0.135f}, kMatMetal);
+  AddBox({tipx + side * 0.12f, armY + 0.26f, a.z}, {0.26f, 0.07f, 0.15f},
+         {0.150f, 0.148f, 0.145f}, kMatMetal);
+  AddBox({tipx + side * 0.12f, armY + 0.145f, a.z}, {0.21f, 0.045f, 0.12f},
+         {0.88f, 0.68f, 0.42f}, kMatGlow);
+}
+static void AddVendingMachine(float x, float z, float face) {
+  AddBox({x, 0.78f, z}, {0.42f, 0.78f, 0.32f}, {0.185f, 0.150f, 0.120f},
+         kMatMetal);
+  AddBox({x + face * 0.46f, 0.80f, z}, {0.03f, 0.62f, 0.26f},
+         {0.88f, 0.93f, 1.00f}, kMatGlow);
+  AddBox({x + face * 0.45f, 0.18f, z}, {0.03f, 0.12f, 0.24f},
+         {0.30f, 0.26f, 0.22f}, kMatMetal);
+}
+static void AddTreeline() {
+  const int kCount = 74;
+  for (int i = 0; i < kCount; i++) {
+    float a = (float)i * 2.3999632f;               
+    float rad = 205.0f + 95.0f * (float)((i * 7) % 5) / 5.0f;
+    float cx = std::sin(a) * rad * 1.25f;
+    float cz = 90.0f + std::cos(a) * rad;
+    float th = 9.0f + 9.0f * (float)((i * 13) % 7) / 7.0f;
+    float wd = 2.6f + 1.8f * (float)((i * 5) % 4) / 4.0f;
+    float g = 0.55f + 0.45f * (float)((i * 11) % 5) / 5.0f;
+    Vec3 leaf{0.088f * g + 0.045f, 0.130f * g + 0.050f, 0.070f * g + 0.035f};
+    AddBox({cx, th * 0.5f, cz}, {wd, th * 0.5f, wd * 0.9f}, leaf, kMatLeaf);
+    AddBox({cx + wd * 0.5f, th * 0.34f, cz - wd * 0.4f},
+           {wd * 0.8f, th * 0.34f, wd * 0.7f}, leaf, kMatLeaf);
+    // trunk
+    AddCylinder({cx, 0.0f, cz}, {cx, th * 0.30f, cz}, 0.24f, 0.18f, 5,
+                {0.100f, 0.082f, 0.070f}, kMatWood);
+  }
+  // a low ridge of hills behind the trees, so the skyline is not a hard line
+  for (int i = 0; i < 26; i++) {
+    float a = (float)i * 0.2417f + 0.3f;
+    float rad = 330.0f + 40.0f * (float)((i * 3) % 4);
+    float cx = std::sin(a) * rad * 1.5f;
+    float cz = 90.0f + std::cos(a) * rad;
+    float hh = 26.0f + 16.0f * (float)((i * 9) % 5) / 5.0f;
+    AddBox({cx, hh * 0.30f, cz}, {hh * 1.7f, hh * 0.30f, hh * 1.2f},
+           {0.215f, 0.185f, 0.175f}, kMatLeaf);
+  }
+}static void BuildSceneGeometry() {
+  gVerts.clear();
+  gIdx.clear();
+  gLineA.clear();
+  gLineB.clear();
+  gDropAnchors.clear();
+  {
+    unsigned int s = (unsigned int)gVerts.size();
+    Vec3 n{0, 1, 0};
+    PushVert({-430, kGroundY, -300}, n, kGravel, kMatGround);
+    PushVert({430, kGroundY, -300}, n, kGravel, kMatGround);
+    PushVert({430, kGroundY, 880}, n, kGravel, kMatGround);
+    PushVert({-430, kGroundY, 880}, n, kGravel, kMatGround);
+    gIdx.push_back(s); gIdx.push_back(s + 1); gIdx.push_back(s + 2);
+    gIdx.push_back(s); gIdx.push_back(s + 2); gIdx.push_back(s + 3);
+  }
+
+  std::vector<PoleSpec> lineA;
+  for (int i = 0; i < 15; i++)
+    lineA.push_back({-3.4f, 2.0f + 12.4f * i, 8.6f + 0.35f * ((i * 5) % 3),
+                     i == 1 || i == 6 || i == 11, i == 3 || i == 9,
+                     0.10f * ((i * 7) % 3 - 1), 0.08f * ((i * 5) % 3 - 1)});
+  for (const PoleSpec &p : lineA) AddPole(p, true);
+  gLineA = lineA;
+  for (int i = 0; i < (int)lineA.size(); i += 2) AddStreetLight(lineA[i], 1.0f);
+  for (int i = 0; i + 1 < (int)lineA.size(); i++) {
+    const PoleSpec &p = lineA[i];
+    const PoleSpec &q = lineA[i + 1];
+    float sag = 0.78f + 0.12f * ((i * 3) % 3);
+    for (float off : {-1.05f, 0.0f, 1.05f})
+      AddWire(ArmInsulatorTop(p, off), ArmInsulatorTop(q, off), sag, 0.032f,
+              14, kCable, kMatCable);
+    AddWire(PoleTopInsulatorTop(p), PoleTopInsulatorTop(q), sag * 0.8f, 0.037f,
+            14, kCableOld, kMatCable);
+    for (float off : {-0.55f, 0.55f})
+      AddWire(Arm2InsulatorTop(p, off), Arm2InsulatorTop(q, off), sag * 0.74f,
+              0.028f, 12, kCable, kMatCable);
+  }
+
+  for (int i = 0; i + 1 < (int)lineA.size(); i++) {
+    const PoleSpec &p = lineA[i];
+    const PoleSpec &q = lineA[i + 1];
+    for (int k = 0; k < 16; k++) {
+      float fk = (float)k;
+      float u0 = fk * 0.37f;  u0 -= std::floor(u0);
+      float u1 = fk * 0.61f + 0.23f; u1 -= std::floor(u1);
+      float u2 = fk * 0.29f;  u2 -= std::floor(u2);
+      float u3 = fk * 0.83f;  u3 -= std::floor(u3);
+      Vec3 a = TelecomBracketTop(p, -0.66f + 1.32f * u0);
+      Vec3 b = TelecomBracketTop(q, -0.66f + 1.32f * u1);
+      float r = 0.021f + 0.011f * u3;
+      float sag = 0.18f + 0.62f * u2;
+      AddWire(a, b, sag, r, 10, kCableOld, kMatCable);
+    }
+  }
+  AddPylon(48.0f, 140.0f, 26.0f);
+  AddPylon(-60.0f, 172.0f, 31.0f);
+  std::vector<PoleSpec> lineB;
+  for (int i = 0; i < 6; i++)
+    lineB.push_back({8.6f, 6.0f + 15.5f * i, 7.6f, false, i == 1,
+                     0.09f * ((i * 11) % 3 - 1), 0.07f * ((i * 3) % 3 - 1)});
+  for (const PoleSpec &p : lineB) AddPole(p);
+  gLineB = lineB;
+  for (int i = 0; i + 1 < (int)lineB.size(); i++) {
+    const PoleSpec &p = lineB[i];
+    const PoleSpec &q = lineB[i + 1];
+    for (float off : {-1.05f, 1.05f})
+      AddWire(ArmInsulatorTop(p, off), ArmInsulatorTop(q, off), 0.88f, 0.030f,
+              12, kCableOld, kMatCable);
+    AddWire(PoleTopInsulatorTop(p), PoleTopInsulatorTop(q), 0.70f, 0.035f, 12,
+            kCableOld, kMatCable);
+    for (float off : {-0.55f, 0.55f})
+      AddWire(Arm2InsulatorTop(p, off), Arm2InsulatorTop(q, off), 0.62f, 0.028f,
+              12, kCableOld, kMatCable);
+  }
+  for (int i = 0; i < 4; i++) {
+    const PoleSpec &p = lineB[i];
+    const PoleSpec &q = lineA[i + 1];
+    AddWire(ArmInsulatorTop(p, 1.05f), ArmInsulatorTop(q, -1.05f), 1.30f,
+            0.028f, 16, kCable, kMatCable);
+  }
+  for (int i = 0; i < 8; i++) {
+    float z = -4.0f + 19.0f * i + 3.0f * ((i * 7) % 3);
+    AddHouse(-11.5f - 2.0f * (i % 3), z, 4.6f + 1.4f * ((i * 3) % 3),
+             5.2f + 1.2f * ((i * 5) % 3), 3.2f + 0.9f * ((i * 7) % 3), 1.0f);
+  }
+  for (int i = 0; i < 6; i++) {
+    float z = 8.0f + 21.0f * i + 2.5f * ((i * 5) % 3);
+    AddHouse(15.0f + 2.5f * (i % 3), z, 4.8f + 1.5f * ((i * 3) % 3),
+             5.4f + 1.1f * ((i * 7) % 3), 3.1f + 1.0f * ((i * 5) % 3), -1.0f);
+  }
+  AddPropertyLine(-9.0f, -14.0f, 168.0f, -1.0f);
+  AddPropertyLine(13.0f, -8.0f, 176.0f, 1.0f);
+  AddVendingMachine(-7.4f, 30.0f, 1.0f);
+  AddVendingMachine(11.6f, 96.0f, -1.0f);
+  AddTreeline();
+  for (int i = 0; i + 1 < (int)lineA.size(); i++) {
+    const PoleSpec &p = lineA[i];
+    const PoleSpec &q = lineA[i + 1];
+    AddTelecomBundle(TelecomBracketTop(p, -0.70f), TelecomBracketTop(q, -0.70f),
+                     i * 2 + 1, 0.027f, 12, kCable);
+    AddTelecomBundle(TelecomBracketTop(p, 0.70f), TelecomBracketTop(q, 0.70f),
+                     i * 2 + 2, 0.027f, 12, kCable);
+    if ((i % 2) == 0)
+      AddTelecomBundle(TelecomBracketTop(p, 0.0f), TelecomBracketTop(q, 0.0f),
+                       i * 2 + 13, 0.024f, 12, kCableOld);
+  }
+  for (int i = 0; i + 1 < (int)lineB.size(); i++) {
+    const PoleSpec &p = lineB[i];
+    const PoleSpec &q = lineB[i + 1];
+    AddTelecomBundle(TelecomBracketTop(p, 0.0f), TelecomBracketTop(q, 0.0f),
+                     i * 3 + 40, 0.024f, 10, kCableOld);
+  }
+  for (int i = 0; i < 5; i++) {
+    const PoleSpec &p = lineB[i];
+    const PoleSpec &q = lineA[i + 1];
+    AddTelecomBundle(TelecomBracketTop(p, -0.70f), TelecomBracketTop(q, -0.70f),
+                     i * 5 + 77, 0.022f, 14, kCable);
+  }
+  for (int side = 0; side < 2; side++) {
+    const PoleSpec &p = lineA[side == 0 ? 3 : 9];
+    int best = -1;
+    float bestD = 1e9f;
+    for (size_t k = 0; k < gDropAnchors.size(); k++) {
+      const Vec3 &q = gDropAnchors[k];
+      float d = std::sqrt((q.x - p.x) * (q.x - p.x) + (q.z - p.z) * (q.z - p.z));
+      if (d < bestD && d > 3.0f) { bestD = d; best = (int)k; }
+    }
+    if (best >= 0) {
+      const Vec3 &a = gDropAnchors[best];
+      AddWire(PoleAxisAt(p, 5.4f), a, 0.55f, 0.024f, 12, kCableOld, kMatCable);
+      AddWire(ArmInsulatorTop(p, 1.05f), a, 0.48f, 0.024f, 12, kCableOld,
+              kMatCable);
+    }
+    Vec3 ja = PoleAxisAt(p, 3.05f);
+    float jr = TrunkRadius(p, 3.05f);
+    AddBox({ja.x - jr - 0.06f, 3.10f, ja.z}, {0.16f, 0.10f, 0.12f}, kMetal,
+           kMatMetal);
+    Vec3 stubEnd{ja.x - jr - 0.10f, 2.45f, ja.z};
+    AddCylinder({ja.x - jr, 3.05f, ja.z}, stubEnd, 0.09f, 0.09f, 8, kMetal,
+                kMatMetal);
+    AddCylinder(stubEnd, {stubEnd.x - 0.04f, 2.30f, stubEnd.z}, 0.075f, 0.105f,
+                8, kMetal, kMatMetal); 
+    if (best >= 0) {
+      AddWire({stubEnd.x - 0.04f, 2.24f, stubEnd.z}, gDropAnchors[best], 0.42f,
+              0.019f, 8, kCableOld, kMatCable);
+    } else {
+      AddWire({stubEnd.x - 0.04f, 2.24f, stubEnd.z},
+              {ja.x - jr - 0.02f, 2.86f, ja.z}, 0.16f, 0.019f, 8, kCableOld,
+              kMatCable);
+    }
+  }
+  {
+    Vec3 n{0, 1, 0};
+    const float z0 = -200.0f, z1 = 520.0f;
+    Vec3 road{0.195f, 0.190f, 0.198f};
+    Vec3 edge{0.235f, 0.215f, 0.190f};
+    Vec3 paint{0.880f, 0.884f, 0.860f};   // white thermoplastic, not bone
+    unsigned int s = (unsigned int)gVerts.size();
+    PushVert({kRoadX - kRoadHalf, kRoadY, z0}, n, road, kMatRoad);
+    PushVert({kRoadX + kRoadHalf, kRoadY, z0}, n, road, kMatRoad);
+    PushVert({kRoadX + kRoadHalf, kRoadY, z1}, n, road, kMatRoad);
+    PushVert({kRoadX - kRoadHalf, kRoadY, z1}, n, road, kMatRoad);
+    gIdx.push_back(s); gIdx.push_back(s + 1); gIdx.push_back(s + 2);
+    gIdx.push_back(s); gIdx.push_back(s + 2); gIdx.push_back(s + 3);
+    for (int e = 0; e < 2; e++) {
+      float xs = e ? kRoadX + kRoadHalf : kRoadX - kRoadHalf;
+      float xe = e ? xs + 0.90f : xs - 0.90f;
+      unsigned int es = (unsigned int)gVerts.size();
+      PushVert({xs, kRoadY, z0}, n, edge, kMatGround);
+      PushVert({xe, kRoadY, z0}, n, edge, kMatGround);
+      PushVert({xe, kRoadY, z1}, n, edge, kMatGround);
+      PushVert({xs, kRoadY, z1}, n, edge, kMatGround);
+      gIdx.push_back(es); gIdx.push_back(es + 1); gIdx.push_back(es + 2);
+      gIdx.push_back(es); gIdx.push_back(es + 2); gIdx.push_back(es + 3);
+    }
+    for (int e = 0; e < 2; e++) {
+      float sgn = e ? 1.0f : -1.0f;
+      float xc = (e ? kRoadX + kRoadHalf : kRoadX - kRoadHalf) + sgn * 0.16f;
+      AddBox({xc, kKerbTopY * 0.5f, (z0 + z1) * 0.5f}, {0.16f, kKerbTopY * 0.5f,
+             (z1 - z0) * 0.5f},
+             {0.245f, 0.238f, 0.225f}, kMatKerb);
+    }
+    for (float z = -60.0f; z < 400.0f; z += 8.0f) {
+      unsigned int ds = (unsigned int)gVerts.size();
+      PushVert({kRoadX - 0.09f, kPaintY, z}, n, paint, kMatLine);
+      PushVert({kRoadX + 0.09f, kPaintY, z}, n, paint, kMatLine);
+      PushVert({kRoadX + 0.09f, kPaintY, z + 3.0f}, n, paint, kMatLine);
+      PushVert({kRoadX - 0.09f, kPaintY, z + 3.0f}, n, paint, kMatLine);
+      gIdx.push_back(ds); gIdx.push_back(ds + 1); gIdx.push_back(ds + 2);
+      gIdx.push_back(ds); gIdx.push_back(ds + 2); gIdx.push_back(ds + 3);
+    }
+    for (int e = 0; e < 2; e++) {
+      float xl = e ? kRoadX + kRoadHalf - 0.40f : kRoadX - kRoadHalf + 0.26f;
+      unsigned int es = (unsigned int)gVerts.size();
+      PushVert({xl, kPaintY, z0}, n, paint, kMatLine);
+      PushVert({xl + 0.14f, kPaintY, z0}, n, paint, kMatLine);
+      PushVert({xl + 0.14f, kPaintY, z1}, n, paint, kMatLine);
+      PushVert({xl, kPaintY, z1}, n, paint, kMatLine);
+      gIdx.push_back(es); gIdx.push_back(es + 1); gIdx.push_back(es + 2);
+      gIdx.push_back(es); gIdx.push_back(es + 2); gIdx.push_back(es + 3);
+    }
+  }
+
+  glGenVertexArrays(1, &gObjVao);
+  glGenBuffers(1, &gObjVbo);
+  glGenBuffers(1, &gObjIbo);
+  glBindVertexArray(gObjVao);
+  glBindBuffer(GL_ARRAY_BUFFER, gObjVbo);
+  glBufferData(GL_ARRAY_BUFFER, gVerts.size() * sizeof(ObjVertex), gVerts.data(), GL_STATIC_DRAW);
+  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gObjIbo);
+  glBufferData(GL_ELEMENT_ARRAY_BUFFER, gIdx.size() * sizeof(unsigned int), gIdx.data(), GL_STATIC_DRAW);
+  glEnableVertexAttribArray(0);
+  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(ObjVertex), (void *)0);
+  glEnableVertexAttribArray(1);
+  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(ObjVertex), (void *)(3 * sizeof(float)));
+  glEnableVertexAttribArray(2);
+  glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(ObjVertex), (void *)(6 * sizeof(float)));
+  glEnableVertexAttribArray(3);
+  glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(ObjVertex), (void *)(9 * sizeof(float)));
+  glEnableVertexAttribArray(4);
+  glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, sizeof(ObjVertex), (void *)(10 * sizeof(float)));
+  glBindVertexArray(0);
+  gObjIndexCount = (int)gIdx.size();
+
+  // Casters only: the ground, road and paint are dropped from the shadow pass.
+  // At this sun elevation a ground-level plate is almost edge-on to the light, so
+  // the depth it stores along a ray is metres away from where the surface is,
+  // and every receiver behind that depth turns black in one large blob.
+  gCasterIdx.clear();
+  gCasterIdx.reserve(gIdx.size());
+  for (size_t i = 0; i + 2 < gIdx.size(); i += 3) {
+    bool flatReceiver = true;
+    for (int k = 0; k < 3; k++) {
+      const ObjVertex &v = gVerts[gIdx[i + (size_t)k]];
+      if (std::fabs(v.y) > 0.06f || std::fabs(v.ny) < 0.9f) {
+        flatReceiver = false;
+        break;
+      }
+    }
+    if (flatReceiver) continue;
+    gCasterIdx.push_back(gIdx[i]);
+    gCasterIdx.push_back(gIdx[i + 1]);
+    gCasterIdx.push_back(gIdx[i + 2]);
+  }
+  gShadowIndexCount = (int)gCasterIdx.size();
+
+  glGenVertexArrays(1, &gShadowVao);
+  glGenBuffers(1, &gShadowIbo);
+  glBindVertexArray(gShadowVao);
+  glBindBuffer(GL_ARRAY_BUFFER, gObjVbo);
+  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gShadowIbo);
+  glBufferData(GL_ELEMENT_ARRAY_BUFFER, gCasterIdx.size() * sizeof(unsigned int),
+               gCasterIdx.data(), GL_STATIC_DRAW);
+  for (int a = 0; a < 5; a++) glEnableVertexAttribArray((GLuint)a);
+  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(ObjVertex), (void *)0);
+  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(ObjVertex), (void *)(3 * sizeof(float)));
+  glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(ObjVertex), (void *)(6 * sizeof(float)));
+  glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(ObjVertex), (void *)(9 * sizeof(float)));
+  glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, sizeof(ObjVertex), (void *)(10 * sizeof(float)));
+  glBindVertexArray(0);
+}
+
+// ------------------------------------------------------------------- sky mesh
+static const int kDomeRings = 24, kDomeSeg = 32, kDomeRadius = 400;
+static void BuildSkyMesh() {
   std::vector<float> verts;
   std::vector<unsigned int> idx;
   for (int r = 0; r <= kDomeRings; r++) {
     float phi = (float)r / kDomeRings * 3.14159265f;
-    float cy = std::cos(phi);
-    float cr = std::sin(phi);
+    float cy = std::cos(phi), cr = std::sin(phi);
     for (int s = 0; s <= kDomeSeg; s++) {
       float th = (float)s / kDomeSeg * 3.14159265f * 2.0f;
-      float nx = cr * std::cos(th), ny = cy, nz = cr * std::sin(th);
-      verts.push_back(nx); verts.push_back(ny); verts.push_back(nz);
-      verts.push_back(nx); verts.push_back(ny); verts.push_back(nz);
-      verts.push_back(0.0f); verts.push_back(0.0f);
+      float x = cr * std::cos(th), y = cy, z = cr * std::sin(th);
+      verts.push_back(x); verts.push_back(y); verts.push_back(z);
     }
   }
   for (int r = 0; r < kDomeRings; r++)
@@ -541,529 +1339,22 @@ static void BuildDomeMesh() {
       idx.push_back(i0); idx.push_back(i0 + 1); idx.push_back(i1);
       idx.push_back(i0 + 1); idx.push_back(i1 + 1); idx.push_back(i1);
     }
-  gDomeMesh.indexCount = (int)idx.size();
-  glGenVertexArrays(1, &gDomeMesh.vao);
-  glGenBuffers(1, &gDomeMesh.vbo);
-  glBindVertexArray(gDomeMesh.vao);
-  glBindBuffer(GL_ARRAY_BUFFER, gDomeMesh.vbo);
+  gSkyIndexCount = (int)idx.size();
+  glGenVertexArrays(1, &gSkyVao);
+  glGenBuffers(1, &gSkyVbo);
+  glGenBuffers(1, &gSkyIbo);
+  glBindVertexArray(gSkyVao);
+  glBindBuffer(GL_ARRAY_BUFFER, gSkyVbo);
   glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(float), verts.data(), GL_STATIC_DRAW);
-  GLuint ebo;
-  glGenBuffers(1, &ebo);
-  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
+  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gSkyIbo);
   glBufferData(GL_ELEMENT_ARRAY_BUFFER, idx.size() * sizeof(unsigned int), idx.data(), GL_STATIC_DRAW);
   glEnableVertexAttribArray(0);
-  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void *)0);
-  glEnableVertexAttribArray(1);
-  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void *)(3 * sizeof(float)));
-  glEnableVertexAttribArray(2);
-  glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void *)(6 * sizeof(float)));
+  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void *)0);
   glBindVertexArray(0);
-  (void)ebo;
 }
-
-
-struct TeapotPhysics {
-  Vec3 pos{0.0f, 8.0f, 0.0f};
-  Vec3 vel{0.0f, 0.0f, 0.0f};
-  float yaw = 0.0f;
-  float yawVel = 1.1f;      
-  float pitch = 0.0f;      
-  float pitchVel = 0.0f;    
-  float radius = 0.55f;     
-  bool inWater = false;
-  bool splashed = false;
-  double nextBoil = 0.0;    
-  bool settled = false;
-  bool active = false;      
-  double spawnAt = 0.0;
-  double splashTime = -1.0;
-};
-
-static const int kFleetCount = 18;
-static const int kRingsPerPot = MAX_RINGS / kFleetCount;
-
-static const float kFleetPos[kFleetCount][2] = {
-    // wave one: inner field
-    {0.0f, 0.0f},   {-4.8f, 2.6f},  {4.2f, -3.1f},  {-2.6f, -4.4f},
-    {5.4f, 3.3f},   {-6.1f, -1.8f}, {1.9f, 5.2f},   {6.8f, -0.7f},
-    {-1.2f, -6.6f},
-    // wave two: the outer ring, beyond wave one's splash field
-    {-7.4f, 5.8f},  {7.9f, 4.6f},   {8.6f, -4.2f},  {-5.9f, -7.8f},
-    {3.1f, 8.4f},   {9.3f, 0.9f},   {-9.0f, -2.7f}, {0.4f, -9.4f},
-    {5.7f, -8.6f}};
-static const float kFleetScale[kFleetCount] = {
-    // fleet-wide +35% per the user: pots read bigger against the splash
-    // crowns they spawn (crowns/jets scale with the same factor already)
-    1.96f, 1.66f, 2.35f, 1.40f, 1.80f, 2.16f, 1.53f, 1.73f, 2.05f,
-    1.86f, 1.57f, 2.23f, 1.34f, 2.00f, 1.77f, 1.65f, 2.12f, 1.49f};
-static const float kFleetDrop[kFleetCount] = {
-    8.0f, 10.0f, 9.0f, 11.5f, 8.6f, 10.6f, 9.4f, 12.0f, 11.0f,
-    13.0f, 14.5f, 12.4f, 15.0f, 13.6f, 14.0f, 12.8f, 15.5f, 13.2f};
-static const double kFleetDelay[kFleetCount] = {
-    // wave one: one pot a second. Wave two starts at 11.2s — by then the
-    // wave-one pots have impacted, crowned and sunk to the floor.
-    0.0, 1.1, 2.2, 3.3, 4.4, 5.5, 6.6, 7.7, 8.8,
-    11.2, 12.1, 13.0, 13.9, 14.8, 15.7, 16.6, 17.5, 18.4};
-
-struct Ring { float x, z, radius, strength; };
-static Ring gRings[MAX_RINGS];
-static int gRingUsed[kFleetCount] = {};
-static Ring *RingWindow(int pot) { return &gRings[pot * kRingsPerPot]; }
-struct Bubble { float x, z, depth, radius, rise, phase; int owner; };
-static std::vector<Bubble> gBubbles;
-
-struct CrownSplash {
-  bool active = false;
-  Vec3 center{0.0f, 0.0f, 0.0f};
-  float age = 0.0f;
-  float radius = 0.0f;
-  float height = 0.0f;
-  float height0 = 0.0f; 
-  float spike = 0.0f;   
-  float spike0 = 0.0f; 
-  float life = 1.0f;   
-  float scale = 1.0f;  
-};
-static CrownSplash gCrowns[kFleetCount];
-
-struct JetColumn {
-  bool active = false;
-  Vec3 center{0.0f, 0.0f, 0.0f};
-  float velY = 0.0f;
-  float height = 0.0f;
-  float radius = 0.0f;
-  float life = 0.0f;
-};
-static JetColumn gJets[kFleetCount];
-
-static float gJetPunch[kFleetCount];
-
-struct Droplet {
-  Vec3 pos;
-  Vec3 vel;
-  float radius;
-  float life;    
-  float maxLife;
-  float delay;   
-  int owner;      
-};
-static std::vector<Droplet> gDroplets;
-
-static TeapotPhysics gPots[kFleetCount];
-
-static const float kGravity = -13.6f;   // slightly heavier than Earth
-static const float kWaterLevel = 0.0f;
-static const float kBounce = 0.0f;     
-static const float kDragWater = 2.6f;  
-
-
-static void SpawnRing(int pot, float x, float z, float strength) {
-  Ring *win = RingWindow(pot);
-  if (gRingUsed[pot] < kRingsPerPot) {
-    win[gRingUsed[pot]++] = {x, z, 0.15f, strength};
-  } else {
-    int weakest = 0;
-    for (int i = 1; i < kRingsPerPot; i++)
-      if (win[i].strength < win[weakest].strength) weakest = i;
-    win[weakest] = {x, z, 0.15f, strength};
-  }
-}
-
-static void SpawnSplash(int pot, float x, float z, float impactSpeed, float scale) {
-  const bool waveTwo = pot >= 9;
-  const float s = std::fmin(impactSpeed / 10.0f, 1.6f);
-  SpawnRing(pot, x, z, std::fmin(1.0f, 0.55f + 0.45f * s));
-  CrownSplash &crown = gCrowns[pot];
-  crown.active = true;
-  crown.center = {x, kWaterLevel, z};
-  crown.age = 0.0f;
-  crown.scale = scale;
-  crown.radius = 0.68f * scale;  
-  crown.height0 = std::fmin((0.85f + 1.20f * s) * scale * (waveTwo ? 1.10f : 1.0f),
-                            3.6f);
-  crown.height = crown.height0;
-  crown.spike0 = std::fmin(1.0f, 0.45f + 0.4f * s);
-  crown.spike = 0.0f;  
-  crown.life = waveTwo ? 1.1f : 1.0f;
-  int n = (86 + (int)(46.0f * s)) * (waveTwo ? 2 : 1);
-  for (int i = 0; i < n; i++) {
-    float a = (float)((i * 137 + pot * 61) % 360) * 3.14159265f / 180.0f;
-    float r01 = ((i * 89 + pot * 37) % 100) / 100.0f;
-    float u01 = ((i * 53 + pot * 19) % 100) / 100.0f;
-    bool fragment = waveTwo && ((i * 31 + pot * 17) % 7) == 0; 
-    Droplet d;
-    d.owner = pot;
-    float rimR = crown.radius + 0.06f + 0.07f * r01;   
-    float onSheet = 0.18f + 0.78f * r01;
-    d.pos = {x + std::cos(a) * rimR * (1.0f - 0.22f * onSheet),
-             kWaterLevel + 0.10f + onSheet * crown.height0 * 0.92f,
-             z + std::sin(a) * rimR * (1.0f - 0.22f * onSheet)};
-    float out = (0.45f + 0.80f * s * (0.30f + 0.70f * r01)) * scale;
-    float up = (3.2f + 4.6f * s * (0.35f + 0.65f * onSheet));
-    d.vel = {std::cos(a) * out, up, std::sin(a) * out};
-    float sz = 0.0050f + 0.0210f * (u01 * u01 * u01);
-    sz *= 0.72f + 0.85f * onSheet;
-    d.radius = sz * scale;
-    if (fragment) d.radius *= 1.6f; 
-    d.maxLife = d.life = (0.62f + 0.52f * ((i * 29) % 5) / 5.0f) *
-                         (waveTwo ? 1.10f : 1.0f);
-    d.delay = 0.11f + 0.30f * onSheet + 0.05f * u01;
-    gDroplets.push_back(d);
-  }
-  JetColumn &jet = gJets[pot];
-  jet.active = true;
-  jet.center = {x, kWaterLevel, z};
-  jet.velY = 0.0f;    
-  jet.height = 0.0f;
-  jet.radius = (0.12f + 0.06f * s) * scale;
-  jet.life = 0.0f;
-  int bn = 10 + (int)(6.0f * s);
-  for (int i = 0; i < bn && (int)gBubbles.size() < MAX_BUBBLES; i++) {
-    float ba = (float)((i * 149 + pot * 73) % 360) * 0.0174532925f;
-    float brr = (0.08f + 0.30f * ((i * 41 + pot * 17) % 10) / 10.0f) * scale;
-    Bubble b;
-    b.owner = pot;
-    b.x = x + std::cos(ba) * brr;
-    b.z = z + std::sin(ba) * brr;
-    b.depth = 0.5f + 0.9f * ((i * 29 + pot * 11) % 10) / 10.0f;
-    b.radius = (0.028f + 0.030f * ((i * 13 + pot * 5) % 7) / 7.0f) * scale;
-    b.rise = 0.45f + 0.50f * ((i * 61 + pot * 7) % 10) / 10.0f;
-    b.phase = (float)((i * 97 + pot * 31) % 628) * 0.01f;
-    gBubbles.push_back(b);
-  }
-}
-static void ResetFleet(double t0 = 0.0) {
-  for (int i = 0; i < kFleetCount; i++) {
-    gPots[i] = TeapotPhysics{};
-    gPots[i].active = false;
-    gPots[i].spawnAt = t0 + kFleetDelay[i];
-    gCrowns[i] = CrownSplash{};
-    gJets[i] = JetColumn{};
-    gRingUsed[i] = 0;
-    gJetPunch[i] = 0.5f + 0.5f * ((i * 41) % 7) / 6.0f;
-    Ring *win = RingWindow(i);
-    for (int j = 0; j < kRingsPerPot; j++) win[j] = Ring{};
-  }
-  gDroplets.clear();
-  gBubbles.clear();
-}
-
-static double gStartTime = 0.0;
-static const float kPhysicsStep = 1.0f / 120.0f;
-static double gPhysicsAccum = 0.0;
-static double gSimTime = 0.0;
-static const float kPullbackPerPot = 0.55f;  
-static const float kPullbackMax = 9.5f;    
-static const double kReturnSeconds = 3.0;  
-
-static float gCamPullback = 0.0f; 
-static int gPhase = 0;           
-static double gPhaseT = 0.0;      
-static int FleetSpawned() {
-  int n = 0;
-  for (int i = 0; i < kFleetCount; i++)
-    if (gPots[i].active) n++;
-  return n;
-}
-
-static bool FleetAllDown() {
-  for (int i = 0; i < kFleetCount; i++)
-    if (!gPots[i].active || !gPots[i].settled) return false;
-  return true;
-}
-
-// Lift the fleet out of the water and drop it again on the same staggered
-// schedule it first arrived on.
-//
-// This used to re-splash the pots where they sat: the crowns and rings fired,
-// but the pots themselves never left the surface, so the loop read as "they keep
-// splashing" rather than "they fall again". The pots are now deactivated (and
-// therefore not drawn at all) until their own spawnAt, which is what makes them
-// disappear, fall back in from kFleetDrop and splash on impact.
-static void RedropFleet(double t0) {
-  for (int i = 0; i < kFleetCount; i++) {
-    TeapotPhysics &p = gPots[i];
-    p.active = false;
-    p.inWater = false;
-    p.splashed = false;
-    p.settled = false;
-    p.spawnAt = t0 + kFleetDelay[i];
-    p.splashTime = -1.0;
-    gCrowns[i] = CrownSplash{};
-    gJets[i] = JetColumn{};
-  }
-}
-
-static void UpdateChoreography(double simNow, double dt) {
-  float target = 0.0f;
-
-  // Phases 0 and 2 are the same beat -- the fleet is falling in -- and differ
-  // only in where gPhaseT was reset; phase 1 is the camera easing back before
-  // the fleet is lifted again.
-  if (gPhase == 0 || gPhase == 2) {
-    target = std::fmin((float)FleetSpawned() * kPullbackPerPot, kPullbackMax);
-    if (FleetAllDown()) {
-      gPhase = 1;
-      gPhaseT = simNow;
-    }
-  } else {
-    target = 0.0f;
-    if (simNow - gPhaseT >= kReturnSeconds && gCamPullback <= 0.30f) {
-      RedropFleet(simNow);
-      gPhase = 2;
-      gPhaseT = simNow;
-    }
-  }
-
-  float k = 1.0f - std::exp(-1.6f * (float)dt);
-  gCamPullback += (target - gCamPullback) * k;
-}
-
-static void UpdatePhysicsStep(double now, float dt) {
-  (void)now;
-  for (int i = 0; i < kFleetCount; i++) {
-    Ring *win = RingWindow(i);
-    for (int j = 0; j < gRingUsed[i]; j++) {
-      win[j].radius += (1.1f + 2.2f * win[j].strength) * dt;
-      win[j].strength -= 0.42f * dt;
-    }
-    int w = 0;
-    for (int j = 0; j < gRingUsed[i]; j++)
-      if (win[j].strength > 0.02f) win[w++] = win[j];
-    gRingUsed[i] = w;
-  }
-  std::vector<Droplet> pending;   
-  for (Droplet &d : gDroplets) {
-    if (d.delay > 0.0f) { d.delay -= dt; continue; }   
-                                                            
-    float sp = std::sqrt(d.vel.x * d.vel.x + d.vel.y * d.vel.y + d.vel.z * d.vel.z);
-    float cd = std::fmin(0.55f * sp * dt, 0.9f);   
-    d.vel.x -= d.vel.x * cd;
-    d.vel.z -= d.vel.z * cd;
-    d.vel.y -= d.vel.y * cd * 0.35f;             
-    d.vel.y += kGravity * dt;
-    d.pos = Vec3Add(d.pos, Vec3Scale(d.vel, dt));
-    d.life -= dt;
-    if (d.pos.y < kWaterLevel && d.vel.y < 0.0f) {
-      const float kRingDrop = 0.0090f;
-      if (d.radius > kRingDrop)
-        SpawnRing(d.owner, d.pos.x, d.pos.z,
-                  0.14f + 0.3f * std::fmin(-d.vel.y / 6.0f, 1.0f));
-      if (d.radius > kRingDrop && gDroplets.size() + pending.size() < 4200 &&
-          ((d.owner * 7 + (int)(d.pos.x * 13.0f)) % 2) == 0) {
-        for (int k = 0; k < 2; k++) {
-          Droplet s;
-          s.owner = d.owner;
-          float aa = (float)(((int)(d.pos.z * 31.0f) + k * 137) % 360) *
-                     0.0174532925f;
-          float sp2 = 0.25f + 0.20f * (float)k;
-          s.pos = {d.pos.x, 0.02f, d.pos.z};
-          s.vel = {std::cos(aa) * sp2,
-                   1.4f + 0.9f * (float)((k * 53) % 5) / 5.0f +
-                       0.15f * std::fmin(-d.vel.y, 6.0f),
-                   std::sin(aa) * sp2};
-          s.radius = d.radius * 0.45f;
-          s.maxLife = s.life = 0.42f;
-          s.delay = 0.0f;
-          pending.push_back(s);
-        }
-      }
-      d.life = 0.0f;
-    }
-  }
-  gDroplets.insert(gDroplets.end(), pending.begin(), pending.end());
-  gDroplets.erase(std::remove_if(gDroplets.begin(), gDroplets.end(),
-                                 [](const Droplet &d) { return d.life <= 0.0f; }),
-                  gDroplets.end());
-
-  for (Bubble &b : gBubbles) {
-    b.depth -= b.rise * dt;
-    b.x += std::sin(b.phase + (float)gSimTime * 2.6f) * 0.06f * dt;
-    b.z += std::cos(b.phase * 1.3f + (float)gSimTime * 3.1f) * 0.06f * dt;
-    if (b.depth <= 0.035f) {
-      SpawnRing(b.owner, b.x, b.z, 0.10f);
-      b.depth = -1.0f;   // dead
-    }
-  }
-  gBubbles.erase(std::remove_if(gBubbles.begin(), gBubbles.end(),
-                                [](const Bubble &b) { return b.depth < 0.0f; }),
-                 gBubbles.end());
-
-  for (int i = 0; i < kFleetCount; i++) {
-    CrownSplash &crown = gCrowns[i];
-    JetColumn &jet = gJets[i];
-    if (crown.active) {
-      crown.age += dt;
-      float t = crown.age;
-      float rise = std::fmin(t / 0.09f, 1.0f);
-      rise = rise * rise * (3.0f - 2.0f * rise);       
-      float pinch = std::fmin(t / 0.30f, 1.0f);
-      pinch = pinch * pinch * (3.0f - 2.0f * pinch);
-      crown.height = crown.height0 * rise *
-                     (1.0f - std::fmin(0.55f * std::fmax(0.0f, t - 0.30f), 0.85f));
-      crown.spike = crown.spike0 * pinch;
-      crown.radius = (0.68f + 0.20f * std::fmin(t, 0.42f)) * crown.scale;
-      crown.life = 1.0f - t / 1.18f;   
-      if (crown.life <= 0.0f || (t > 0.10f && crown.height < 0.04f)) {
-        crown.active = false;
-        float s = gJetPunch[i];
-        jet.velY = 5.6f + 2.4f * s;   
-        jet.radius = std::fmin(jet.radius * (0.85f + 0.5f * s),
-                               0.075f * crown.scale + 0.020f);
-      }
-    }
-    if (jet.active && jet.velY != 0.0f) {
-      jet.velY += kGravity * dt;
-      jet.height += jet.velY * dt;
-      jet.life += dt;
-      if (jet.height < 0.0f) {
-        jet.height = 0.0f;
-        jet.velY = 0.0f;
-        jet.life = 0.0f;
-        SpawnRing(i, jet.center.x, jet.center.z, 0.45f);
-      }
-    }
-
-    TeapotPhysics &p = gPots[i];
-    if (!p.active) {
-      if (gSimTime >= p.spawnAt) {
-        p.active = true;
-        float sc = kFleetScale[i];
-        p.pos = {kFleetPos[i][0], kFleetDrop[i], kFleetPos[i][1]};
-        float ph = (float)((i * 37) % 11) / 11.0f;
-        p.vel = {(ph - 0.5f) * 0.9f, -1.2f, ((i * 53) % 7 - 3.0f) / 7.0f * 0.9f};
-        p.yawVel = 1.1f * (0.6f + 0.8f * ((i * 7) % 5) / 5.0f);
-        p.pitch = 0.15f * ((i % 3) - 1);
-        p.pitchVel = 1.7f * (0.5f + 0.9f * ph);
-        p.radius = 0.55f * sc;
-      }
-      continue;
-    }
-    bool water = p.pos.y < kWaterLevel - 0.12f * p.radius;
-    p.vel.y += kGravity * dt;
-    if (!water) {
-      float ad = 1.0f - std::fmin(0.16f * dt, 0.2f);
-      p.vel.x *= ad; p.vel.y *= ad; p.vel.z *= ad;
-    }
-
-    if (water) {
-      if (!p.inWater) {
-        float speed = -p.vel.y;
-        p.inWater = true;
-        p.splashed = true;
-        p.splashTime = now;
-        SpawnSplash(i, p.pos.x, p.pos.z, speed * (i >= 9 ? 1.15f : 1.0f),
-                    kFleetScale[i]);
-        SpawnRing(i, p.pos.x, p.pos.z, 0.40f + 0.3f * std::fmin(speed / 9.0f, 1.0f));
-        p.vel.y = speed * kBounce;
-        p.vel.x *= 0.4f; p.vel.z *= 0.4f;
-        p.yawVel *= 0.25f;
-        p.pitchVel *= 0.25f;
-      }
-      p.vel.y += -0.55f * std::fabs(p.vel.y) * p.vel.y * dt;
-      p.vel.y *= 1.0f - std::fmin(4.5f * dt, 0.9f);
-      p.vel.x *= 1.0f - std::fmin(kDragWater * dt, 0.9f);
-      p.vel.z *= 1.0f - std::fmin(kDragWater * dt, 0.9f);
-      p.yawVel *= 1.0f - std::fmin(1.6f * dt, 0.9f);
-      p.yaw += p.yawVel * dt;
-      p.pitchVel *= 1.0f - std::fmin(1.6f * dt, 0.9f);
-      p.pitch += p.pitchVel * dt;
-    } else {
-      p.inWater = false;
-      p.yaw += p.yawVel * dt;      // tumble
-      p.pitch += p.pitchVel * dt;  // forward tumble
-    }
-
-    p.pos = Vec3Add(p.pos, Vec3Scale(p.vel, dt));
-    float restY = kWaterLevel - 0.45f * p.radius;
-    if (p.pos.y < restY) {
-      p.pos.y = restY;
-      if (p.vel.y < 0.0f) p.vel.y = 0.0f;
-      p.vel.x = 0.0f;
-      p.vel.z = 0.0f;
-      p.yawVel = 0.0f;
-      p.pitchVel = 0.0f;
-      p.settled = true;
-    }
-    if (p.settled && now - p.splashTime < 2.5 && now >= p.nextBoil) {
-      p.nextBoil = now + 0.22;
-      float ba = (float)((int)(now * 137.0) % 360) * 0.0174532925f;
-      float br = p.radius * (0.2f + 0.5f * (float)((int)(now * 89.0) % 7) / 7.0f);
-      SpawnRing(i, p.pos.x + std::cos(ba) * br, p.pos.z + std::sin(ba) * br,
-                0.16f + 0.10f * (float)((int)(now * 53.0) % 5) / 5.0f);
-    }
-  }
-}
-static void UpdatePhysics(double now, double frameDt) {
-  if (frameDt > 0.1) frameDt = 0.1;
-  gSimTime += frameDt;
-  gPhysicsAccum += frameDt;
-  while (gPhysicsAccum >= (double)kPhysicsStep) {
-    gPhysicsAccum -= (double)kPhysicsStep;
-    UpdatePhysicsStep(now - gPhysicsAccum, kPhysicsStep);
-  }
-}
-
-static SDL_Window *gWindow = nullptr;
-static SDL_GLContext gContext = nullptr;
-static int gWindowWidth = WIDTH, gWindowHeight = HEIGHT;
-
-static Program gSkyProg, gWaterProg, gTeapotProg, gDropletProg, gSplashProg, gHudProg;
-
-// Pool room: the luminous ceiling panel is the highlight the camera blooms
-// around, and the teapot's glaze, the meniscus and the caustics all reach
-// above 1.0 - the shared HDR composite is what keeps those from clipping.
-static postproc::Pipeline gPost;
-static postproc::Settings gPostSettings;
-static GLuint gTeapotTex = 0, gFontTex = 0;
-static GLuint gEmptyVao = 0;
-
-static Vec3 gCamPos{0.0f, 2.6f, 7.2f};
-static float gCamYaw = 0.0f, gCamPitch = -0.28f;
-static bool gAutoCam = true;
-static float gCamDist = 7.2f;
-static bool gResultsShown = false;
-static double gResultsElapsed = 0.0, gResultsFps = 0.0, gResultsScore = 0.0;
-static double gResultsShownAt = 0.0;
-static const double kResultsScreenSeconds = 4.0;
-static const char *gSceneName = "Scene 3";
-double gFusedPoolScore = 0.0; 
-static bool gFusedDone = false;
-static bool gStandaloneScene = false;
-static int gFrame = 0, gFps = 0, gFrameAccum = 0;
-static double gFpsTimer = 0.0;
-static double gSmoothFps = 0.0;
-static bool gQuit = false;
-static const char *gScreenshotPath = nullptr;
-static std::vector<float> gShotTimes;
-static size_t gNextShot = 0;
-static int gWindowWidthOverride = 0;
 
 static GLuint gHudVao = 0, gHudVbo = 0;
 static int gHudVertexFloats = 0;
-
-// ------------------------------------------------------------- camera path
-static void UpdateAutoCamera(float t) {
-  float a = 0.32f + t * 0.055f;
-  float spread = t > 11.0f ? std::fmin((t - 11.0f) * 0.35f, 1.6f) : 0.0f;
-  float radius = 7.6f + std::sin(t * 0.07f) * 1.1f + spread + gCamPullback;
-  gCamPos.x = std::cos(a) * radius;
-  gCamPos.z = std::sin(a) * radius;
-  gCamPos.y = 2.9f + std::sin(t * 0.045f) * 0.7f + spread * 0.10f +
-              gCamPullback * 0.12f;
-  gCamYaw = std::atan2(-gCamPos.x, -gCamPos.z);
-  gCamPitch = -0.30f + 0.06f * std::sin(t * 0.03f);
-}
-
-static Vec3 OrbitCamPos() {
-  float cp = std::cos(gCamPitch), sp = std::sin(gCamPitch);
-  Vec3 pos;
-  pos.x = gCamPos.x + std::sin(gCamYaw) * cp * gCamDist;
-  pos.y = gCamPos.y + sp * gCamDist;
-  pos.z = gCamPos.z + std::cos(gCamYaw) * cp * gCamDist;
-  if (pos.y < 0.35f) pos.y = 0.35f;
-  return pos;
-}
 
 static void BuildFontAtlas() {
   std::vector<unsigned char> px((size_t)kFontAtlasW * kFontAtlasH * 4);
@@ -1123,20 +1414,20 @@ static void RenderText(float x, float y, const char *text, float scale = 2.0f) {
 
 static void RenderHUD() {
   char line1[128];
-  std::snprintf(line1, sizeof(line1), "FPS: %d   Scene 3   release 0.5", gFps);
+  std::snprintf(line1, sizeof(line1), "FPS: %d   Scene 3   Release 1 v0.6", gFps);
   RenderText(16.0f, 16.0f, line1);
 }
 
 static void RenderResults() {
   glViewport(0, 0, gWindowWidth, gWindowHeight);
-  glClearColor(0.012f, 0.012f, 0.022f, 1.0f);
+  glClearColor(0.09f, 0.045f, 0.02f, 1.0f);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
   char big[96], timeLine[128], hint[96];
   std::snprintf(big, sizeof(big), "SCORE : %.0f", gResultsScore);
   std::snprintf(timeLine, sizeof(timeLine), "Time : %.1fs   Average FPS : %.1f",
                 gResultsElapsed, gResultsFps);
-  std::snprintf(hint, sizeof(hint), "%s score", gSceneName);
+  std::snprintf(hint, sizeof(hint), "Scene 3 score");
 
   float cx = 0.5f * (float)gWindowWidth;
   float cy = 0.5f * (float)gWindowHeight;
@@ -1145,328 +1436,485 @@ static void RenderResults() {
   RenderText(cx - (float)std::strlen(hint) * 8.0f, cy + 64.0f, hint);
 }
 
+// -------------------------------------------------------------- render passes
 static Mat4 gProj;
 
 static void DrawSky(const Mat4 &view, const Vec3 &eye, double timeSec) {
   Mat4 vp;
   Mat4Multiply(vp, gProj, view);
-  glDisable(GL_DEPTH_TEST);
   glDepthMask(GL_FALSE);
   glDisable(GL_CULL_FACE);
   glUseProgram(gSkyProg.handle);
-  glBindVertexArray(gDomeMesh.vao);
+  glBindVertexArray(gSkyVao);
   glUniformMatrix4fv(gSkyProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
-  {
-    Mat4 m;
-    Mat4Identity(m);
-    m[0] = kDomeRadius; m[5] = kDomeRadius; m[10] = kDomeRadius;
-    m[12] = eye.x; m[13] = eye.y; m[14] = eye.z;
-    glUniformMatrix4fv(gSkyProg.loc("uModel"), 1, GL_FALSE, m.data());
-  }
+  Mat4 m;
+  Mat4Identity(m);
+  m[0] = kDomeRadius; m[5] = kDomeRadius; m[10] = kDomeRadius;
+  m[12] = eye.x; m[13] = eye.y; m[14] = eye.z;
+  glUniformMatrix4fv(gSkyProg.loc("uModel"), 1, GL_FALSE, m.data());
   glUniform3f(gSkyProg.loc("uEyePos"), eye.x, eye.y, eye.z);
-  glUniform3f(gSkyProg.loc("uCenter"), eye.x, eye.y, eye.z);
-  glUniform1f(gSkyProg.loc("uRadius"), kDomeRadius);
-  glUniform3f(gSkyProg.loc("uLightDir"), kLightDir[0], kLightDir[1], kLightDir[2]);
-  glUniform3f(gSkyProg.loc("uLightTint"), kLightTint[0], kLightTint[1], kLightTint[2]);
+  Vec3 sd = SunDir();
+  glUniform3f(gSkyProg.loc("uSunDir"), sd.x, sd.y, sd.z);
   glUniform1f(gSkyProg.loc("uTime"), (float)timeSec);
   glUniform1f(gSkyProg.loc("uHdrOut"), gPost.ready ? 1.0f : 0.0f);
-  glDrawElements(GL_TRIANGLES, gDomeMesh.indexCount, GL_UNSIGNED_INT, nullptr);
+  glDrawElements(GL_TRIANGLES, gSkyIndexCount, GL_UNSIGNED_INT, nullptr);
   glBindVertexArray(0);
   glEnable(GL_CULL_FACE);
   glDepthMask(GL_TRUE);
   glEnable(GL_DEPTH_TEST);
 }
 
-static void DrawWater(const Mat4 &view, const Vec3 &eye, double timeSec) {
+static void DrawGrid(const Mat4 &view, const Vec3 &eye, double timeSec) {
+  (void)timeSec;
   Mat4 vp;
   Mat4Multiply(vp, gProj, view);
-  glUseProgram(gWaterProg.handle);
-  glBindVertexArray(gWaterMesh.vao);
-  glDepthMask(GL_TRUE);
   Mat4 model;
   Mat4Identity(model);
-  glUniformMatrix4fv(gWaterProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
-  glUniformMatrix4fv(gWaterProg.loc("uModel"), 1, GL_FALSE, model.data());
-  glUniform3f(gWaterProg.loc("uEyePos"), eye.x, eye.y, eye.z);
-  glUniform3f(gWaterProg.loc("uLightDir"), kLightDir[0], kLightDir[1], kLightDir[2]);
-  glUniform3f(gWaterProg.loc("uLightTint"), kLightTint[0], kLightTint[1], kLightTint[2]);
-  glUniform3f(gWaterProg.loc("uTileA"), kTileA[0], kTileA[1], kTileA[2]);
-  glUniform3f(gWaterProg.loc("uTileB"), kTileB[0], kTileB[1], kTileB[2]);
-  glUniform1f(gWaterProg.loc("uTime"), (float)timeSec);
-  glUniform1f(gWaterProg.loc("uHdrOut"), gPost.ready ? 1.0f : 0.0f);
-  glUniform4fv(gWaterProg.loc("uRings"), MAX_RINGS, &gRings[0].x);
-  static GLfloat hullData[kFleetCount * 4];
-  static GLfloat splashData[kFleetCount * 4];
-  for (int i = 0; i < kFleetCount; i++) {
-    const TeapotPhysics &p = gPots[i];
-    float hs = 0.0f;
-    if (p.active && p.inWater)
-      hs = std::fmin(1.0f, (float)(timeSec - p.splashTime) * 1.2f);
-    hullData[i * 4 + 0] = p.pos.x;
-    hullData[i * 4 + 1] = p.pos.z;
-    hullData[i * 4 + 2] = p.radius;
-    hullData[i * 4 + 3] = hs;
-    const CrownSplash &c = gCrowns[i];
-    const JetColumn &j = gJets[i];
-    float cx = 0.0f, cz = 0.0f, cr = 0.0f, cs = 0.0f;
-    if (c.active) {
-      cx = c.center.x; cz = c.center.z; cr = c.radius;
-      cs = std::fmin(1.0f, c.height * c.life * 2.0f);
-    } else if (j.active && j.height > 0.01f) {
-      cx = j.center.x; cz = j.center.z; cr = j.radius;
-      cs = std::fmin(0.8f, j.height * 0.8f);
-    }
-    splashData[i * 4 + 0] = cx;
-    splashData[i * 4 + 1] = cz;
-    splashData[i * 4 + 2] = cr;
-    splashData[i * 4 + 3] = cs;
-  }
-  glUniform4fv(gWaterProg.loc("uHulls"), kFleetCount, hullData);
-  glUniform4fv(gWaterProg.loc("uSplashes"), kFleetCount, splashData);
-  static GLfloat bubbleData[MAX_BUBBLES * 4];
-  for (int i = 0; i < MAX_BUBBLES; i++) {
-    if (i < (int)gBubbles.size()) {
-      const Bubble &b = gBubbles[i];
-      bubbleData[i * 4 + 0] = b.x;
-      bubbleData[i * 4 + 1] = b.z;
-      bubbleData[i * 4 + 2] = b.depth;
-      bubbleData[i * 4 + 3] = b.radius;
-    } else {
-      bubbleData[i * 4 + 0] = 0.0f;
-      bubbleData[i * 4 + 1] = 0.0f;
-      bubbleData[i * 4 + 2] = 0.0f;
-      bubbleData[i * 4 + 3] = 0.0f;
-    }
-  }
-  glUniform4fv(gWaterProg.loc("uBubbles"), MAX_BUBBLES, bubbleData);
-  glUniform1i(gWaterProg.loc("uBubbleCount"),
-              (int)std::fmin((float)gBubbles.size(), (float)MAX_BUBBLES));
-  glDrawElements(GL_TRIANGLES, gWaterMesh.indexCount, GL_UNSIGNED_INT, nullptr);
-  glBindVertexArray(0);
-}
-
-static void DrawTeapot(const Mat4 &view, const Vec3 &eye, const TeapotPhysics &pot,
-                       float scale, bool reflectionPass, const float *wobble,
-                       float now = 0.0f) {
-  if (!pot.active) return;
-  Mat4 vp;
-  Mat4Multiply(vp, gProj, view);
-  Vec3 pos = pot.pos;
-  if (reflectionPass) {
-    pos.y = 2.0f * kWaterLevel - pos.y; 
-    pos.x += wobble[0];                
-    pos.z += wobble[1];                
-  }
-  Mat4 model;
-  Mat4Model(model, pos, pot.yaw, scale, pot.pitch);
-  if (reflectionPass) {
-    model[4] = -model[4];
-    model[5] = -model[5];
-    model[6] = -model[6];
-    model[7] = -model[7];
-  }
-  float wetness = pot.splashed ? 1.0f : 0.0f;
-
-  glUseProgram(gTeapotProg.handle);
-  glBindVertexArray(gTeapotMesh.vao);
+  glUseProgram(gObjProg.handle);
+  glBindVertexArray(gObjVao);
   glDisable(GL_CULL_FACE);
-  glUniformMatrix4fv(gTeapotProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
-  glUniformMatrix4fv(gTeapotProg.loc("uModel"), 1, GL_FALSE, model.data());
-  glUniform3f(gTeapotProg.loc("uEyePos"), eye.x, eye.y, eye.z);
-  glUniform3f(gTeapotProg.loc("uLightDir"), kLightDir[0], kLightDir[1], kLightDir[2]);
-  glUniform3f(gTeapotProg.loc("uLightTint"), kLightTint[0], kLightTint[1], kLightTint[2]);
-  glUniform1f(gTeapotProg.loc("uWetness"), wetness);
-  glUniform1f(gTeapotProg.loc("uWaterLine"), kWaterLevel);
-  glUniform1f(gTeapotProg.loc("uHdrOut"), gPost.ready ? 1.0f : 0.0f);
-  glUniform3f(gTeapotProg.loc("uWaterBody"), 0.030f, 0.180f, 0.320f);
-  glUniform1f(gTeapotProg.loc("uTime"), now);
+  glUniformMatrix4fv(gObjProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
+  glUniformMatrix4fv(gObjProg.loc("uModel"), 1, GL_FALSE, model.data());
+  glUniform3f(gObjProg.loc("uEyePos"), eye.x, eye.y, eye.z);
+  Vec3 sd = SunDir();
+  glUniform3f(gObjProg.loc("uSunDir"), sd.x, sd.y, sd.z);
+  glUniform1f(gObjProg.loc("uTime"), (float)timeSec);
+  glUniform1f(gObjProg.loc("uRoadX"), kRoadX);
+  glUniform1f(gObjProg.loc("uHdrOut"), gPost.ready ? 1.0f : 0.0f);
+
   glActiveTexture(GL_TEXTURE0);
-  glBindTexture(GL_TEXTURE_2D, gTeapotTex);
-  glUniform1i(gTeapotProg.loc("uBaseColor"), 0);
-  glDrawElements(GL_TRIANGLES, gTeapotMesh.indexCount, GL_UNSIGNED_INT, nullptr);
+  glBindTexture(GL_TEXTURE_CUBE_MAP, gSkyCube);
+  glUniform1i(gObjProg.loc("uSkyEnvTex"), 0);
+  glActiveTexture(GL_TEXTURE1);
+  glBindTexture(GL_TEXTURE_2D, gShadowTex);
+  glUniform1i(gObjProg.loc("uShadowMap"), 1);
+  glActiveTexture(GL_TEXTURE0);
+  glUniformMatrix4fv(gObjProg.loc("uLightVP"), 1, GL_FALSE, gLightVP.data());
+  glUniform2f(gObjProg.loc("uShadowTexel"), 1.0f / (float)gShadowTexSize,
+              1.0f / (float)gShadowTexSize);
+  glUniform1f(gObjProg.loc("uShadowBias"), gShadowBias);
+  glUniform1f(gObjProg.loc("uShadowNoffset"), 0.02f);
+  glUniform1f(gObjProg.loc("uShadowEnabled"), gShadowReady ? 1.0f : 0.0f);
+  glUniform1f(gObjProg.loc("uEnvMaxLod"), 8.0f);
+  glDrawElements(GL_TRIANGLES, gObjIndexCount, GL_UNSIGNED_INT, nullptr);
   glBindVertexArray(0);
-  if (!reflectionPass) glEnable(GL_CULL_FACE);
-}
-
-static void DrawFleet(const Mat4 &view, const Vec3 &eye, bool reflectionPass,
-                      double now = 0.0) {
-  const float zero[2] = {0.0f, 0.0f};
-  for (int i = 0; i < kFleetCount; i++)
-    DrawTeapot(view, eye, gPots[i], kFleetScale[i], reflectionPass,
-               reflectionPass ? nullptr : zero, (float)now);
-}
-static void DrawCrowns(const Mat4 &view, double now) {
-  bool any = false;
-  for (int i = 0; i < kFleetCount; i++) any = any || gCrowns[i].active || gJets[i].active;
-  if (!any) return;
-  Mat4 vp;
-  Mat4Multiply(vp, gProj, view);
-  glUseProgram(gSplashProg.handle);
-  glBindVertexArray(gCrownVao);
-  glUniformMatrix4fv(gSplashProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
-  glUniform3f(gSplashProg.loc("uCamPos"), gCamPos.x, gCamPos.y, gCamPos.z);
-  glUniform3f(gSplashProg.loc("uEyePos"), gCamPos.x, gCamPos.y, gCamPos.z);
-  glUniform3f(gSplashProg.loc("uLightDir"), kLightDir[0], kLightDir[1], kLightDir[2]);
-  glUniform3f(gSplashProg.loc("uLightTint"), kLightTint[0], kLightTint[1], kLightTint[2]);
-  glUniform3f(gSplashProg.loc("uWaterA"), 0.30f, 0.62f, 0.86f);
-  glUniform3f(gSplashProg.loc("uWaterB"), 0.030f, 0.180f, 0.320f);
-  glUniform3f(gSplashProg.loc("uTileA"), kTileA[0], kTileA[1], kTileA[2]);
-  glUniform3f(gSplashProg.loc("uTileB"), kTileB[0], kTileB[1], kTileB[2]);
-  glUniform1f(gSplashProg.loc("uTime"), (float)now);
-  glDepthMask(GL_FALSE);
-  glDisable(GL_CULL_FACE);
-  glEnable(GL_BLEND);
-  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-  int order[kFleetCount];
-  float dist[kFleetCount];
-  int n = 0;
-  for (int i = 0; i < kFleetCount; i++) {
-    if (!gCrowns[i].active && !gJets[i].active) continue;
-    float dx = gCrowns[i].center.x - gCamPos.x;
-    float dz = gCrowns[i].center.z - gCamPos.z;
-    dist[n] = dx * dx + dz * dz;
-    order[n++] = i;
-  }
-  for (int a = 1; a < n; a++) {                 
-    int v = order[a];
-    float dv = dist[a];
-    int b = a - 1;
-    while (b >= 0 && dist[b] < dv) {
-      order[b + 1] = order[b]; dist[b + 1] = dist[b];
-      b--;
-    }
-    order[b + 1] = v; dist[b + 1] = dv;
-  }
-  for (int k = 0; k < n; k++) {
-    const int i = order[k];
-    const CrownSplash &c = gCrowns[i];
-    if (!c.active) continue;
-    glUniform3f(gSplashProg.loc("uCenter"), c.center.x, c.center.y, c.center.z);
-    glUniform1f(gSplashProg.loc("uRadius"), c.radius);
-    glUniform1f(gSplashProg.loc("uHeight"), c.height);
-    glUniform1f(gSplashProg.loc("uSpike"), c.spike);
-    glUniform1f(gSplashProg.loc("uPhase"), (float)i * 1.7f);
-    glUniform1f(gSplashProg.loc("uJet"), 0.0f);
-    glDrawElements(GL_TRIANGLES, gCrownVertexCount, GL_UNSIGNED_INT, nullptr);
-  }
-  for (int k = 0; k < n; k++) {
-    const int i = order[k];
-    const JetColumn &jet = gJets[i];
-    if (!jet.active || jet.height <= 0.02f) continue;
-    glUniform3f(gSplashProg.loc("uCenter"), jet.center.x, jet.center.y, jet.center.z);
-    glUniform1f(gSplashProg.loc("uRadius"), jet.radius + 0.02f);
-    glUniform1f(gSplashProg.loc("uHeight"), jet.height * 1.02f);
-    glUniform1f(gSplashProg.loc("uSpike"), 0.55f);
-    glUniform1f(gSplashProg.loc("uPhase"), (float)i * 1.7f);
-    glUniform1f(gSplashProg.loc("uJet"), 1.0f);
-    glDrawElements(GL_TRIANGLES, gCrownVertexCount, GL_UNSIGNED_INT, nullptr);
-  }
-  glUniform1f(gSplashProg.loc("uJet"), 0.0f);
-  glBindVertexArray(0);
-  glDisable(GL_BLEND);
-  glDepthMask(GL_TRUE);
   glEnable(GL_CULL_FACE);
 }
 
-static void DrawJets(const Mat4 &view, const Vec3 &eye) {
-  (void)eye;
-  bool any = false;
-  for (int i = 0; i < kFleetCount; i++)
-    if (gJets[i].active && gJets[i].height > 0.01f) any = true;
-  if (!any) return;
-  static std::vector<float> jbuf;
-  jbuf.clear();
-  for (int p = 0; p < kFleetCount; p++) {
-    const JetColumn &jet = gJets[p];
-    if (!jet.active || jet.height <= 0.01f) continue;
-    Vec3 toCam = Vec3Normalize(Vec3Sub(eye, jet.center));
-    float a = std::atan2(toCam.x, toCam.z);
-    const float fade = std::fmin(1.0f, 1.3f - jet.life * 0.3f) * 0.50f;
-    const float halfW = jet.radius;
-    for (int pass = 0; pass < 2; pass++) {
-      float aa = a + pass * 1.5707963f;
-      (void)aa;
-      const int kSteps = 6;
-      for (int i = 0; i <= kSteps; i++) {
-        float sy = (float)i / kSteps;
-        float taper = 1.0f - 0.35f * sy;
-        float px = jet.center.x;
-        float py = jet.center.y + sy * jet.height;
-        float pz = jet.center.z;
-        const float corners[4][2] = {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}};
-        const int quadIdx[6] = {0, 1, 2, 0, 2, 3};
-        for (int ci = 0; ci < 6; ci++) {
-          const float *c = corners[quadIdx[ci]];
-          jbuf.push_back(px); jbuf.push_back(py); jbuf.push_back(pz);
-          jbuf.push_back(0.0f); jbuf.push_back(0.0f); jbuf.push_back(0.0f);
-          jbuf.push_back(c[0]); jbuf.push_back(c[1]);
-          jbuf.push_back(halfW * taper);
-          jbuf.push_back(fade);
+
+// ----------------------------------------------------------- sky cubemap
+static GLuint LinkSourceProgram(const char *vsSrc, const char *fsSrc,
+                                const char *label) {
+  GLuint vs = CompileShader(GL_VERTEX_SHADER, vsSrc, label);
+  GLuint fs = CompileShader(GL_FRAGMENT_SHADER, fsSrc, label);
+  GLuint prog = glCreateProgram();
+  glAttachShader(prog, vs);
+  glAttachShader(prog, fs);
+  glLinkProgram(prog);
+  GLint ok = 0;
+  glGetProgramiv(prog, GL_LINK_STATUS, &ok);
+  if (!ok) {
+    char log[2048];
+    glGetProgramInfoLog(prog, sizeof(log), nullptr, log);
+    std::fprintf(stderr, "pole scene: %s failed:\n%s\n", label, log);
+  }
+  glDeleteShader(vs);
+  glDeleteShader(fs);
+  return prog;
+}
+
+static void CreateSkyEnvResources() {
+  glGenTextures(1, &gSkyCube);
+  glBindTexture(GL_TEXTURE_CUBE_MAP, gSkyCube);
+  for (int i = 0; i < 6; i++)
+    glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, GL_RGBA16F, kEnvSize,
+                 kEnvSize, 0, GL_RGBA, GL_FLOAT, nullptr);
+  glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+  glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+
+  glGenRenderbuffers(1, &gSkyEnvDepth);
+  glBindRenderbuffer(GL_RENDERBUFFER, gSkyEnvDepth);
+  glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, kEnvSize, kEnvSize);
+  glGenFramebuffers(1, &gSkyEnvFbo);
+  glBindFramebuffer(GL_FRAMEBUFFER, gSkyEnvFbo);
+  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER,
+                            gSkyEnvDepth);
+  gSkyEnvReady = true;
+  for (int i = 0; i < 6 && gSkyEnvReady; i++) {
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, gSkyCube, 0);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+      gSkyEnvReady = false;
+  }
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  if (!gSkyEnvReady)
+    std::fprintf(stderr, "pole scene: sky cubemap unavailable, reflections fall back to sky\n");
+  else
+    std::printf("Reflections: %dx%d linear sky cubemap\n", kEnvSize, kEnvSize);
+}
+
+// ------------------------------------------------------- sun shadow map
+static const char *kShadowVert = R"GLSL(
+#version 330 core
+layout(location = 0) in vec3 aPos;
+uniform mat4 uLightVP;
+void main() {
+    gl_Position = uLightVP * vec4(aPos, 1.0);
+}
+)GLSL";
+
+static const char *kShadowFrag = R"GLSL(
+#version 330 core
+void main() {}
+)GLSL";
+
+// Bounding box of the scene's world corners in light space. z is flipped to a
+// positive depth because a look-at view looks down its own -z.
+static void LightBox(const Mat4 &lightView, float box[6]) {
+  float l = 1e30f, r = -1e30f, b = 1e30f, t = -1e30f, n = 1e30f, f = -1e30f;
+  for (int i = 0; i < 8; i++) {
+    const Vec3 c{(i & 1) ? kShadowMax.x : kShadowMin.x, (i & 2) ? kShadowMax.y : kShadowMin.y,
+                 (i & 4) ? kShadowMax.z : kShadowMin.z};
+    const float x = lightView[0] * c.x + lightView[4] * c.y + lightView[8] * c.z + lightView[12];
+    const float y = lightView[1] * c.x + lightView[5] * c.y + lightView[9] * c.z + lightView[13];
+    const float z = lightView[2] * c.x + lightView[6] * c.y + lightView[10] * c.z + lightView[14];
+    l = std::min(l, x); r = std::max(r, x);
+    b = std::min(b, y); t = std::max(t, y);
+    n = std::min(n, -z); f = std::max(f, -z);
+  }
+  box[0] = l; box[1] = r; box[2] = b; box[3] = t; box[4] = n; box[5] = f;
+}
+
+static Mat4 ShadowLightView(const Vec3 &sunDir) {
+  const Vec3 center = Vec3Scale(Vec3Add(kShadowMin, kShadowMax), 0.5f);
+  const float radius = 0.5f * Vec3Len(Vec3Sub(kShadowMax, kShadowMin)) + 2.0f;
+  Mat4 view;
+  Mat4LookAt(view, Vec3Add(center, Vec3Scale(Vec3Norm(sunDir), radius)), center,
+             {0.0f, 1.0f, 0.0f});
+  return view;
+}
+
+static void UpdateLightMatrix(const Vec3 &sunDir) {
+  const Mat4 lightView = ShadowLightView(sunDir);
+  float box[6];
+  LightBox(lightView, box);
+  // Whole-texel alignment in light space. The bounds and the sun are the only
+  // inputs, so this grid is fixed in the world: as the simulated sun creeps the
+  // alignment is recomputed from scratch rather than accumulated, and shadow
+  // edges do not shimmer.
+  const float texel = gShadowTexelWorld;
+  const float l = std::floor(box[0] / texel) * texel;
+  const float b = std::floor(box[2] / texel) * texel;
+  const float r = l + (float)gShadowTexSize * texel;
+  const float t = b + (float)gShadowTexSize * texel;
+  const float zn = box[4] - 2.0f, zf = box[5] + 2.0f;
+  gShadowNear = zn;
+  gShadowFar = zf;
+  Mat4 lightProj;
+  Mat4Ortho(lightProj, l, r, b, t, zn, zf);
+  Mat4Multiply(gLightVP, lightProj, lightView);
+  // One texel of depth, in the [0,1] units the shader compares against.
+  gShadowBias = texel / std::max(zf - zn, 1.0f);
+}
+
+static void CreateShadowResources(const Vec3 &sunDir) {
+  float box[6];
+  LightBox(ShadowLightView(sunDir), box);
+  const float side = std::max(box[1] - box[0], box[3] - box[2]);
+  GLint maxTex = 4096;
+  glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTex);
+  int size = 1024;
+  while ((float)size < side / kShadowTexelTarget && size < 8192 && size * 2 <= maxTex)
+    size *= 2;
+  gShadowTexSize = std::min(size, (int)maxTex);
+  gShadowTexelWorld = std::max(side / (float)gShadowTexSize, 0.005f);
+
+  glGenTextures(1, &gShadowTex);
+  glBindTexture(GL_TEXTURE_2D, gShadowTex);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, gShadowTexSize, gShadowTexSize,
+               0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+  const float border[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+  glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, border);
+
+  glGenFramebuffers(1, &gShadowFbo);
+  glBindFramebuffer(GL_FRAMEBUFFER, gShadowFbo);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, gShadowTex, 0);
+  glDrawBuffer(GL_NONE);
+  glReadBuffer(GL_NONE);
+  gShadowReady = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  if (!gShadowReady)
+    std::fprintf(stderr, "pole scene: shadow map unavailable, falling back to no shadows\n");
+  else
+    std::printf("Shadows: %dx%d sun map, %.1f cm per texel over %.0f m, %d caster triangles\n",
+                gShadowTexSize, gShadowTexSize, gShadowTexelWorld * 100.0f, side,
+                gShadowIndexCount / 3);
+}
+
+static void RenderShadowMap() {
+  if (!gShadowReady || !gShadowProg || gShadowBuilt) return;
+  // The sun is fixed and the geometry is static, so the map is built once: there
+  // is nothing left that could make it drift, with time or with the camera.
+  gShadowBuilt = true;
+  UpdateLightMatrix(SunDir());
+
+  glBindFramebuffer(GL_FRAMEBUFFER, gShadowFbo);
+  glViewport(0, 0, gShadowTexSize, gShadowTexSize);
+  // The map's background must be the far plane whatever the last pass left in
+  // the clear value, or every receiver compares against depth 0 and goes black.
+  glClearDepth(1.0);
+  glClear(GL_DEPTH_BUFFER_BIT);
+  glEnable(GL_DEPTH_TEST);
+  glDepthMask(GL_TRUE);
+  glDisable(GL_BLEND);
+  // Two-sided casting: cables and signs are single-sided, and culling either
+  // face leaves holes in the map that look like detached or missing shadows.
+  glDisable(GL_CULL_FACE);
+  // Slope-scaled offset only. A large constant bias drags every caster's depth
+  // towards the light, which lifts the shadow off the ground at its contact
+  // point; the receivers that needed a big bias do not cast at all.
+  glEnable(GL_POLYGON_OFFSET_FILL);
+  glPolygonOffset(1.5f, 4.0f);
+
+  glUseProgram(gShadowProg);
+  glUniformMatrix4fv(glGetUniformLocation(gShadowProg, "uLightVP"), 1, GL_FALSE, gLightVP.data());
+  glBindVertexArray(gShadowVao);
+  glDrawElements(GL_TRIANGLES, gShadowIndexCount, GL_UNSIGNED_INT, nullptr);
+  glBindVertexArray(0);
+
+  glDisable(GL_POLYGON_OFFSET_FILL);
+  glEnable(GL_CULL_FACE);
+  glCullFace(GL_BACK);
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  glViewport(0, 0, gWindowWidth, gWindowHeight);
+}
+
+// ------------------------------------------------------- shadow map debug dump
+// --dump-shadow-map FILE writes the map the corridor is shaded from, as a 16-bit
+// PGM (0 = nearest the sun, 1 = background). It is a fixed grid over a fixed
+// world box, so the printed numbers are everything needed to read a texel back
+// into the world; the dump is written once, from whichever frame comes first.
+static void DumpShadowMap() {
+  if (!gDumpShadowPath || !gShadowReady) return;
+  static bool dumped = false;
+  if (dumped) return;
+  dumped = true;
+
+  const size_t n = (size_t)gShadowTexSize * (size_t)gShadowTexSize;
+  std::vector<float> depth(n, 1.0f);
+  glBindTexture(GL_TEXTURE_2D, gShadowTex);
+  glPixelStorei(GL_PACK_ALIGNMENT, 1);
+  glGetTexImage(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, GL_FLOAT, depth.data());
+  glBindTexture(GL_TEXTURE_2D, 0);
+
+  std::FILE *f = std::fopen(gDumpShadowPath, "wb");
+  if (!f) {
+    std::fprintf(stderr, "pole scene: cannot write shadow map %s\n", gDumpShadowPath);
+    return;
+  }
+  std::fprintf(f, "P5\n%d %d\n65535\n", gShadowTexSize, gShadowTexSize);
+  std::vector<unsigned char> row((size_t)gShadowTexSize * 2);
+  float lo = 1.0f, hi = 0.0f;
+  size_t covered = 0;
+  for (int y = gShadowTexSize - 1; y >= 0; y--) { // PGM rows start at the top
+    for (int x = 0; x < gShadowTexSize; x++) {
+      float d = depth[(size_t)y * gShadowTexSize + x];
+      if (!(d >= 0.0f)) d = 0.0f;
+      if (d > 1.0f) d = 1.0f;
+      const unsigned int v = (unsigned int)(d * 65535.0f + 0.5f);
+      row[(size_t)x * 2] = (unsigned char)((v >> 8) & 0xFFu);
+      row[(size_t)x * 2 + 1] = (unsigned char)(v & 0xFFu);
+      if (d < 1.0f) {
+        covered++;
+        lo = std::min(lo, d);
+        hi = std::max(hi, d);
+      }
+    }
+    std::fwrite(row.data(), 1, row.size(), f);
+  }
+  std::fclose(f);
+
+  const Vec3 sun = SunDir();
+  std::printf("Shadow map dumped: %s (%dx%d, 16-bit PGM, 0 = nearest the sun, "
+              "1 = background, first row is light-space +y)\n",
+              gDumpShadowPath, gShadowTexSize, gShadowTexSize);
+  std::printf("  sun (%.3f, %.3f, %.3f), %.1f cm per texel over the fixed world box "
+              "x[%.0f %.0f] y[%.0f %.0f] z[%.0f %.0f]\n",
+              sun.x, sun.y, sun.z, gShadowTexelWorld * 100.0f, kShadowMin.x, kShadowMax.x,
+              kShadowMin.y, kShadowMax.y, kShadowMin.z, kShadowMax.z);
+  std::printf("  light-space depth %.1f .. %.1f m, %d caster triangles, "
+              "%.1f%% of texels hold geometry (depth %.4f .. %.4f)\n",
+              gShadowNear, gShadowFar, gShadowIndexCount / 3,
+              100.0 * (double)covered / (double)n, lo, hi);
+  std::fflush(stdout);
+}
+
+// ---------------------------------------------------------- pole shadows
+// These are master's pole shadows, unchanged in intent: a fading strip laid on
+// the ground from each pole's base, away from the sun. They are the corridor's
+// only cast shadows now - the sun map that used to shade everything else drifted
+// with the camera, so it was removed rather than kept alongside them.
+static void DrawGroundShadows(const Mat4 &view, const Vec3 &eye, double timeSec) {
+  static GLuint vao = 0, vbo = 0, ibo = 0;
+  const float kDecalY = 0.08f; // above the road (0.03) and its paint (0.05)
+
+  struct DecalVert { float x, y, z, nx, ny, nz, r, g, b, mat, alpha; };
+  static std::vector<DecalVert> verts;
+  static std::vector<unsigned int> idx;
+
+  Vec3 sunDir = SunDir();
+  Vec3 sun = Vec3Norm({sunDir.x, 0.0f, sunDir.z});
+  Vec3 perp{-sun.z, 0.0f, sun.x};
+  // Blend is (GL_ZERO, GL_ONE_MINUS_SRC_ALPHA), so alpha is how much of the
+  // ground's light the strip removes. Each station across the strip is five
+  // vertices - transparent rim, dark shoulder, dark centre, shoulder, rim - so
+  // the shadow holds its weight across most of its width and still feathers
+  // out at the edges. Flat quads with one alpha each show their own edges as
+  // wedges as soon as the shadow is dark enough to matter.
+  const int kStations = 14;
+  const int kAcross = 5;
+
+  verts.clear();
+  idx.clear();
+  verts.reserve((gLineA.size() + gLineB.size()) * (size_t)(kStations + 1) * kAcross);
+  idx.reserve((gLineA.size() + gLineB.size()) * (size_t)kStations * 24);
+  for (const std::vector<PoleSpec> *line : {&gLineA, &gLineB}) {
+    for (const PoleSpec &p : *line) {
+      // A 10 m pole throws a ~30 m shadow at this sun. Fading the strip out
+      // along its length, the way the old decal did, is what made it read as a
+      // smudge at the foot rather than as the pole's shadow, so the darkness
+      // stays flat and only the last quarter tapers off.
+      float reach = 26.0f * (1.0f + 0.05f * (float)((int(p.z) % 7)));
+      Vec3 b{p.x, kDecalY, p.z};
+      unsigned int first = (unsigned int)verts.size();
+      for (int s = 0; s <= kStations; s++) {
+        float u = (float)s / (float)kStations;
+        Vec3 c = Vec3Add(b, Vec3Scale(sun, -reach * u));
+        float w = 0.22f + 1.00f * u;
+        float taper = u < 0.75f ? 1.0f : 1.0f - (u - 0.75f) * 4.0f;
+        float a = 0.92f * taper;
+        const float off[kAcross] = {-w, -0.55f * w, 0.0f, 0.55f * w, w};
+        const float shade[kAcross] = {0.0f, 0.80f, 1.0f, 0.80f, 0.0f};
+        for (int k = 0; k < kAcross; k++) {
+          verts.push_back({c.x + perp.x * off[k], kDecalY, c.z + perp.z * off[k],
+                           0, 1, 0, 0, 0, 0, kMatShadow, a * shade[k]});
+        }
+      }
+      for (int s = 0; s < kStations; s++) {
+        unsigned int i0 = first + (unsigned int)(s * kAcross);
+        unsigned int i1 = i0 + kAcross;
+        for (int k = 0; k < kAcross - 1; k++) {
+          idx.push_back(i0 + k); idx.push_back(i0 + k + 1); idx.push_back(i1 + k + 1);
+          idx.push_back(i0 + k); idx.push_back(i1 + k + 1); idx.push_back(i1 + k);
         }
       }
     }
   }
-  if (jbuf.empty()) return;
+
+  if (!vao) {
+    glGenVertexArrays(1, &vao);
+    glGenBuffers(1, &vbo);
+    glGenBuffers(1, &ibo);
+  }
+  glBindVertexArray(vao);
+  glBindBuffer(GL_ARRAY_BUFFER, vbo);
+  glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(verts.size() * sizeof(DecalVert)),
+               verts.data(), GL_STREAM_DRAW);
+  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
+  glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)(idx.size() * sizeof(unsigned int)),
+               idx.data(), GL_STREAM_DRAW);
+  glEnableVertexAttribArray(0);
+  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(DecalVert), (void *)0);
+  glEnableVertexAttribArray(1);
+  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(DecalVert), (void *)(3 * sizeof(float)));
+  glEnableVertexAttribArray(2);
+  glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(DecalVert), (void *)(6 * sizeof(float)));
+  glEnableVertexAttribArray(3);
+  glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(DecalVert), (void *)(9 * sizeof(float)));
+  glEnableVertexAttribArray(4);
+  glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, sizeof(DecalVert), (void *)(10 * sizeof(float)));
 
   Mat4 vp;
   Mat4Multiply(vp, gProj, view);
-  glUseProgram(gDropletProg.handle);
-  glBindVertexArray(gJetVao);
-  glBindBuffer(GL_ARRAY_BUFFER, gJetVbo);
-  glBufferData(GL_ARRAY_BUFFER, jbuf.size() * sizeof(float), jbuf.data(), GL_STREAM_DRAW);
-  glUniformMatrix4fv(gDropletProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
-  glUniform3f(gDropletProg.loc("uLightTint"), kLightTint[0], kLightTint[1], kLightTint[2]);
-  glUniform3f(gDropletProg.loc("uWaterA"), 0.30f, 0.62f, 0.86f);
-  glUniform3f(gDropletProg.loc("uWaterB"), 0.030f, 0.180f, 0.320f);
-  glEnable(GL_BLEND);
-  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-  glDepthMask(GL_FALSE);
+  Mat4 model;
+  Mat4Identity(model);
+  glUseProgram(gObjProg.handle);
+  glUniformMatrix4fv(gObjProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
+  glUniformMatrix4fv(gObjProg.loc("uModel"), 1, GL_FALSE, model.data());
+  glUniform3f(gObjProg.loc("uEyePos"), eye.x, eye.y, eye.z);
+  glUniform3f(gObjProg.loc("uSunDir"), sunDir.x, sunDir.y, sunDir.z);
+  glUniform1f(gObjProg.loc("uTime"), (float)timeSec);
+  glUniform1f(gObjProg.loc("uRoadX"), kRoadX);
+  glUniform1f(gObjProg.loc("uHdrOut"), gPost.ready ? 1.0f : 0.0f);
+  glActiveTexture(GL_TEXTURE0);
+  glBindTexture(GL_TEXTURE_CUBE_MAP, gSkyCube);
+  glUniform1i(gObjProg.loc("uSkyEnvTex"), 0);
+  glUniform1f(gObjProg.loc("uEnvMaxLod"), 8.0f);
+
   glDisable(GL_CULL_FACE);
-  glDrawArrays(GL_TRIANGLES, 0, (int)(jbuf.size() / 10));
-  glBindVertexArray(0);
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_ZERO, GL_ONE_MINUS_SRC_ALPHA);
+  glDepthMask(GL_FALSE);
+  glDrawElements(GL_TRIANGLES, (GLsizei)idx.size(), GL_UNSIGNED_INT, nullptr);
   glDepthMask(GL_TRUE);
   glDisable(GL_BLEND);
   glEnable(GL_CULL_FACE);
+  glBindVertexArray(0);
 }
 
-static void DrawDroplets(const Mat4 &view, const Vec3 &eye) {
-  (void)eye;
-  if (gDroplets.empty()) return;
-  static std::vector<float> buf;
-  buf.clear();
-  for (const Droplet &d : gDroplets) {
-    if (d.delay > 0.0f) continue;
-    float bright = std::fmin(1.0f, d.life / d.maxLife * 1.4f);
-    const float corners[4][2] = {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}};
-    const int quadIdx[6] = {0, 1, 2, 0, 2, 3};
-    for (int ci : quadIdx) {
-      buf.push_back(d.pos.x); buf.push_back(d.pos.y); buf.push_back(d.pos.z);
-      buf.push_back(d.vel.x); buf.push_back(d.vel.y); buf.push_back(d.vel.z);
-      buf.push_back(corners[ci][0]); buf.push_back(corners[ci][1]);
-      buf.push_back(d.radius); buf.push_back(bright);
-    }
-  }
-  gDropletVertexFloats = (int)buf.size();
+static void RenderSkyEnv(const Vec3 &eye, double timeSec) {
+  if (!gSkyEnvReady || !gSkyProg.handle) return;
+  static const GLenum faces[6] = {
+      GL_TEXTURE_CUBE_MAP_POSITIVE_X, GL_TEXTURE_CUBE_MAP_NEGATIVE_X,
+      GL_TEXTURE_CUBE_MAP_POSITIVE_Y, GL_TEXTURE_CUBE_MAP_NEGATIVE_Y,
+      GL_TEXTURE_CUBE_MAP_POSITIVE_Z, GL_TEXTURE_CUBE_MAP_NEGATIVE_Z};
+  static const Vec3 fwd[6] = {{1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1}};
+  static const Vec3 up[6] = {{0,-1,0},{0,-1,0},{0,0,1},{0,0,-1},{0,-1,0},{0,-1,0}};
 
-  Mat4 vp;
-  Mat4Multiply(vp, gProj, view);
-  glUseProgram(gDropletProg.handle);
-  glBindVertexArray(gDropletVao);
-  glBindBuffer(GL_ARRAY_BUFFER, gDropletVbo);
-  glBufferData(GL_ARRAY_BUFFER, buf.size() * sizeof(float), buf.data(), GL_STREAM_DRAW);
-  glUniformMatrix4fv(gDropletProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
-  glUniform3f(gDropletProg.loc("uLightTint"), kLightTint[0], kLightTint[1], kLightTint[2]);
-  glUniform3f(gDropletProg.loc("uSkyA"), kTileA[0], kTileA[1], kTileA[2]);
-  glUniform3f(gDropletProg.loc("uSkyB"), kTileB[0], kTileB[1], kTileB[2]);
-  glEnable(GL_BLEND);
-  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-  glDepthMask(GL_FALSE);
+  Vec3 sd = SunDir();
+  Mat4 proj;
+  Mat4Perspective(proj, 90.0f, 1.0f, 0.1f, 2000.0f);
+
+  glBindFramebuffer(GL_FRAMEBUFFER, gSkyEnvFbo);
+  glViewport(0, 0, kEnvSize, kEnvSize);
+  glDisable(GL_DEPTH_TEST);
   glDisable(GL_CULL_FACE);
-  glDrawArrays(GL_TRIANGLES, 0, gDropletVertexFloats / 10);
+  glUseProgram(gSkyProg.handle);
+  glBindVertexArray(gSkyVao);
+  Mat4 model;
+  Mat4Identity(model);
+  model[0] = kDomeRadius; model[5] = kDomeRadius; model[10] = kDomeRadius;
+  model[12] = eye.x; model[13] = eye.y; model[14] = eye.z;
+  glUniformMatrix4fv(gSkyProg.loc("uModel"), 1, GL_FALSE, model.data());
+  glUniform3f(gSkyProg.loc("uEyePos"), eye.x, eye.y, eye.z);
+  glUniform3f(gSkyProg.loc("uSunDir"), sd.x, sd.y, sd.z);
+  glUniform1f(gSkyProg.loc("uTime"), (float)timeSec);
+  glUniform1f(gSkyProg.loc("uHdrOut"), 1.0f);
+
+  for (int i = 0; i < 6; i++) {
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, faces[i],
+                           gSkyCube, 0);
+    Mat4 view;
+    Mat4LookAt(view, eye, Vec3Add(eye, fwd[i]), up[i]);
+    Mat4 vp;
+    Mat4Multiply(vp, proj, view);
+    glUniformMatrix4fv(gSkyProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
+    glDrawElements(GL_TRIANGLES, gSkyIndexCount, GL_UNSIGNED_INT, nullptr);
+  }
+  glBindTexture(GL_TEXTURE_CUBE_MAP, gSkyCube);
+  glGenerateMipmap(GL_TEXTURE_CUBE_MAP);
   glBindVertexArray(0);
-  glDepthMask(GL_TRUE);
-  glDisable(GL_BLEND);
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  glViewport(0, 0, gWindowWidth, gWindowHeight);
   glEnable(GL_CULL_FACE);
+  glEnable(GL_DEPTH_TEST);
 }
 
 static void WriteScreenshotPPM(const char *path);
@@ -1491,48 +1939,40 @@ static void RenderScene() {
   if (lastFrame < 0.0) lastFrame = now;
   double dt = now - lastFrame;
   lastFrame = now;
-  if (dt > 0.1) dt = 0.1;
-  const double simNow = gSimTime;
-  UpdatePhysics(simNow, dt);
-  UpdateChoreography(simNow, dt); 
+  if (dt > 0.1) dt = 0.1; // clamp hitches
+  gSimTime += dt;
 
-  if (gAutoCam) UpdateAutoCamera((float)gSimTime);  
+  float t = (float)gSimTime;
+  if (gAutoCam) UpdateAutoCamera(t);
   Vec3 eye = gAutoCam ? gCamPos : OrbitCamPos();
 
   Mat4 view;
   {
-    Vec3 acc{0.0f, 0.0f, 0.0f};
-    int n = 0;
-    for (int i = 0; i < kFleetCount; i++) {
-      if (!gPots[i].active) continue;
-      acc.x += gPots[i].pos.x;
-      acc.z += gPots[i].pos.z;
-      n++;
-    }
-    Vec3 look = n > 0 ? Vec3{acc.x / n, 0.0f, acc.z / n}
-                      : Vec3{kFleetPos[0][0], 0.0f, kFleetPos[0][1]};
-    look.y = 0.55f; // just above the waterline: splashes in, sky in view
+    Vec3 look{-0.45f, 5.5f, gCamPos.z + 26.0f};
     Mat4LookAt(view, eye, look, {0, 1, 0});
   }
   float aspect = (float)gWindowWidth / (float)gWindowHeight;
-  Mat4Perspective(gProj, 45.0f, aspect, 0.1f, 2000.0f);
+  Mat4Perspective(gProj, 52.0f, aspect, 0.1f, 900.0f);
+
+  // Sun shadows and the material-reflection environment are rendered before
+  // the camera target is bound. Neither takes the eye as an input.
+  RenderShadowMap();
+  DumpShadowMap();
+  RenderSkyEnv(eye, gSimTime);
 
   const bool hdr = postproc::Begin(gPost, gWindowWidth, gWindowHeight);
   glViewport(0, 0, gWindowWidth, gWindowHeight);
-  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-  DrawSky(view, eye, simNow);
-  DrawFleet(view, eye, false, simNow);  
-  DrawWater(view, eye, simNow);  
-  DrawCrowns(view, simNow);
-  DrawJets(view, eye);
-  DrawDroplets(view, eye);
-  if (hdr) postproc::End(gPost, gPostSettings, (float)gSimTime);
+  DrawGrid(view, eye, gSimTime);
+  DrawGroundShadows(view, eye, gSimTime);
+  DrawSky(view, eye, gSimTime);
+  if (hdr) postproc::End(gPost, gPostSettings, t);
   RenderHUD();
 
   if (gScreenshotPath && gNextShot < gShotTimes.size() &&
-      gSimTime >= (double)gShotTimes[gNextShot]) {   
-    WriteScreenshotPPM(gScreenshotPath);   
+      gSimTime >= (double)gShotTimes[gNextShot]) {
+    WriteScreenshotPPM(gScreenshotPath);
     gNextShot++;
     if (gNextShot >= gShotTimes.size()) {
       SDL_Quit();
@@ -1547,22 +1987,20 @@ static void RenderScene() {
   if (now - gFpsTimer >= 1.0) {
     double inst = gFrameAccum / (now - gFpsTimer);
     gFps = (int)std::lround(inst);
-    gSmoothFps = gSmoothFps > 0.0 ? gSmoothFps * 0.8 + inst * 0.2 : inst;
     gFrameAccum = 0;
     gFpsTimer = now;
     char title[256];
-    std::snprintf(title, sizeof(title), "%s - FPS : %d", NAME, gFps);
+    std::snprintf(title, sizeof(title), "%s - FPS : %d", gName, gFps);
     SDL_SetWindowTitle(gWindow, title);
   }
-  if (gShotTimes.empty() &&
-      (now - gStartTime) * 1000.0 >= (double)BENCH_MILLISECONDS) {
+  if (gShotTimes.empty() && (now - gStartTime) * 1000.0 >= 45000.0) {
     double elapsed = now - gStartTime;
     double fps = (double)gFrame / elapsed;
     double score = fps * fps * 2.0;
     std::printf("Benchmark Results - Time : %.1fs, Average FPS : %.1f, Score : %.0f\n",
                 elapsed, fps, score);
     std::fflush(stdout);
-    gFusedPoolScore = score;
+    gFusedPoleScore = score;
     gResultsElapsed = elapsed;
     gResultsFps = fps;
     gResultsScore = score;
@@ -1571,8 +2009,6 @@ static void RenderScene() {
   }
 }
 
-// ------------------------------------------------------------------ input
-// ESC is the only control the scene keeps: the camera is fully automatic.
 static void ProcessKeys(const SDL_Event &event) {
   if (event.key.keysym.sym == SDLK_ESCAPE) {
     gQuit = true;
@@ -1586,7 +2022,6 @@ static void ChangeSize(int w, int h) {
   glViewport(0, 0, w, h);
 }
 
-// -------------------------------------------------------- visual-test support
 static bool ParseShotTimes(const char *arg) {
   gShotTimes.clear();
   const char *p = arg;
@@ -1597,12 +2032,11 @@ static bool ParseShotTimes(const char *arg) {
     gShotTimes.push_back((float)v);
     p = end;
     if (*p == ',') p++;
-    else if (*p != '\0') return false;
   }
   return !gShotTimes.empty();
 }
 
-int PoolSceneParseArgs(int argc, char **argv) {
+int PoleSceneParseArgs(int argc, char **argv) {
   for (int i = 1; i < argc; i++) {
     if (!std::strcmp(argv[i], "--shot-times") && i + 1 < argc) {
       if (!ParseShotTimes(argv[++i])) {
@@ -1611,27 +2045,24 @@ int PoolSceneParseArgs(int argc, char **argv) {
       }
     } else if (!std::strcmp(argv[i], "--width") && i + 1 < argc) {
       gWindowWidthOverride = std::atoi(argv[++i]);
+    } else if (!std::strcmp(argv[i], "--dump-shadow-map") && i + 1 < argc) {
+      gDumpShadowPath = argv[++i];
     }
   }
   return EXIT_SUCCESS;
 }
 
-void PoolSceneSetScreenshot(const char *path) { gScreenshotPath = path; }
-void PoolSceneSetShotTime(float t) {
+void PoleSceneSetScreenshot(const char *path) { gScreenshotPath = path; }
+void PoleSceneSetShotTime(float t) {
   if (gShotTimes.empty()) gShotTimes.push_back(t);
 }
-void PoolSceneSetStandalone(bool standalone) { gStandaloneScene = standalone; }
+void PoleSceneSetStandalone(bool standalone) { gStandaloneScene = standalone; }
 
 static void WriteScreenshotPPM(const char *path) {
   const int w = gWindowWidth, h = gWindowHeight;
   std::vector<unsigned char> rgb((size_t)w * h * 3);
   glPixelStorei(GL_PACK_ALIGNMENT, 1);
   glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, rgb.data());
-  char resolved[1024];
-  if (std::strchr(path, '%')) {
-    std::snprintf(resolved, sizeof(resolved), path, gNextShot);
-    path = resolved;
-  }
   FILE *f = std::fopen(path, "wb");
   if (!f) {
     std::fprintf(stderr, "Cannot write screenshot %s\n", path);
@@ -1647,13 +2078,10 @@ static void WriteScreenshotPPM(const char *path) {
 
 // ------------------------------------------------------------------- setup
 static void Setup() {
-  BuildWaterMesh();
-  BuildDomeMesh();
+  BuildSkyMesh();
+  BuildSceneGeometry();
   BuildFontAtlas();
-  gTeapotMesh = LoadObjMesh(resolveAssetPath("assets/teapot.obj").c_str(), 0.55f);
-  gTeapotTex = LoadTextureRGBA("assets/teapot_copper.png");
 
-  glGenVertexArrays(1, &gEmptyVao);
   glGenVertexArrays(1, &gHudVao);
   glGenBuffers(1, &gHudVbo);
   glBindVertexArray(gHudVao);
@@ -1664,101 +2092,38 @@ static void Setup() {
   glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void *)(2 * sizeof(float)));
   glBindVertexArray(0);
 
-  glGenVertexArrays(1, &gDropletVao);
-  glGenBuffers(1, &gDropletVbo);
-  glBindVertexArray(gDropletVao);
-  glBindBuffer(GL_ARRAY_BUFFER, gDropletVbo);
-  glEnableVertexAttribArray(0); // centre pos
-  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void *)0);
-  glEnableVertexAttribArray(1); // velocity (for stretch)
-  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void *)(3 * sizeof(float)));
-  glEnableVertexAttribArray(2); // uv corner
-  glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void *)(6 * sizeof(float)));
-  glEnableVertexAttribArray(3); // radius+bright
-  glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void *)(8 * sizeof(float)));
-  glBindVertexArray(0);
-
-  {
-    const int kSeg = 96, kRows = 5;
-    std::vector<float> ring;
-    std::vector<unsigned> ridx;
-    for (int r = 0; r <= kRows; r++) {
-      float hp = (float)r / kRows;
-      for (int s = 0; s <= kSeg; s++) {
-        ring.push_back((float)s / kSeg); 
-        ring.push_back(hp);              
-        ring.push_back(1.0f);            
-        ring.push_back(0.0f);
-      }
-    }
-    for (int r = 0; r < kRows; r++)
-      for (int s = 0; s < kSeg; s++) {
-        unsigned i0 = (unsigned)(r * (kSeg + 1) + s);
-        unsigned i1 = i0 + (unsigned)(kSeg + 1);
-        ridx.push_back(i0); ridx.push_back(i0 + 1); ridx.push_back(i1);
-        ridx.push_back(i0 + 1); ridx.push_back(i1 + 1); ridx.push_back(i1);
-      }
-    gCrownVertexCount = (int)ridx.size();
-    glGenVertexArrays(1, &gCrownVao);
-    glGenBuffers(1, &gCrownVbo);
-    glBindVertexArray(gCrownVao);
-    glBindBuffer(GL_ARRAY_BUFFER, gCrownVbo);
-    glBufferData(GL_ARRAY_BUFFER, ring.size() * sizeof(float), ring.data(), GL_STATIC_DRAW);
-    GLuint cebo;
-    glGenBuffers(1, &cebo);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, cebo);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, ridx.size() * sizeof(unsigned), ridx.data(), GL_STATIC_DRAW);
-    glEnableVertexAttribArray(0); // angle + heightParam
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void *)0);
-    glEnableVertexAttribArray(1); // scale (unused)
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void *)(2 * sizeof(float)));
-    glBindVertexArray(0);
-    (void)cebo;
-  }
-  glGenVertexArrays(1, &gJetVao);
-  glGenBuffers(1, &gJetVbo);
-  glBindVertexArray(gJetVao);
-  glBindBuffer(GL_ARRAY_BUFFER, gJetVbo);
-  glEnableVertexAttribArray(0); // centre pos
-  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void *)0);
-  glEnableVertexAttribArray(1); // velocity (0 for the jet: no stretch)
-  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void *)(3 * sizeof(float)));
-  glEnableVertexAttribArray(2); // uv corner
-  glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void *)(6 * sizeof(float)));
-  glEnableVertexAttribArray(3); // radius+bright
-  glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void *)(8 * sizeof(float)));
-  glBindVertexArray(0);
-
-  gSkyProg = LinkProgram(resolveAssetPath("shaders/pool/object_vert.glsl").c_str(),
-                         resolveAssetPath("shaders/pool/sky_frag.glsl").c_str());
-  gWaterProg = LinkProgram(resolveAssetPath("shaders/pool/object_vert.glsl").c_str(),
-                           resolveAssetPath("shaders/pool/water_frag.glsl").c_str());
-  gTeapotProg = LinkProgram(resolveAssetPath("shaders/pool/object_vert.glsl").c_str(),
-                            resolveAssetPath("shaders/pool/teapot_frag.glsl").c_str());
-  gDropletProg = LinkProgram(resolveAssetPath("shaders/pool/droplet_vert.glsl").c_str(),
-                             resolveAssetPath("shaders/pool/droplet_frag.glsl").c_str());
-  gSplashProg = LinkProgram(resolveAssetPath("shaders/pool/splash_vert.glsl").c_str(),
-                            resolveAssetPath("shaders/pool/splash_frag.glsl").c_str());
+  gSkyProg = LinkProgram(resolveAssetPath("shaders/pole/sky_vert.glsl").c_str(),
+                         resolveAssetPath("shaders/pole/sky_frag.glsl").c_str());
+  gObjProg = LinkProgram(resolveAssetPath("shaders/pole/object_vert.glsl").c_str(),
+                         resolveAssetPath("shaders/pole/object_frag.glsl").c_str());
   gHudProg = LinkProgram(resolveAssetPath("shaders/ps14/hud_vert.glsl").c_str(),
-                         resolveAssetPath("shaders/pool/hud_frag.glsl").c_str());
+                         resolveAssetPath("shaders/pole/hud_frag.glsl").c_str());
+
+  gShadowProg = LinkSourceProgram(kShadowVert, kShadowFrag, "sun shadow");
+  CreateShadowResources(SunDir());
+  UpdateLightMatrix(SunDir());
+  CreateSkyEnvResources();
 
   glEnable(GL_DEPTH_TEST);
   glDepthFunc(GL_LEQUAL);
   glEnable(GL_CULL_FACE);
   glCullFace(GL_BACK);
-  glClearColor(0.05f, 0.06f, 0.08f, 1.0f);
+  glClearColor(0.60f, 0.30f, 0.10f, 1.0f);
 
-  // The room exposes for the ceiling panel, which is the brightest thing in
-  // frame; the threshold lets that panel (and the meniscus it glints off) seed
-  // the bloom while the tiled walls stay below it.
-  gPostSettings.exposure = 0.94f;
-  gPostSettings.bloom = 0.055f;
-  gPostSettings.threshold = 1.10f;
-  gPostSettings.knee = 0.55f;
+  // Exposure is the one photographic control shared by all three GL 3.3
+  // scenes; scene 3 is a bright low sun, so it sits a little under 1.0. The
+  // threshold at 1.0 means only genuine highlights (sun disc, speculars,
+  // glazed insulators) seed the bloom, not the whole orange sky.
+  // The cables' sun glints were blooming into glowing tubes; a tighter
+  // threshold and a lighter bloom keep the glare while staying photographic.
+  gPostSettings.exposure = 0.95f;
+  gPostSettings.bloom = 0.034f;
+  gPostSettings.threshold = 1.28f;
+  gPostSettings.knee = 0.60f;
   gPostSettings.aberration = 0.0090f;
-  gPostSettings.vignette = 0.24f;
-  gPostSettings.grain = 0.016f;
-  gPostSettings.flare = 0.8f;
+  gPostSettings.vignette = 0.20f;
+  gPostSettings.grain = 0.020f;
+  gPostSettings.flare = 1.0f;
   if (postproc::Init(gPost, gWindowWidth, gWindowHeight, 4)) {
     std::printf("Camera: HDR RGBA16F, %dx MSAA, %d-level bloom, ACES composite\n",
                 gPost.samples, postproc::Pipeline::kLevels);
@@ -1769,8 +2134,7 @@ static void Setup() {
   std::fflush(stdout);
 }
 
-// ------------------------------------------------------ scene entry point
-int RunPoolScene(bool *gaveUpOut) {
+int RunPoleScene(bool *gaveUpOut) {
   if (gaveUpOut) *gaveUpOut = false;
 
   if (SDL_Init(SDL_INIT_VIDEO) < 0) {
@@ -1791,14 +2155,14 @@ int RunPoolScene(bool *gaveUpOut) {
   }
   gWindowWidth = winW;
   gWindowHeight = winH;
-
   bool msaa = true;
   for (int attempt = 0; attempt < 2; attempt++) {
     SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, msaa ? 1 : 0);
     SDL_GL_SetAttribute(SDL_GL_SAMPLES, msaa ? 4 : 0);
-    gWindow = SDL_CreateWindow(NAME, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, winW, winH,
+    gWindow = SDL_CreateWindow(gName, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
+                               winW, winH,
                                SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE
-                               | (gWindowedMode ? 0u : SDL_WINDOW_FULLSCREEN_DESKTOP));
+                               | BenchCreateFullscreenFlag());
     if (!gWindow) {
       std::fprintf(stderr, "Window could not be created! SDL_Error: %s\n", SDL_GetError());
       return EXIT_FAILURE;
@@ -1810,12 +2174,13 @@ int RunPoolScene(bool *gaveUpOut) {
     msaa = false;
   }
   if (!gContext) {
-    std::printf("Pool room scene: OpenGL 3.3 core context unavailable — skipping this scene\n");
+    std::printf("Power lines scene: OpenGL 3.3 core context unavailable — skipping this scene\n");
     std::fflush(stdout);
     SDL_Quit();
     if (gaveUpOut) *gaveUpOut = true;
     return 1;
   }
+  BenchApplyDesktopFullscreen(gWindow);
   if (!gWindowedMode) {
     int dw = gWindowWidth, dh = gWindowHeight;
     SDL_GetWindowSize(gWindow, &dw, &dh);
@@ -1828,7 +2193,7 @@ int RunPoolScene(bool *gaveUpOut) {
   int samples = 0;
   SDL_GL_GetAttribute(SDL_GL_SAMPLES, &samples);
   std::printf("Antialiasing: %dx MSAA%s\n", samples, samples > 1 ? "" : " (unavailable)");
-  std::printf("Display: %s %dx%d | capture with Win+PrtScr, or --screenshot FILE (outputs a ppm file)\n",
+  std::printf("Display: %s %dx%d | capture with Win+PrtScr, or --screenshot FILE\n",
               gWindowedMode ? "windowed" : "borderless fullscreen",
               gWindowWidth, gWindowHeight);
   std::fflush(stdout);
@@ -1845,15 +2210,10 @@ int RunPoolScene(bool *gaveUpOut) {
   std::printf("Renderer: %s | %s\n", glGetString(GL_RENDERER), glGetString(GL_VERSION));
 
   Setup();
-  ResetFleet();
 
   gStartTime = NowSeconds();
   gFpsTimer = gStartTime;
-  gSimTime = 0.0;      
-  gPhysicsAccum = 0.0;
-  gCamPullback = 0.0f;
-  gPhase = 0;
-  gPhaseT = 0.0;
+  gSimTime = 0.0;
 
   SDL_Event event;
   while (!gQuit && !gFusedDone) {

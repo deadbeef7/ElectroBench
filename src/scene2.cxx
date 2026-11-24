@@ -26,6 +26,8 @@
 #include "post.hxx"
 
 extern bool gWindowedMode;
+Uint32 BenchCreateFullscreenFlag();
+void BenchApplyDesktopFullscreen(SDL_Window *win);
 #include "font_atlas.hxx" // shared HUD font data and atlas layout
 
 
@@ -34,12 +36,12 @@ extern bool gWindowedMode;
 #define HEIGHT 768
 #define BENCH_MILLISECONDS 45000 // 45 s like the original ElectroBench
 
-static const int kSeaResolution = 384;   // vertices per side of the ocean grid (2.25x the
-                                         // vertex count of 256 — pushed for realism)
+static const int kSeaResolution = 2048;  // vertices per side (2 m quads). Coarser grids
+                                         // undersample the 16-37 m chop into flat
+                                         // reflective plates that read as faceting.
 static const float kSeaSize = 4096.0f;   // world size of the ocean patch: reaches past the
                                          // visible horizon in every direction the camera can look
 static const int kEnvMapSize = 768;      // cubemap face resolution — higher fidelity reflections
-static const int kNoiseSize = 256;       // fBm noise texture size
 static const int kRippleSize = 256;      // ripple gradient texture size
 #define MAX_CLOUDS 9                     // must match sky_frag.glsl and sea_frag.glsl
 
@@ -266,32 +268,6 @@ static GLuint CreateRippleTexture() {
   return tex;
 }
 
-// RGBA fBm noise for the cloud shader (R/G used as two independent fields).
-static GLuint CreateSkyNoiseTexture() {
-  std::vector<unsigned char> px(kNoiseSize * kNoiseSize * 4);
-  for (int y = 0; y < kNoiseSize; y++) {
-    for (int x = 0; x < kNoiseSize; x++) {
-      float u = x / (float)kNoiseSize, v = y / (float)kNoiseSize;
-      float r = TileableFbm(u, v, 2, 4.0f, 101);
-      float g = TileableFbm(u, v, 2, 6.0f, 202);
-      px[(y * kNoiseSize + x) * 4 + 0] = (unsigned char)std::lround(r * 255.0f);
-      px[(y * kNoiseSize + x) * 4 + 1] = (unsigned char)std::lround(g * 255.0f);
-      px[(y * kNoiseSize + x) * 4 + 2] = (unsigned char)std::lround(r * g * 255.0f);
-      px[(y * kNoiseSize + x) * 4 + 3] = 255;
-    }
-  }
-  GLuint tex = 0;
-  glGenTextures(1, &tex);
-  glBindTexture(GL_TEXTURE_2D, tex);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, kNoiseSize, kNoiseSize, 0, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-  glGenerateMipmap(GL_TEXTURE_2D);
-  return tex;
-}
-
 // Grayscale foam / wave-detail texture.
 static GLuint CreateFoamTexture() {
   std::vector<unsigned char> px(kFoamSize * kFoamSize * 4);
@@ -425,10 +401,13 @@ static Program gSeaProg, gSkyProg, gHudProg;
 // water and the sky with two different response curves.
 static postproc::Pipeline gPost;
 static postproc::Settings gPostSettings;
-static GLuint gRippleTex = 0, gNoiseTex = 0, gFoamTex = 0, gFontTex = 0;
+static GLuint gRippleTex = 0, gFoamTex = 0, gFontTex = 0;
 static GLuint gEnvCube = 0, gEnvFbo = 0, gEnvDepth = 0;
 
-static Vec3 gSunDir = {0.824f, 0.287f, 0.489f};
+// A low sun: 13.6 degrees over the horizon, about three degrees lower than it
+// used to sit, with its azimuth unchanged so the reference camera still frames
+// it dead centre.
+static Vec3 gSunDir = {0.836f, 0.235f, 0.496f};
 
 static Vec3 gCamPos = {0.0f, 7.0f, 0.0f};
 static float gCamYaw = 0.0f, gCamPitch = -0.05f;
@@ -478,7 +457,7 @@ static float Smooth01(float x) {
 
 static void UpdateAutoCamera(float t) {
   const float kCycle = 26.0f;                            // lap: forward, turn, restore
-  const float kForward = 24.0f;                          // units pushed towards the sun
+  const float kForward = 72.0f;                          // units pushed towards the sun
   const float kTurnLeft = 0.38f;                         // ~22 deg of yaw
   const float kEyeX = 42.0f, kEyeY = 7.5f, kEyeZ = 0.0f; // the reference pose
 
@@ -555,9 +534,8 @@ static void BindSkyUniforms(const Mat4 &vp) {
   glUniform3f(gSkyProg.loc("uSunDir"), gSunDir.x, gSunDir.y, gSunDir.z);
   glUniform1f(gSkyProg.loc("uTime"), (float)gSceneTime);
   glUniform3f(gSkyProg.loc("uZenithColor"), 0.012f, 0.016f, 0.048f);  // deep blue-black overhead
-  glUniform3f(gSkyProg.loc("uMidColor"), 0.028f, 0.022f, 0.048f);     // dark slate-mauve mid sky
   glUniform3f(gSkyProg.loc("uHorizonColor"), 0.115f, 0.055f, 0.062f); // warm maroon horizon band
-  glUniform3f(gSkyProg.loc("uSunColor"), 1.55f, 0.72f, 0.30f);        // deeper orange sun
+  glUniform3f(gSkyProg.loc("uSunColor"), 1.75f, 0.50f, 0.12f);        // deep orange sun
   glUniform1i(gSkyProg.loc("uCloudCount"), MAX_CLOUDS);
   glUniform1fv(gSkyProg.loc("uCloudAzim"), MAX_CLOUDS, gCloudAzimDrift);
   glUniform1fv(gSkyProg.loc("uCloudPhase"), MAX_CLOUDS, gCloudPhase);
@@ -703,7 +681,6 @@ static void Setup() {
   glBindVertexArray(0);
 
   gRippleTex = CreateRippleTexture();
-  gNoiseTex = CreateSkyNoiseTexture();
   gFoamTex = CreateFoamTexture();
   CreateEnvResources();
 
@@ -721,7 +698,7 @@ static void Setup() {
   // bright band over a nearly black sea, so the threshold sits above the sky's
   // midtones and only the sun, its halo and the glitter path seed the bloom.
   gPostSettings.exposure = 1.00f;
-  gPostSettings.bloom = 0.095f;
+  gPostSettings.bloom = 0.055f;
   gPostSettings.threshold = 1.35f;
   gPostSettings.knee = 0.75f;
   gPostSettings.aberration = 0.0090f;
@@ -750,8 +727,10 @@ static void DrawSea(const Mat4 &view, double timeSec, const Vec3 &eye) {
   glUniformMatrix4fv(gSeaProg.loc("uViewProj"), 1, GL_FALSE, vp.data());
   glUniform1f(gSeaProg.loc("uTime"), (float)timeSec);
   glUniform3f(gSeaProg.loc("uEyePos"), eye.x, eye.y, eye.z);
+  // The vertex stage band-limits its displacement against the same eye the
+  // fragment stage shades from, so the drawn surface and its normals agree.
+  glUniform1f(gSeaProg.loc("uGridCell"), kSeaSize / (float)(kSeaResolution - 1));
   glUniform3f(gSeaProg.loc("uSunDir"), gSunDir.x, gSunDir.y, gSunDir.z);
-  glUniform3f(gSeaProg.loc("uHorizonColor"), 0.10f, 0.052f, 0.062f); // dark maroon haze, melts into the sky band
   glUniform3f(gSeaProg.loc("uWaterColor"), 0.034f, 0.020f, 0.052f); // near-black indigo body like the dusk reference
   glUniform1f(gSeaProg.loc("uHdrOut"), gPost.ready ? 1.0f : 0.0f);
   glActiveTexture(GL_TEXTURE0);
@@ -1013,11 +992,20 @@ int RunOceanScene(bool *gaveUpOut) {
 
   gWindow = SDL_CreateWindow(NAME, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, winW, winH,
                              SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE
-                             | (gWindowedMode ? 0u : SDL_WINDOW_FULLSCREEN_DESKTOP));
+                             | BenchCreateFullscreenFlag());
   if (!gWindow) {
     std::fprintf(stderr, "Window could not be created! SDL_Error: %s\n", SDL_GetError());
     return EXIT_FAILURE;
   }
+  gContext = SDL_GL_CreateContext(gWindow);
+  if (!gContext) {
+    std::printf("Dusk ocean scene: OpenGL 3.3 core context unavailable — skipping this scene\n");
+    std::fflush(stdout);
+    SDL_Quit();
+    if (gaveUpOut) *gaveUpOut = true;
+    return 1;
+  }
+  BenchApplyDesktopFullscreen(gWindow);
   if (!gWindowedMode) {
     int dw = winW, dh = winH;
     SDL_GetWindowSize(gWindow, &dw, &dh);
@@ -1029,17 +1017,9 @@ int RunOceanScene(bool *gaveUpOut) {
     }
   }
   if (gWindowWidthOverride > 0) {
-    gWindowWidth = winW;  
+    gWindowWidth = winW;
     gWindowHeight = winH;
     glViewport(0, 0, winW, winH);
-  }
-  gContext = SDL_GL_CreateContext(gWindow);
-  if (!gContext) {
-    std::printf("Dusk ocean scene: OpenGL 3.3 core context unavailable — skipping this scene\n");
-    std::fflush(stdout);
-    SDL_Quit();
-    if (gaveUpOut) *gaveUpOut = true;
-    return 1;
   }
   std::printf("Display: %s %dx%d | capture with Win+PrtScr, or --screenshot FILE (outputs a ppm file)\n",
               gWindowedMode ? "windowed" : "borderless fullscreen",

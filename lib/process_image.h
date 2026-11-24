@@ -26,7 +26,6 @@ void Mix_Image_NoBG(Image *BG, Image *FG, int x, int y);
 void Mix_Image_Color(Image *BG, Image *FG, int x, int y, unsigned char color[]);
 void Mix_Image_Color_NoBG(Image *BG, Image *FG, int x, int y, unsigned char color[]);
 void Zoom_Image(Image *Img, int Scale);
-void Blur_Image(Image *Src, Image *Dst, int Radius);
 
 inline void Create_Image(Image *Img, int w, int h) {
     Img->w = w;
@@ -332,8 +331,6 @@ inline void Zoom_Image(Image *Img, int Scale) {
     Img->w = w * Scale;
     Img->h = h * Scale;
 }
-
-inline void Blur_Image(Image *Src, Image *Dst, int Radius) {}
 
 
 #endif

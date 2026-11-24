@@ -16,8 +16,14 @@
 #include <vector>
 
 #include "GL/glew.h"
+#ifdef __APPLE__
+// macOS ships GL and GLU inside the OpenGL framework, not as GL/*.h headers.
+#include <OpenGL/gl.h>
+#include <OpenGL/glu.h>
+#else
 #include "GL/gl.h"
 #include "GL/glu.h"
+#endif
 
 #include "SDL2/SDL.h"
 #include "SDL2/SDL_opengl.h"
