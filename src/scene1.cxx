@@ -1,17 +1,4 @@
 // ElectroBench -- scene 1 of the single ElectroBench binary, rehauled.
-//
-// "ELECTRO RANGE": a dark hangar at night. The 110 UZIs are the only assets in
-// the scene and the only textures it uses: they are laid out in five rings on a
-// polished, wet concrete carousel that turns under three colour-gelled light
-// bars, with real planar reflections in the slab, a shadow-mapped key light and
-// a full PBR material built from the model's six maps (base colour, normal,
-// metallic, height, AO, roughness). Everything else -- slab, wall, light bars,
-// haze cones -- is procedural geometry and shading.
-//
-// This translation unit is NOT a program of its own. It exports RunGunScene(),
-// which main.cxx calls as the first scene of the one and only ElectroBench
-// executable. It creates its own OpenGL 3.3 core context, exactly like scenes
-// 2-4 do.
 
 #include <algorithm>
 #include <array>
@@ -344,9 +331,6 @@ static GunMesh LoadGunMesh(const char *path, float targetLength) {
     std::fprintf(stderr, "OBJ %s has no usable geometry\n", path);
     std::exit(EXIT_FAILURE);
   }
-
-  // The model is authored Z-up and centred on its own origin; lay it on the
-  // floor with Y up and its long axis along X.
   Vec3 mn = positions[0], mx = positions[0];
   for (const Vec3 &p : positions) {
     mn.x = std::fmin(mn.x, p.x); mn.y = std::fmin(mn.y, p.y); mn.z = std::fmin(mn.z, p.z);
@@ -354,19 +338,10 @@ static GunMesh LoadGunMesh(const char *path, float targetLength) {
   }
   const float cx = (mn.x + mx.x) * 0.5f;
   const float scale = targetLength / std::fmax(mx.x - mn.x, 1e-5f);
-
-  // The OBJ is Y-up (X = length, Y = height, Z = width). It is only centred and
-  // scaled here -- never mirrored: the file's triangles are counter-clockwise
-  // around their outward normals, and a mirror would flip that winding and make
-  // back-face culling eat the outside of every gun.
   const float cz = (mn.z + mx.z) * 0.5f;
   auto xf = [&](const Vec3 &p) {
     return V3((p.x - cx) * scale, (p.y - mn.y) * scale, (p.z - cz) * scale);
   };
-  // The file's triangles wind clockwise around it and its stored normals face
-  // into the model, so neither side of the surface is usable as authored:
-  // negating the normals and flipping the winding below turns it into an
-  // ordinary counter-clockwise, outward-facing mesh.
   auto xfN = [](const Vec3 &n) { return V3Norm(V3(-n.x, -n.y, -n.z)); };
 
   GunMesh mesh;
@@ -380,8 +355,6 @@ static GunMesh LoadGunMesh(const char *path, float targetLength) {
   std::vector<float> handedness;
 
   for (const Tri &tri : tris) {
-    // Flip the winding by swapping the last two corners *before* the corners are
-    // evaluated, so the weld key below always describes the vertex it stores.
     Tri c = tri;
     std::swap(c.p[1], c.p[2]);
     std::swap(c.t[1], c.t[2]);
@@ -431,14 +404,11 @@ static GunMesh LoadGunMesh(const char *path, float targetLength) {
       indices.push_back((unsigned int)idx);
     }
   }
-
-  // Orthonormalise the accumulated tangents and store handedness in w.
   for (size_t i = 0; i < tanAccum.size(); i++) {
     Vec3 n = V3((out[i * 12 + 3]), out[i * 12 + 4], out[i * 12 + 5]);
     Vec3 t = V3Sub(tanAccum[i], V3Scale(n, V3Dot(n, tanAccum[i])));
     t = V3Norm(t);
     if (V3Dot(t, t) < 1e-6f) {
-      // Degenerate UVs: pick any axis orthogonal to the normal.
       t = V3Norm(V3Cross(n, V3(0.0f, 1.0f, 0.0f)));
       if (V3Dot(t, t) < 1e-6f) t = V3Norm(V3Cross(n, V3(1.0f, 0.0f, 0.0f)));
     }
@@ -719,8 +689,6 @@ static void EvalCamera(float t, Vec3 &eye, Vec3 &target, float &fov) {
       return;
     }
   }
-  // The loop above always brackets t, but leave every output written so the
-  // caller can never read an uninitialised pose if the key table changes.
   eye = kCamKeys[n - 1].eye;
   target = kCamKeys[n - 1].target;
   fov = kCamKeys[n - 1].fov;
@@ -741,7 +709,6 @@ static void BuildLayout() {
       gGuns.push_back(g);
     }
   }
-  // keep the count honest even if the table above is edited
   while ((int)gGuns.size() > kGunCount) gGuns.pop_back();
 }
 
@@ -1059,8 +1026,6 @@ static void UpdateCamera(float t) {
   Mat4Multiply(gCam.viewProj, gCam.proj, gCam.view);
 }
 
-// The HUD and the post pipeline both leave their own textures on units 0/1,
-// so every pass that samples the gun maps binds them itself.
 static void BindGunTextures() {
   glActiveTexture(GL_TEXTURE0);
   glBindTexture(GL_TEXTURE_2D, gTexBase);
