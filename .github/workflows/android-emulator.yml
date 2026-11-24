@@ -146,5 +146,22 @@ jobs:
             echo "\`electrobench-emulator\` artifact."
           } >> "$GITHUB_STEP_SUMMARY"
 
+          # The job summary needs a signed-in session to read, and so does the
+          # artifact; an annotation is public. Keep one line with the outcome
+          # so the run says something even to someone who is not logged in.
+          notice=$(
+            {
+              echo "verdict: $verdict"
+              [ -f "$LOG" ] && grep -m1 "Benchmark Results" "$LOG"
+              [ -f "$LOG" ] && grep -m1 "FATAL signal" "$LOG"
+              [ -f "$PORT" ] && grep -m1 "renderer" "$PORT"
+              [ -f "$PORT" ] && grep -m1 "env probe target is not renderable" "$PORT"
+              [ -f "$PORT" ] && grep "heartbeat" "$PORT" | tail -1
+              [ -f "$PORT" ] && tail -1 "$PORT"
+              true
+            } | sed 's/%/%25/g; s/$/%0A/'
+          )
+          echo "::notice title=ElectroBench emulator run::$(echo "$notice" | tr -d '\n')"
+
           # A run that never reached the results line is a failure, not a pass.
           [ "$verdict" = finished ]
