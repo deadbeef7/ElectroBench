@@ -81,6 +81,28 @@ float octaveRes(float foot, float freq) {
     return 1.0 - smoothstep(0.35, 1.10, foot * freq);
 }
 
+// Bump from a procedural height field, evaluated per pixel. The surface
+// gradient is reconstructed from the screen-space derivatives of the world
+// position (Mikkelsen's unparameterised bump mapping), so it works on geometry
+// with no tangents and no UVs, and it stays correct at the grazing angles
+// where a hand-rolled tangent basis falls apart. h is a height in metres.
+vec3 bumpNormal(vec3 N, vec3 P, float h) {
+    vec3 dpdx = dFdx(P);
+    vec3 dpdy = dFdy(P);
+    vec3 r1 = cross(dpdy, N);
+    vec3 r2 = cross(N, dpdx);
+    float det = dot(dpdx, r1);
+    float adet = max(abs(det), 1e-7);
+    vec3 grad = sign(det == 0.0 ? 1.0 : det) * (dFdx(h) * r1 + dFdy(h) * r2);
+    // Slope in world units. The unparameterised reconstruction is singular at
+    // grazing angles, where a one-pixel step covers metres of surface; cap the
+    // slope so a noisy gradient cannot tip a ground plane into the sky.
+    vec3 slope = grad / adet;
+    float sl = length(slope);
+    slope *= min(sl, 0.55) / max(sl, 1e-6);
+    return normalize(N - slope);
+}
+
 // ------------------------------------------------------------------ shadowing
 // Sun map for everything but the poles: one depth map over the whole corridor,
 // built from a fixed world box so it cannot slide with the camera. About 5 cm
@@ -124,6 +146,7 @@ struct Surface {
     float metal;
     vec3  f0;
     vec3  emission;
+    float height;   // metres of procedural relief, 0 for smooth surfaces
 };
 
 Surface makeSurface(float m, vec3 P, float foot) {
@@ -133,6 +156,7 @@ Surface makeSurface(float m, vec3 P, float foot) {
     s.metal = 0.0;
     s.f0 = vec3(0.04);
     s.emission = vec3(0.0);
+    s.height = 0.0;
 
     if (m == kMatGround) {
         float n1 = vnoise(P.xz * 0.42);
@@ -152,6 +176,9 @@ Surface makeSurface(float m, vec3 P, float foot) {
         float nearRoad = exp(-pow((abs(P.x - uRoadX) - 3.6) / 1.5, 2.0));
         s.albedo = mix(s.albedo, s.albedo * 1.22 + vec3(0.020, 0.016, 0.010),
                        nearRoad * 0.55);
+        s.height = 0.013 * (n1 - 0.5) + 0.005 * (n2 - 0.5)
+                 + 0.008 * (n0 - 0.5) * octaveRes(foot, 1.2)
+                 + 0.005 * (nMid - 0.5) * gMid;
         s.rough = 0.96;
     } else if (m == kMatRoad) {
         float rx = P.x - uRoadX;
@@ -185,10 +212,17 @@ Surface makeSurface(float m, vec3 P, float foot) {
         s.albedo *= mix(1.0, 0.46, damp);
         s.rough = mix(0.92, 0.055, damp);
         s.f0 = mix(vec3(0.04), vec3(0.020), damp);   // wet = water interface
+        // Coarse aggregate and the tar-filled joint, flattened where water
+        // stands: a puddle is a flat mirror, not a rough patch.
+        s.height = (0.0030 * (n - 0.5)
+                  + 0.0022 * (nLong - 0.5) * gLong
+                  + 0.0016 * (vnoise(P.xz * 11.0) - 0.5) * gRoad)
+                 * mix(1.0, 0.12, damp);
     } else if (m == kMatLine) {
         float wear = octaveRes(foot, 6.0);
         float wearN = wear > 0.02 ? vnoise(P.xz * 6.0) : 0.5;
         s.albedo *= 0.78 + 0.34 * wearN * wear;
+        s.height = 0.0006 * (wearN - 0.5) * wear;
         s.rough = 0.72;
     } else if (m == kMatWood) {
         float along = P.y * 1.15 + (P.x + P.z) * 0.06;
@@ -197,6 +231,7 @@ Surface makeSurface(float m, vec3 P, float foot) {
         float g2 = gGrain > 0.02 ? vnoise(vec2((P.x + P.z) * 19.0, along * 2.6)) : 0.5;
         s.albedo *= 0.80 + 0.28 * g1 + 0.16 * g2 * gGrain;
         s.albedo *= mix(0.70, 1.0, smoothstep(0.0, 1.20, P.y));
+        s.height = 0.0020 * (g1 - 0.5) + 0.0011 * (g2 - 0.5) * gGrain;
         s.rough = 0.88;
     } else if (m == kMatWall) {
         float seam = abs(fract(P.y * 1.25) - 0.5) * 2.0;
@@ -204,11 +239,16 @@ Surface makeSurface(float m, vec3 P, float foot) {
         s.albedo *= 0.88 + 0.24 * vnoise(vec2((P.x + P.z) * 2.2, P.y * 0.9));
         s.albedo *= 0.62;
         s.albedo *= mix(0.55, 1.0, smoothstep(0.0, 0.55, P.y));
+        s.height = 0.0030 * (smoothstep(0.06, 0.34, seam) - 0.5)
+                 + 0.0016 * (vnoise(vec2((P.x + P.z) * 2.2, P.y * 0.9)) - 0.5);
         s.rough = 0.90;
     } else if (m == kMatRoof) {
         float course = abs(fract(P.z * 0.85) - 0.5) * 2.0;
         s.albedo *= mix(0.70, 1.12, smoothstep(0.12, 0.55, course));
         s.albedo *= 0.84 + 0.32 * vnoise(P.xz * 1.7);
+        // Relief only from the tile courses: a fine corrugation here beats
+        // against the roof planes at distance and reads as noise.
+        s.height = 0.0040 * (mix(0.70, 1.12, smoothstep(0.12, 0.55, course)) - 0.9);
         s.rough = 0.80;
     } else if (m == kMatGlass) {
         s.albedo *= 0.35;
@@ -224,6 +264,8 @@ Surface makeSurface(float m, vec3 P, float foot) {
             s.albedo = mix(s.albedo, s.albedo * 1.85 + vec3(0.020),
                            stones * gKerb * 0.75);
         }
+        s.height = 0.0026 * (cement - 0.5)
+                 + 0.0011 * (smoothstep(0.62, 0.86, agg) - 0.3) * gKerb;
         float gz = 1.0 - clamp(P.y / 0.16, 0.0, 1.0);
         s.albedo = mix(s.albedo, vec3(0.115, 0.098, 0.078),
                        smoothstep(0.35, 1.0, gz) * 0.60);
@@ -234,6 +276,7 @@ Surface makeSurface(float m, vec3 P, float foot) {
     } else if (m == kMatLeaf) {
         float n = vnoise(P.xz * 0.85 + P.y * 0.35);
         s.albedo *= 0.72 + 0.46 * n;
+        s.height = 0.004 * (n - 0.5);
         s.rough = 0.92;
     } else if (m == kMatCable) {
         // Rubber/PVC sheath: dark dielectric, fairly rough.
@@ -263,30 +306,34 @@ Surface makeSurface(float m, vec3 P, float foot) {
         s.metal = mix(1.0, 0.0, rust * 0.75);
         s.f0 = mix(s.albedo, vec3(0.05), rust * 0.75);
         s.rough = mix(0.55, 0.88, rust) + 0.10 * (1.0 - smoothstep(0.25, 0.85, streak));
+        s.height = 0.0008 * (streak - 0.5) + 0.0007 * (spangle - 0.5) * gSpangle;
     } else if (m == kMatConcrete) {
-        float streak = vnoise(vec2((P.x + P.z * 0.45) * 2.10, P.y * 0.10));
-        float band = vnoise(vec2((P.x + P.z * 0.45) * 0.35, P.y * 0.045));
-        s.albedo *= 0.62 + 0.52 * streak;
-        s.albedo *= 0.80 + 0.34 * band;
+        // Spun concrete, not the soot-blackened, spalled thing this used to
+        // be: a pale grey shaft with a broad tone difference between pours, a
+        // faint vertical rain wash, fine aggregate up close, the horizontal
+        // line where the form was struck, and road grime only in the bottom
+        // metre.
+        float wash = vnoise(vec2((P.x + P.z * 0.45) * 1.60, P.y * 0.045));
+        float tone = vnoise(vec2((P.x + P.z * 0.45) * 0.30, P.y * 0.020));
+        s.albedo *= 0.90 + 0.16 * tone;
+        s.albedo *= 0.95 + 0.10 * wash;
 
-        float board = abs(fract(P.y * 1.62) - 0.5) * 2.0;
-        s.albedo *= mix(0.94, 1.05, smoothstep(0.04, 0.26, board));
+        float gAgg = octaveRes(foot, 55.0);
+        float agg = gAgg > 0.02 ? vnoise(vec2((P.x + P.z) * 55.0, P.y * 55.0)) : 0.5;
+        if (gAgg > 0.02)
+            s.albedo *= mix(1.0, 0.88 + 0.26 * agg, gAgg);
 
-        float gSpall = octaveRes(foot, 7.5);
-        if (gSpall > 0.02) {
-            float spall = smoothstep(0.70, 0.93,
-                                     vnoise(vec2((P.x + P.z) * 7.5, P.y * 1.7)));
-            s.albedo = mix(s.albedo, vec3(0.180, 0.172, 0.162), spall * 0.55 * gSpall);
-        }
+        float form = abs(fract(P.y * 3.05) - 0.5) * 2.0;
+        s.albedo *= mix(0.985, 1.015, smoothstep(0.02, 0.30, form));
 
-        s.albedo = mix(s.albedo, vec3(0.168, 0.158, 0.140),
-                       (1.0 - smoothstep(0.10, 2.4, P.y)) * 0.42);
-        s.albedo = mix(s.albedo, s.albedo * 0.82,
-                       smoothstep(0.55, 0.95, streak) * 0.30);
-
-        float board2 = abs(fract(P.y * 1.62 + band * 0.35) - 0.5) * 2.0;
-        s.albedo *= mix(0.95, 1.04, smoothstep(0.04, 0.26, board2));
-        s.rough = 0.88 - 0.10 * streak;
+        s.albedo = mix(s.albedo, s.albedo * 0.64 + vec3(0.014, 0.011, 0.007),
+                       (1.0 - smoothstep(0.18, 1.60, P.y)) * 0.55);
+        // Cast-in form ridges faintly proud of the surface, plus the fine
+        // pitting of the aggregate showing through the cement skin.
+        s.height = 0.0022 * (wash - 0.5)
+                 + 0.0016 * (form - 0.5)
+                 + 0.0020 * (agg - 0.5) * gAgg;
+        s.rough = 0.84 - 0.06 * wash;
     } else if (m == kMatGlow) {
         s.albedo *= 0.9;
         s.emission = vColor * 5.0;
@@ -316,6 +363,11 @@ void main() {
     float foot = fwidth(P.x) + fwidth(P.z) + 0.0015;
 
     Surface s = makeSurface(m, P, foot);
+    // Relief fades out once a pixel covers more than a few centimetres, so
+    // distant surfaces stay smooth instead of boiling with shimmer.
+    float reliefLod = 1.0 - smoothstep(0.015, 0.22, foot);
+    if (s.height != 0.0 && reliefLod > 0.0)
+        N = bumpNormal(N, P, s.height * reliefLod);
     vec3 albedo = s.albedo;
     float rough = clamp(s.rough, 0.03, 1.0);
     float metal = clamp(s.metal, 0.0, 1.0);

@@ -287,7 +287,7 @@ static const float kMatGlow = 13.0f;
 static const float kMatSteel = 14.0f;
 static const float kMatKerb = 15.0f;
 static const float kMatConcrete = 16.0f;
-static const Vec3 kConcreteGrey{0.212f, 0.216f, 0.218f};
+static const Vec3 kConcreteGrey{0.300f, 0.299f, 0.289f};
 
 static const Vec3 kWoodDark{0.165f, 0.115f, 0.085f};  
 static const Vec3 kWoodOld{0.230f, 0.180f, 0.140f};   
@@ -471,8 +471,8 @@ static Vec3 PoleAxisAt(const PoleSpec &p, float h) {
   float f = h / p.height;
   return {p.x + p.leanX * f, h, p.z + p.leanZ * f};
 }
-static const float kShaftRBase = 0.132f;
-static const float kShaftRTop  = 0.086f;
+static const float kShaftRBase = 0.185f;
+static const float kShaftRTop  = 0.112f;
 static float TrunkRadius(const PoleSpec &p, float h) {
   float f = h / p.height;
   return kShaftRBase + (kShaftRTop - kShaftRBase) * f;
@@ -490,6 +490,10 @@ static Vec3 PoleTopInsulatorTop(const PoleSpec &p) {
   Vec3 a = PoleAxisAt(p, p.height + 0.24f);
   return {a.x, p.height + 0.24f, a.z};
 }
+static Vec3 TopBracketInsulatorTop(const PoleSpec &p, float off) {
+  Vec3 a = PoleAxisAt(p, p.height + 0.24f);
+  return {a.x + off, p.height + 0.24f, a.z};
+}
 static Vec3 Arm2InsulatorTop(const PoleSpec &p, float off) {
   Vec3 a = PoleAxisAt(p, p.height - 0.87f);
   return {a.x + off, p.height - 0.87f, a.z};
@@ -501,12 +505,25 @@ static float PoleRoadSide(const PoleSpec &p) { return p.x < kRoadX ? 1.0f : -1.0
 
 // geometry and the wire attachment cannot drift apart again.
 static void AddInsulator(const Vec3 &ib) {
-  AddCylinder(ib, Vec3Add(ib, Vec3{0, 0.055f, 0}), 0.044f, 0.040f, 6, kMetal,
+  AddCylinder(ib, Vec3Add(ib, Vec3{0, 0.055f, 0}), 0.040f, 0.034f, 6, kMetal,
               kMatMetal);
-  AddCylinder(Vec3Add(ib, Vec3{0, 0.055f, 0}), Vec3Add(ib, Vec3{0, 0.175f, 0}),
-              0.050f, 0.061f, 8, kCeramic, kMatCeramic);
-  AddCylinder(Vec3Add(ib, Vec3{0, 0.175f, 0}), Vec3Add(ib, Vec3{0, 0.213f, 0}),
-              0.061f, 0.038f, 8, kCeramic, kMatCeramic);
+  // Three stacked ceramic sheds rather than one smooth cone: a pin insulator
+  // reads by its ribs at any distance, and the smooth version looked like a
+  // glazed light bulb on a stick.
+  float iy = ib.y + 0.055f;
+  for (int i = 0; i < 3; i++) {
+    float f = (float)i;
+    AddCylinder({ib.x, iy, ib.z}, {ib.x, iy + 0.036f, ib.z}, 0.044f - 0.003f * f,
+                0.060f - 0.005f * f, 8, kCeramic, kMatCeramic);
+    iy += 0.036f;
+  }
+  AddCylinder({ib.x, iy, ib.z}, {ib.x, iy + 0.050f, ib.z}, 0.050f, 0.030f, 8,
+              kCeramic, kMatCeramic);
+  // the tie wire that lashes the conductor into the pin groove
+  Vec3 top = Vec3Add(ib, Vec3{0, 0.205f, 0});
+  for (float s : {-1.0f, 1.0f})
+    AddWire(top, {ib.x + s * 0.080f, ib.y + 0.150f, ib.z + 0.030f}, 0.004f,
+            0.006f, 3, kCable, kMatCable);
 }
 
 static void AddStepBolts(const PoleSpec &p, float from, float to, float side) {
@@ -671,32 +688,234 @@ static void AddPylon(float x, float z, float height) {
   }
 }
 
+// ---------------------------------------------------- modern pole hardware
+// A distribution pole on a Japanese street carries far more than a shaft and
+// two arms: a fat spun-concrete column poured in two lengths, galvanised band
+// clamps, a transformer bank under the primary arm, station cutouts above it,
+// a PVC riser duct strapped down one side and the small plates every pole
+// wears. These builders add that hardware so the corridor's poles read as
+// working apparatus instead of bare masts.
+static void AddConcreteShaft(const PoleSpec &p) {
+  const float jointH = p.height * 0.46f;
+  Vec3 b = PoleAxisAt(p, kGroundY);
+  Vec3 m = PoleAxisAt(p, jointH);
+  Vec3 t = PoleAxisAt(p, p.height);
+  float rb = TrunkRadius(p, kGroundY);
+  float rm = TrunkRadius(p, jointH);
+  float rt = TrunkRadius(p, p.height);
+  AddCylinder(b, m, rb, rm, 14, kConcreteGrey, kMatConcrete);
+  AddCylinder(m, t, rm * 0.992f, rt, 12, kConcreteGrey, kMatConcrete);
+  // the joint between the two pours, wrapped in a galvanised collar
+  AddCylinder({m.x, jointH - 0.055f, m.z}, {m.x, jointH + 0.055f, m.z},
+              rm + 0.014f, rm + 0.014f, 12, kSteelGalv, kMatMetal);
+  // band clamps where the arm brackets, riser and guy hardware take hold
+  for (float h : {1.10f, 2.30f, p.height - 2.55f, p.height - 0.95f}) {
+    Vec3 c = PoleAxisAt(p, h);
+    float r = TrunkRadius(p, h);
+    AddCylinder({c.x, h - 0.030f, c.z}, {c.x, h + 0.030f, c.z},
+                r + 0.011f, r + 0.011f, 10, kSteelGalv, kMatMetal);
+  }
+}
+
+static void AddRiserDuct(const PoleSpec &p, float side) {
+  const float ductR = 0.038f;
+  const Vec3 duct{0.128f, 0.126f, 0.120f};
+  const float h0 = 0.26f, h1 = p.height - 1.05f;
+  Vec3 a = PoleAxisAt(p, h0);
+  Vec3 b = PoleAxisAt(p, h1);
+  a.x -= side * (TrunkRadius(p, h0) + ductR + 0.006f);
+  b.x -= side * (TrunkRadius(p, h1) + ductR + 0.006f);
+  AddCylinder(a, b, ductR, ductR, 8, duct, kMatMetal);
+  for (float h = 0.75f; h < h1; h += 1.35f) {
+    Vec3 c = PoleAxisAt(p, h);
+    float r = TrunkRadius(p, h);
+    AddBox({c.x - side * (r + ductR + 0.012f), h, c.z}, {0.052f, 0.024f, 0.050f},
+           kSteelGalv, kMatSteel);
+  }
+  // the sweep where the duct turns into the ground, then a service box
+  AddCylinder(a, {a.x + side * 0.13f, 0.055f, a.z}, ductR, ductR * 0.92f, 8, duct,
+              kMatMetal);
+  Vec3 sb = PoleAxisAt(p, 1.75f);
+  sb.x -= side * (TrunkRadius(p, 1.75f) + ductR + 0.075f);
+  AddBox(sb, {0.085f, 0.145f, 0.115f}, {0.180f, 0.178f, 0.170f}, kMatMetal);
+  AddBox({sb.x - side * 0.088f, sb.y, sb.z}, {0.010f, 0.105f, 0.085f},
+         {0.240f, 0.238f, 0.230f}, kMatPaint);
+}
+
+static void AddFiberClosure(const PoleSpec &p, float side) {
+  // The black splice closure an aerial fibre run leaves on the shaft, with a
+  // few metres of spare cable coiled under it.
+  Vec3 a = PoleAxisAt(p, 6.35f);
+  float r = TrunkRadius(p, 6.35f);
+  const Vec3 shell{0.062f, 0.062f, 0.060f};
+  AddCylinder({a.x + side * (r - 0.01f), 6.35f, a.z},
+              {a.x + side * (r + 0.10f), 6.35f, a.z}, 0.030f, 0.030f, 6, kMetal,
+              kMatMetal);
+  AddBox({a.x + side * (r + 0.20f), 6.30f, a.z}, {0.075f, 0.145f, 0.085f},
+         shell, kMatMetal);
+  AddBox({a.x + side * (r + 0.20f), 6.46f, a.z}, {0.062f, 0.020f, 0.070f},
+         {0.105f, 0.104f, 0.100f}, kMatMetal);
+  // spare fibre loop hanging off the same bracket
+  const int steps = 16;
+  Vec3 prev{a.x + side * (r + 0.24f), 6.15f, a.z};
+  for (int i = 1; i <= steps; i++) {
+    float t = (float)i / (float)steps;
+    float ang = 3.14159f * t;
+    Vec3 cur{a.x + side * (r + 0.24f + 0.16f * std::sin(ang)),
+             6.15f - 0.30f * (1.0f - std::cos(ang)) * 0.5f, a.z + 0.30f * t};
+    AddWire(prev, cur, 0.0f, 0.009f, 2, kCable, kMatCable);
+    prev = cur;
+  }
+  AddWire(prev, {a.x + side * (r + 0.02f), 6.05f, a.z + 0.30f}, 0.02f, 0.009f,
+          4, kCable, kMatCable);
+}
+
+static void AddPolePlates(const PoleSpec &p, float side) {
+  Vec3 a = PoleAxisAt(p, 2.55f);
+  float r = TrunkRadius(p, 2.55f);
+  // pole number / owner plate
+  AddBox({a.x + side * (r + 0.014f), 2.55f, a.z}, {0.016f, 0.155f, 0.105f},
+         {0.760f, 0.752f, 0.712f}, kMatPaint);
+  AddBox({a.x + side * (r + 0.026f), 2.64f, a.z}, {0.008f, 0.030f, 0.095f},
+         {0.085f, 0.250f, 0.135f}, kMatPaint);
+  // the yellow anti-climb marker a real pole wears near its foot
+  Vec3 b = PoleAxisAt(p, 0.62f);
+  float r2 = TrunkRadius(p, 0.62f);
+  AddCylinder({b.x, 0.56f, b.z}, {b.x, 0.68f, b.z}, r2 + 0.008f, r2 + 0.008f, 10,
+              {0.620f, 0.560f, 0.150f}, kMatPaint);
+}
+
+static void AddCutoutBank(const PoleSpec &p, float armY, float side) {
+  const Vec3 bracket{0.230f, 0.232f, 0.236f};
+  const Vec3 shell{0.400f, 0.398f, 0.386f};
+  float by = armY - 1.60f;
+  Vec3 bc = PoleAxisAt(p, by);
+  float br = TrunkRadius(p, by);
+  AddBox({bc.x + side * (br + 0.34f), by, bc.z}, {0.30f, 0.028f, 0.032f},
+         bracket, kMatMetal);
+  AddCylinder({bc.x + side * br, by - 0.16f, bc.z},
+              {bc.x + side * (br + 0.30f), by - 0.02f, bc.z}, 0.024f, 0.024f, 5,
+              bracket, kMatMetal);
+  for (int i = 0; i < 3; i++) {
+    float dz = (float)(i - 1) * 0.34f;
+    Vec3 ct{bc.x + side * (br + 0.60f), by - 0.06f, bc.z + dz};
+    AddBox({ct.x, ct.y + 0.10f, ct.z}, {0.055f, 0.045f, 0.055f}, bracket,
+           kMatMetal);
+    AddCylinder({ct.x, ct.y - 0.05f, ct.z}, {ct.x, ct.y + 0.07f, ct.z}, 0.030f,
+                0.034f, 6, kMetal, kMatMetal);
+    AddCylinder({ct.x, ct.y - 0.30f, ct.z}, {ct.x, ct.y - 0.05f, ct.z}, 0.050f,
+                0.056f, 8, shell, kMatCeramic);
+    AddCylinder({ct.x, ct.y - 0.36f, ct.z}, {ct.x, ct.y - 0.30f, ct.z}, 0.062f,
+                0.048f, 8, kCeramic, kMatCeramic);
+    AddCylinder({ct.x, ct.y - 0.40f, ct.z}, {ct.x, ct.y - 0.36f, ct.z}, 0.026f,
+                0.026f, 6, kMetal, kMatMetal);
+    float off = dz < -0.1f ? -0.55f : (dz > 0.1f ? 0.55f : 0.0f);
+    AddWire({ct.x, ct.y + 0.12f, ct.z}, ArmInsulatorTop(p, off), 0.02f, 0.008f,
+            5, kCable, kMatCable);
+  }
+}
+
+static void AddTransformerBank(const PoleSpec &p, const Vec3 &armC, float armY,
+                               float side) {
+  const Vec3 tank{0.404f, 0.400f, 0.386f};
+  const Vec3 trim{0.300f, 0.298f, 0.288f};
+  const float canR = 0.295f, canH = 1.02f;
+  const float cx = armC.x + side * 0.70f;
+  const float cy = armY - 1.16f;
+  {
+    // the mounting bridge the two cans hang from: a channel bolted under the
+    // arm, running out from the shaft, with a diagonal stay back to the pole
+    float br = TrunkRadius(p, armY - 0.52f);
+    Vec3 bc = PoleAxisAt(p, armY - 0.52f);
+    AddBox({bc.x + side * (br + 0.44f), armY - 0.52f, bc.z}, {0.50f, 0.045f, 0.55f},
+           kSteelArm, kMatSteel);
+    AddCylinder({bc.x + side * br, armY - 1.02f, bc.z},
+                {bc.x + side * (br + 0.42f), armY - 0.58f, bc.z}, 0.030f, 0.030f,
+                5, kSteelArm, kMatSteel);
+  }
+  for (float dz : {-0.36f, 0.36f}) {
+    Vec3 c{cx, cy, armC.z + dz};
+    // hanger channels from the bridge down onto the tank lid
+    for (float dx : {-0.14f, 0.14f})
+      AddBox({c.x + dx, armY - 0.59f, c.z}, {0.035f, 0.075f, 0.045f}, kSteelArm,
+             kMatSteel);
+    AddBox({c.x, armY - 0.63f, c.z}, {0.42f, 0.032f, 0.30f}, kSteelArm,
+           kMatSteel);
+    // the can itself, with its rolled ends and finned faces
+    AddCylinder({c.x, c.y - canH * 0.5f, c.z}, {c.x, c.y + canH * 0.5f, c.z},
+                canR, canR * 0.985f, 16, tank, kMatMetal);
+    AddCylinder({c.x, c.y + canH * 0.5f, c.z},
+                {c.x, c.y + canH * 0.5f + 0.075f, c.z}, canR * 0.94f,
+                canR * 0.84f, 16, trim, kMatMetal);
+    AddCylinder({c.x, c.y - canH * 0.5f - 0.06f, c.z},
+                {c.x, c.y - canH * 0.5f + 0.02f, c.z}, canR * 0.90f, canR, 16,
+                trim, kMatMetal);
+    for (int f = 0; f < 7; f++) {
+      float fy = c.y - 0.38f + 0.13f * f;
+      AddBox({c.x, fy, c.z + canR + 0.048f}, {0.225f, 0.024f, 0.052f}, tank,
+             kMatMetal);
+      AddBox({c.x, fy, c.z - canR - 0.048f}, {0.225f, 0.024f, 0.052f}, tank,
+             kMatMetal);
+    }
+    // HV bushings on the lid, jumped across to the primary arm
+    for (float bz : {-0.15f, 0.15f}) {
+      Vec3 bt{c.x + side * 0.06f, c.y + canH * 0.5f + 0.07f, c.z + bz};
+      AddCylinder(bt, {bt.x, bt.y + 0.10f, bt.z}, 0.040f, 0.046f, 8, kCeramic,
+                  kMatCeramic);
+      AddCylinder({bt.x, bt.y + 0.10f, bt.z}, {bt.x, bt.y + 0.16f, bt.z},
+                  0.030f, 0.024f, 6, kMetal, kMatMetal);
+      AddWire({bt.x, bt.y + 0.17f, bt.z},
+              ArmInsulatorTop(p, bz < 0.0f ? -0.55f : 0.55f), 0.04f, 0.009f, 6,
+              kCable, kMatCable);
+    }
+    // LV bushings and the service leads on the street side
+    for (float bz : {-0.11f, 0.11f}) {
+      Vec3 lt{c.x + side * (canR - 0.02f), c.y + 0.30f, c.z + bz};
+      AddCylinder({lt.x, lt.y, lt.z}, {lt.x + side * 0.09f, lt.y, lt.z}, 0.034f,
+                  0.028f, 6, kCeramic, kMatCeramic);
+      AddWire({lt.x + side * 0.10f, lt.y, lt.z},
+              {lt.x + side * 0.10f, lt.y - 0.75f, lt.z}, 0.02f, 0.008f, 5,
+              kCable, kMatCable);
+    }
+    // nameplate, and the tank's ground lead back to the shaft
+    AddBox({c.x + side * (canR + 0.02f), c.y + 0.06f, c.z},
+           {0.010f, 0.085f, 0.135f}, {0.560f, 0.545f, 0.500f}, kMatPaint);
+    AddWire({c.x + side * (canR + 0.01f), c.y - canH * 0.5f, c.z},
+            PoleAxisAt(p, 3.05f), 0.10f, 0.008f, 6, kSteelGalv, kMatCable);
+  }
+  // the LV neutrals of the two cans are tied together under the bank
+  AddWire({cx + side * 0.10f, cy + 0.30f, armC.z - 0.34f},
+          {cx + side * 0.10f, cy + 0.30f, armC.z + 0.34f}, 0.06f, 0.010f, 6,
+          kCable, kMatCable);
+}
+
 static void AddPole(const PoleSpec &p, bool concrete = false) {
   Vec3 base = PoleAxisAt(p, kGroundY);
   Vec3 top = PoleAxisAt(p, p.height);
   const float side = PoleRoadSide(p);
   if (concrete)
-    AddCylinder(base, top, kShaftRBase, kShaftRTop, 10, kConcreteGrey, kMatConcrete);
+    AddConcreteShaft(p);
   else
-    AddCylinder(base, top, kShaftRBase, kShaftRTop, 10, kSteelGalv, kMatSteel);
+    AddCylinder(base, top, kShaftRBase, kShaftRTop, 12, kSteelGalv, kMatSteel);
   AddCylinder({base.x, kGroundY - 0.02f, base.z}, {base.x, 0.10f, base.z},
               0.52f, 0.34f, 8, {0.30f, 0.24f, 0.18f}, kMatGround);
-  AddCylinder({base.x, 0.03f, base.z}, {base.x, 0.29f, base.z}, 0.235f, 0.205f,
-              8, kSteelArm, kMatSteel);
+  AddCylinder({base.x, 0.03f, base.z}, {base.x, 0.29f, base.z}, 0.268f, 0.238f,
+              10, kSteelArm, kMatSteel);
 
   float armY = p.height - 0.55f;
   Vec3 armC = PoleAxisAt(p, armY);
-  AddBox({armC.x, armY, armC.z}, {1.25f, 0.075f, 0.013f}, kSteelArm, kMatSteel);
-  AddBox({armC.x, armY + 0.072f, armC.z}, {1.25f, 0.013f, 0.058f}, kSteelArm,
+  // Slim channel steel: a tall slab read as a timber crossarm from the road.
+  AddBox({armC.x, armY, armC.z}, {1.25f, 0.052f, 0.011f}, kSteelArm, kMatSteel);
+  AddBox({armC.x, armY + 0.050f, armC.z}, {1.25f, 0.011f, 0.050f}, kSteelArm,
          kMatSteel);
-  AddBox({armC.x, armY - 0.072f, armC.z}, {1.25f, 0.013f, 0.058f}, kSteelArm,
+  AddBox({armC.x, armY - 0.050f, armC.z}, {1.25f, 0.011f, 0.050f}, kSteelArm,
          kMatSteel);
   float arm2Y = armY - 0.62f;
   Vec3 arm2C = PoleAxisAt(p, arm2Y);
-  AddBox({arm2C.x, arm2Y, arm2C.z}, {0.85f, 0.075f, 0.013f}, kSteelArm, kMatSteel);
-  AddBox({arm2C.x, arm2Y + 0.072f, arm2C.z}, {0.85f, 0.013f, 0.052f}, kSteelArm,
+  AddBox({arm2C.x, arm2Y, arm2C.z}, {0.85f, 0.052f, 0.011f}, kSteelArm, kMatSteel);
+  AddBox({arm2C.x, arm2Y + 0.050f, arm2C.z}, {0.85f, 0.011f, 0.046f}, kSteelArm,
          kMatSteel);
-  AddBox({arm2C.x, arm2Y - 0.072f, arm2C.z}, {0.85f, 0.013f, 0.052f}, kSteelArm,
+  AddBox({arm2C.x, arm2Y - 0.050f, arm2C.z}, {0.85f, 0.011f, 0.046f}, kSteelArm,
          kMatSteel);
   // diagonal knee braces, flat bar this time
   Vec3 brT = PoleAxisAt(p, armY - 0.05f);
@@ -707,6 +926,16 @@ static void AddPole(const PoleSpec &p, bool concrete = false) {
   AddCylinder({brT.x + 0.34f, brT.y, brT.z + 0.05f},
               {brB.x + 0.94f, brB.y, brB.z + 0.05f}, 0.028f, 0.028f, 6,
               kSteelArm, kMatSteel);
+  // closed arm ends and the U-bolt clamps that hold the channel steel on
+  for (float ex : {-1.25f, 1.25f})
+    AddBox({armC.x + ex, armY, armC.z}, {0.032f, 0.092f, 0.064f}, kSteelArm,
+           kMatSteel);
+  for (float ex : {-0.85f, 0.85f})
+    AddBox({armC.x + ex, armY, armC.z}, {0.030f, 0.098f, 0.070f}, kMetal,
+           kMatMetal);
+  for (float ex : {-0.85f, 0.85f})
+    AddBox({arm2C.x + ex, arm2Y, arm2C.z}, {0.028f, 0.098f, 0.062f}, kMetal,
+           kMatMetal);
   // bolted arm-to-shaft clamps: two bands and a nut each
   for (float by : {armY + 0.075f, arm2Y + 0.075f}) {
     Vec3 ba = PoleAxisAt(p, by);
@@ -718,6 +947,27 @@ static void AddPole(const PoleSpec &p, bool concrete = false) {
     AddInsulator({armC.x + off, armY + 0.087f, armC.z});
   for (float off : {-0.55f, 0.55f})
     AddInsulator({arm2C.x + off, arm2Y + 0.087f, arm2C.z});
+  // short top bracket above the primary arm, carrying the two spool insulators
+  // the service drops ride, plus the static wire that ties the corridor's
+  // pole tops together
+  {
+    Vec3 tb = PoleAxisAt(p, p.height + 0.02f);
+    AddBox({tb.x, p.height + 0.02f, tb.z}, {0.68f, 0.055f, 0.055f}, kSteelArm,
+           kMatSteel);
+    for (float off : {-0.55f, 0.55f}) {
+      AddBox({tb.x + off, p.height + 0.10f, tb.z}, {0.055f, 0.040f, 0.070f},
+             kMetal, kMatMetal);
+      AddCylinder({tb.x + off, p.height + 0.13f, tb.z},
+                  {tb.x + off, p.height + 0.24f, tb.z}, 0.058f, 0.050f, 8,
+                  kCeramic, kMatCeramic);
+    }
+    Vec3 stay = PoleAxisAt(p, p.height - 0.32f);
+    float sr = TrunkRadius(p, p.height - 0.32f);
+    for (float off : {-0.44f, 0.44f})
+      AddCylinder({tb.x + off, p.height - 0.01f, tb.z},
+                  {stay.x + off * 0.30f, stay.y, stay.z + sr * 0.4f}, 0.022f,
+                  0.022f, 4, kSteelArm, kMatSteel);
+  }
   AddCylinder(top, Vec3Add(top, Vec3{0, 0.18f, 0}), 0.05f, 0.058f, 8, kCeramic,
               kMatCeramic);
   AddCylinder(Vec3Add(top, Vec3{0, 0.18f, 0}), Vec3Add(top, Vec3{0, 0.24f, 0}),
@@ -757,10 +1007,12 @@ static void AddPole(const PoleSpec &p, bool concrete = false) {
     AddBox({pa.x + pr + 0.058f, 2.545f, pa.z}, {0.006f, 0.012f, 0.050f},
            {0.075f, 0.070f, 0.065f}, kMatMetal);
   }
-  if (concrete && ((((int)(p.z * 0.5f)) % 3) == 0))
+  if (concrete && ((((int)(p.z * 0.5f)) % 2) == 0))
     AddSlackCoil(p, 5.2f, -side, 6, 0.30f, 1.15f);
-  if (concrete && ((((int)(p.z * 0.7f)) % 4) == 1))
+  if (concrete && ((((int)(p.z * 0.7f)) % 3) == 1))
     AddSlackLoop(p, 6.5f, side, 0.85f);
+  if (concrete && ((((int)(p.z * 1.3f)) % 3) == 0))
+    AddFiberClosure(p, side);
   if ((((int)(p.z * 0.4f)) % 3) == 0) {
     AddGuyWire(p, side, 1.0f);
     if ((((int)(p.z * 0.8f)) % 5) == 0) AddGuyWire(p, side, -1.0f);
@@ -803,50 +1055,12 @@ static void AddPole(const PoleSpec &p, bool concrete = false) {
   }
 
   if (p.transformer) {
-    Vec3 tc{armC.x + 0.62f, armY - 1.42f, armC.z + 0.44f};
-    for (float bz : {-0.13f, 0.13f})
-      AddBox({tc.x + bz, armY - 0.44f, (tc.z + armC.z) * 0.5f},
-             {0.045f, 0.47f, 0.24f}, kSteelArm, kMatSteel);
-    AddCylinder(Vec3Add(tc, Vec3{-0.1f, -0.55f, 0}),
-                Vec3Add(tc, Vec3{0.1f, 0.55f, 0}), 0.34f, 0.34f, 10, kMetal,
-                kMatMetal);
-    for (int fi = 0; fi < 5; fi++) {
-      float fy = tc.y - 0.40f + 0.20f * fi;
-      AddBox({tc.x, fy, tc.z + 0.34f}, {0.30f, 0.028f, 0.085f}, kSteelArm,
-             kMatSteel);
-      AddBox({tc.x, fy, tc.z - 0.34f}, {0.30f, 0.028f, 0.085f}, kSteelArm,
-             kMatSteel);
-    }
-    AddBox({tc.x, tc.y + 0.30f, tc.z}, {0.40f, 0.16f, 0.16f}, kMetal, kMatMetal);
-    AddBox({tc.x, tc.y - 0.34f, tc.z}, {0.10f, 0.22f, 0.10f}, kMetal, kMatMetal);
-    AddBox({tc.x + 0.30f, tc.y - 0.10f, tc.z + 0.10f}, {0.10f, 0.16f, 0.13f},
-           kSteelArm, kMatSteel);
-    for (float bz : {-0.12f, 0.12f}) {
-      Vec3 bt{tc.x, tc.y + 0.46f, tc.z + bz};
-      AddCylinder(bt, Vec3Add(bt, Vec3{0, 0.16f, 0}), 0.045f, 0.038f, 6,
-                  kCeramic, kMatCeramic);
-      AddWire(Vec3Add(bt, Vec3{0, 0.17f, 0}),
-              ArmInsulatorTop(p, bz < 0.0f ? 0.0f : 1.05f), 0.05f, 0.011f, 6,
-              kCable, kMatCable);
-    }
-    for (float cx : {-0.42f, 0.42f}) {
-      AddCylinder({armC.x + cx, armY - 0.04f, armC.z},
-                  {armC.x + cx, armY - 0.04f, armC.z + 0.17f}, 0.020f, 0.020f,
-                  5, kSteelArm, kMatSteel);
-      Vec3 ct{armC.x + cx, armY - 0.05f, armC.z + 0.17f};
-      AddCylinder(ct, Vec3Add(ct, Vec3{0, -0.30f, 0}), 0.030f, 0.036f, 6,
-                  kCeramic, kMatCeramic);
-      AddCylinder(Vec3Add(ct, Vec3{0, -0.30f, 0}), Vec3Add(ct, Vec3{0, -0.36f, 0}),
-                  0.038f, 0.028f, 6, kMetal, kMatMetal);
-    }
-    for (float ax : {-0.78f, 0.78f}) {
-      AddCylinder({armC.x + ax, armY - 0.04f, armC.z},
-                  {armC.x + ax, armY - 0.04f, armC.z + 0.15f}, 0.018f, 0.018f,
-                  5, kSteelArm, kMatSteel);
-      Vec3 at{armC.x + ax, armY - 0.05f, armC.z + 0.15f};
-      AddCylinder(at, Vec3Add(at, Vec3{0, -0.22f, 0}), 0.032f, 0.038f, 6,
-                  kCeramic, kMatCeramic);
-    }
+    AddTransformerBank(p, armC, armY, side);
+    AddCutoutBank(p, armY, side);
+  }
+  if (concrete) {
+    AddRiserDuct(p, side);
+    AddPolePlates(p, side);
   }
 }
 static void AddQuad(const Vec3 &p0, const Vec3 &p1, const Vec3 &p2,
@@ -860,6 +1074,36 @@ static void AddQuad(const Vec3 &p0, const Vec3 &p1, const Vec3 &p2,
   gIdx.push_back(s); gIdx.push_back(s + 1); gIdx.push_back(s + 2);
   gIdx.push_back(s); gIdx.push_back(s + 2); gIdx.push_back(s + 3);
 }
+// A tuft of grass blades rather than a box: five to eight tapered quads
+// leaning out of the gutter. Real verge weeds read by silhouette, and a
+// boxed silhouette is the one thing that instantly says "primitive".
+static void AddWeedTuft(float x, float z, unsigned int seed) {
+  unsigned int s = seed;
+  auto rnd = [&]() {
+    s = s * 1664525u + 1013904223u;
+    return (float)((s >> 8) & 1023u) / 1023.0f;
+  };
+  int blades = 5 + (int)(rnd() * 4.0f);
+  for (int b = 0; b < blades; b++) {
+    float ang = rnd() * 6.2831853f;
+    float spread = 0.04f + 0.10f * rnd();
+    float bx = x + std::cos(ang) * spread;
+    float bz = z + std::sin(ang) * spread;
+    float hgt = 0.18f + 0.24f * rnd();
+    float w = 0.020f + 0.016f * rnd();
+    Vec3 side{-std::sin(ang), 0.0f, std::cos(ang)};
+    Vec3 tip{bx + std::cos(ang) * (0.05f + 0.16f * rnd()), hgt,
+             bz + std::sin(ang) * (0.05f + 0.16f * rnd())};
+    Vec3 p0{bx - side.x * w, 0.015f, bz - side.z * w};
+    Vec3 p1{bx + side.x * w, 0.015f, bz + side.z * w};
+    Vec3 p2{tip.x + side.x * w * 0.15f, tip.y, tip.z + side.z * w * 0.15f};
+    Vec3 p3{tip.x - side.x * w * 0.15f, tip.y, tip.z - side.z * w * 0.15f};
+    AddQuad(p0, p1, p2, p3,
+            {0.075f + 0.05f * rnd(), 0.105f + 0.055f * rnd(), 0.048f},
+            kMatLeaf);
+  }
+}
+
 static const Vec3 kWallTints[5] = {
     {0.235f, 0.208f, 0.178f}, {0.285f, 0.256f, 0.214f}, {0.185f, 0.170f, 0.158f},
     {0.330f, 0.300f, 0.246f}, {0.160f, 0.152f, 0.148f}};
@@ -893,6 +1137,27 @@ static void AddHouse(float x, float z, float w, float d, float h, float face) {
   AddQuad(eA, eB, eC, eD, Vec3Add(roof, Vec3{0, 0.10f, 0}), kMatRoof);
   AddCylinder({x0, yRidge + 0.02f, z}, {x1, yRidge + 0.02f, z}, 0.055f, 0.055f,
               5, Vec3Add(roof, Vec3{0.05f, 0.03f, 0.02f}), kMatRoof);
+  // Gutters along both eaves and a downpipe at the street corner: the thin
+  // painted line under every Japanese roofline, and the one thing that makes
+  // the overhang read as a real roof rather than a floating slab.
+  {
+    const Vec3 gutter{0.205f, 0.200f, 0.192f};
+    for (float gz2 : {zA + 0.055f, zB - 0.055f}) {
+      AddBox({x, yEave - 0.030f, gz2}, {w * 0.5f + ov - 0.02f, 0.048f, 0.048f},
+             gutter, kMatMetal);
+      for (float gx : {x0 + 0.10f, x1 - 0.10f})
+        AddCylinder({gx, yEave - 0.075f, gz2}, {gx, yEave - 0.005f, gz2},
+                    0.030f, 0.030f, 6, gutter, kMatMetal);
+    }
+    float dx = x0 + 0.09f;
+    AddCylinder({dx, 0.14f, zA + 0.055f}, {dx, yEave - 0.06f, zA + 0.055f},
+                0.043f, 0.043f, 8, gutter, kMatMetal);
+    AddCylinder({dx, yEave - 0.10f, zA + 0.055f},
+                {dx, yEave - 0.02f, zA + 0.16f}, 0.043f, 0.043f, 6, gutter,
+                kMatMetal);
+    for (float sy : {0.95f, 2.15f})
+      AddBox({dx, sy, zA + 0.055f}, {0.058f, 0.022f, 0.058f}, gutter, kMatMetal);
+  }
   if (pick % 3 != 1) {
     float tx = x - w * 0.22f, tz = z + d * 0.10f;
     const Vec3 tank{0.055f, 0.058f, 0.062f};
@@ -1054,7 +1319,7 @@ static void AddTreeline() {
   std::vector<PoleSpec> lineA;
   for (int i = 0; i < 15; i++)
     lineA.push_back({-3.4f, 2.0f + 12.4f * i, 8.6f + 0.35f * ((i * 5) % 3),
-                     i == 1 || i == 6 || i == 11, i == 3 || i == 9,
+                     (i % 4) != 3, i == 3 || i == 9,
                      0.10f * ((i * 7) % 3 - 1), 0.08f * ((i * 5) % 3 - 1)});
   for (const PoleSpec &p : lineA) AddPole(p, true);
   gLineA = lineA;
@@ -1071,12 +1336,17 @@ static void AddTreeline() {
     for (float off : {-0.55f, 0.55f})
       AddWire(Arm2InsulatorTop(p, off), Arm2InsulatorTop(q, off), sag * 0.74f,
               0.028f, 12, kCable, kMatCable);
+    for (float off : {-0.55f, 0.55f})
+      AddWire(TopBracketInsulatorTop(p, off), TopBracketInsulatorTop(q, off),
+              sag * 0.62f, 0.024f, 12, kCable, kMatCable);
   }
 
   for (int i = 0; i + 1 < (int)lineA.size(); i++) {
     const PoleSpec &p = lineA[i];
     const PoleSpec &q = lineA[i + 1];
-    for (int k = 0; k < 16; k++) {
+    // The comms bundle: twenty-six thin cables at their own spacings, plus a
+    // lower row that peels off toward the far side of the street.
+    for (int k = 0; k < 26; k++) {
       float fk = (float)k;
       float u0 = fk * 0.37f;  u0 -= std::floor(u0);
       float u1 = fk * 0.61f + 0.23f; u1 -= std::floor(u1);
@@ -1084,18 +1354,46 @@ static void AddTreeline() {
       float u3 = fk * 0.83f;  u3 -= std::floor(u3);
       Vec3 a = TelecomBracketTop(p, -0.66f + 1.32f * u0);
       Vec3 b = TelecomBracketTop(q, -0.66f + 1.32f * u1);
-      float r = 0.021f + 0.011f * u3;
+      float r = 0.019f + 0.011f * u3;
       float sag = 0.18f + 0.62f * u2;
-      AddWire(a, b, sag, r, 10, kCableOld, kMatCable);
+      AddWire(a, b, sag, r, 10, (k % 5 == 0) ? kCable : kCableOld, kMatCable);
+    }
+    for (int k = 0; k < 5; k++) {
+      float fk = (float)k;
+      float u0 = fk * 0.53f + 0.11f; u0 -= std::floor(u0);
+      float u1 = fk * 0.71f + 0.37f; u1 -= std::floor(u1);
+      float u2 = fk * 0.43f; u2 -= std::floor(u2);
+      Vec3 a = TelecomBracketTop(p, -0.50f + 1.00f * u0);
+      Vec3 b = TelecomBracketTop(q, -0.50f + 1.00f * u1);
+      a.y -= 0.26f; b.y -= 0.26f;
+      AddWire(a, b, 0.30f + 0.55f * u2, 0.013f + 0.008f * u2, 10, kCable,
+              kMatCable);
+    }
+    // Loose, sagging spans strung pole to pole at no particular height: the
+    // half-abandoned cables that make the skyline above these streets messy.
+    for (int k = 0; k < 7; k++) {
+      float fk = (float)k;
+      float u0 = fk * 0.41f + 0.07f; u0 -= std::floor(u0);
+      float u1 = fk * 0.67f + 0.19f; u1 -= std::floor(u1);
+      float u2 = fk * 0.23f + 0.51f; u2 -= std::floor(u2);
+      float u3 = fk * 0.89f + 0.31f; u3 -= std::floor(u3);
+      float ha = 5.55f + 1.95f * u0;
+      float hb = 5.55f + 1.95f * u1;
+      Vec3 a = PoleAxisAt(p, ha);
+      Vec3 b = PoleAxisAt(q, hb);
+      a.x += PoleRoadSide(p) * (-1.15f + 0.75f * u2);
+      b.x += PoleRoadSide(q) * (-1.15f + 0.75f * u3);
+      AddWire(a, b, 0.45f + 1.25f * u2, 0.008f + 0.008f * u3, 10, kCableOld,
+              kMatCable);
     }
   }
   AddPylon(48.0f, 140.0f, 26.0f);
   AddPylon(-60.0f, 172.0f, 31.0f);
   std::vector<PoleSpec> lineB;
   for (int i = 0; i < 6; i++)
-    lineB.push_back({8.6f, 6.0f + 15.5f * i, 7.6f, false, i == 1,
+    lineB.push_back({8.6f, 6.0f + 15.5f * i, 7.6f, i != 2 && i != 5, i == 1,
                      0.09f * ((i * 11) % 3 - 1), 0.07f * ((i * 3) % 3 - 1)});
-  for (const PoleSpec &p : lineB) AddPole(p);
+  for (const PoleSpec &p : lineB) AddPole(p, true);
   gLineB = lineB;
   for (int i = 0; i + 1 < (int)lineB.size(); i++) {
     const PoleSpec &p = lineB[i];
@@ -1108,12 +1406,23 @@ static void AddTreeline() {
     for (float off : {-0.55f, 0.55f})
       AddWire(Arm2InsulatorTop(p, off), Arm2InsulatorTop(q, off), 0.62f, 0.028f,
               12, kCableOld, kMatCable);
+    for (float off : {-0.55f, 0.55f})
+      AddWire(TopBracketInsulatorTop(p, off), TopBracketInsulatorTop(q, off),
+              0.56f, 0.022f, 12, kCableOld, kMatCable);
   }
   for (int i = 0; i < 4; i++) {
     const PoleSpec &p = lineB[i];
     const PoleSpec &q = lineA[i + 1];
     AddWire(ArmInsulatorTop(p, 1.05f), ArmInsulatorTop(q, -1.05f), 1.30f,
             0.028f, 16, kCable, kMatCable);
+  }
+  // a few more spans thrown across the street between the two lines
+  for (int i = 0; i < 5; i++) {
+    const PoleSpec &p = lineB[i];
+    const PoleSpec &q = lineA[(i * 3 + 2) % lineA.size()];
+    for (float off : {-0.40f, 0.40f})
+      AddWire(Arm2InsulatorTop(p, off), Arm2InsulatorTop(q, off), 1.60f,
+              0.017f, 16, kCableOld, kMatCable);
   }
   for (int i = 0; i < 8; i++) {
     float z = -4.0f + 19.0f * i + 3.0f * ((i * 7) % 3);
@@ -1146,6 +1455,16 @@ static void AddTreeline() {
     const PoleSpec &q = lineB[i + 1];
     AddTelecomBundle(TelecomBracketTop(p, 0.0f), TelecomBracketTop(q, 0.0f),
                      i * 3 + 40, 0.024f, 10, kCableOld);
+    // the far line carries its own fat comms bundle
+    for (int k = 0; k < 12; k++) {
+      float fk = (float)k;
+      float u0 = fk * 0.37f + 0.13f; u0 -= std::floor(u0);
+      float u1 = fk * 0.61f + 0.29f; u1 -= std::floor(u1);
+      float u2 = fk * 0.31f; u2 -= std::floor(u2);
+      AddWire(TelecomBracketTop(p, -0.66f + 1.32f * u0),
+              TelecomBracketTop(q, -0.66f + 1.32f * u1),
+              0.26f + 0.60f * u2, 0.018f + 0.008f * u2, 10, kCableOld, kMatCable);
+    }
   }
   for (int i = 0; i < 5; i++) {
     const PoleSpec &p = lineB[i];
@@ -1186,6 +1505,29 @@ static void AddTreeline() {
               kMatCable);
     }
   }
+  // Service drops from every pole that has a house within reach: one lead
+  // and its clevis, so the poles are tied into the roofs the way they are on
+  // a real street rather than only at the two hand-picked poles above.
+  for (const std::vector<PoleSpec> *line : {&lineA, &lineB}) {
+    for (const PoleSpec &p : *line) {
+      int best = -1;
+      float bestD = 1e9f;
+      for (size_t k = 0; k < gDropAnchors.size(); k++) {
+        const Vec3 &q = gDropAnchors[k];
+        float d = std::sqrt((q.x - p.x) * (q.x - p.x) +
+                            (q.z - p.z) * (q.z - p.z));
+        if (d > 4.0f && d < bestD) { bestD = d; best = (int)k; }
+      }
+      if (best < 0 || bestD > 20.0f) continue;
+      Vec3 from = PoleAxisAt(p, 5.35f);
+      from.x += PoleRoadSide(p) * 0.12f;
+      AddCylinder({from.x, from.y - 0.07f, from.z},
+                  {from.x, from.y + 0.07f, from.z}, 0.026f, 0.026f, 6, kMetal,
+                  kMatMetal);
+      AddWire(from, gDropAnchors[best], 0.52f, 0.017f, 14, kCableOld,
+              kMatCable);
+    }
+  }
   {
     Vec3 n{0, 1, 0};
     const float z0 = -200.0f, z1 = 520.0f;
@@ -1216,6 +1558,49 @@ static void AddTreeline() {
       AddBox({xc, kKerbTopY * 0.5f, (z0 + z1) * 0.5f}, {0.16f, kKerbTopY * 0.5f,
              (z1 - z0) * 0.5f},
              {0.245f, 0.238f, 0.225f}, kMatKerb);
+    }
+    // Cast-iron manhole covers down the crown of the road, set flush with the
+    // asphalt, each with a darker recessed centre so the rim catches the sun.
+    for (int i = 0; i < 11; i++) {
+      float mz = 14.0f + 34.0f * (float)i + 2.4f * (float)((i * 7) % 3);
+      float mx = kRoadX + 1.35f * (float)((i * 5) % 3 - 1) * 0.5f;
+      AddCylinder({mx, kRoadY + 0.001f, mz}, {mx, kRoadY + 0.004f, mz}, 0.345f,
+                  0.345f, 18, {0.105f, 0.100f, 0.096f}, kMatMetal);
+      AddCylinder({mx, kRoadY + 0.004f, mz}, {mx, kRoadY + 0.006f, mz}, 0.300f,
+                  0.300f, 18, {0.080f, 0.076f, 0.073f}, kMatMetal);
+      for (int b = 0; b < 6; b++) {
+        float ba = (float)b * 0.5236f;
+        AddBox({mx + std::cos(ba) * 0.18f, kRoadY + 0.008f,
+                mz + std::sin(ba) * 0.18f},
+               {0.075f, 0.004f, 0.012f}, {0.115f, 0.110f, 0.104f}, kMatMetal);
+      }
+    }
+    // Storm drains at the gutter, with a couple of bars proud of the frame.
+    for (int i = 0; i < 14; i++) {
+      float dz = 3.0f + 27.0f * (float)i + 1.7f * (float)((i * 5) % 3);
+      for (int e = 0; e < 2; e++) {
+        float dx = e ? kRoadX + kRoadHalf - 0.34f : kRoadX - kRoadHalf + 0.34f;
+        AddBox({dx, kRoadY + 0.012f, dz}, {0.22f, 0.014f, 0.40f},
+               {0.120f, 0.116f, 0.110f}, kMatMetal);
+        for (int b = -2; b <= 2; b++)
+          AddBox({dx, kRoadY + 0.024f, dz + 0.15f * (float)b},
+                 {0.20f, 0.008f, 0.024f}, {0.075f, 0.072f, 0.068f}, kMatMetal);
+      }
+    }
+    // Weeds pushing up through the gutter line: the verge is never mown in
+    // these corridors, and a hard clean kerb reads as a render.
+    {
+      unsigned int seed = 2166136261u;
+      for (float wz = -12.0f; wz < 396.0f; wz += 3.2f) {
+        for (int e = 0; e < 2; e++) {
+          seed = seed * 1664525u + 1013904223u;
+          float r1 = (float)((seed >> 8) & 1023u) / 1023.0f;
+          float wx = (e ? kRoadX + kRoadHalf : kRoadX - kRoadHalf)
+                     + (e ? 1.0f : -1.0f) * (0.50f + 0.55f * r1);
+          if (r1 < 0.30f) continue;
+          AddWeedTuft(wx, wz + 0.6f * (r1 - 0.5f), seed);
+        }
+      }
     }
     for (float z = -60.0f; z < 400.0f; z += 8.0f) {
       unsigned int ds = (unsigned int)gVerts.size();
@@ -2099,7 +2484,7 @@ static void Setup() {
   gPostSettings.bloom = 0.034f;
   gPostSettings.threshold = 1.28f;
   gPostSettings.knee = 0.60f;
-  gPostSettings.aberration = 0.0090f;
+  gPostSettings.aberration = 0.0035f;
   gPostSettings.vignette = 0.20f;
   gPostSettings.grain = 0.020f;
   gPostSettings.flare = 1.0f;
@@ -2143,6 +2528,16 @@ int RunPoleScene(bool *gaveUpOut) {
                                SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE
                                | BenchCreateFullscreenFlag());
     if (!gWindow) {
+      // Some drivers expose no 4x-multisample visual at all, and then the
+      // window never comes up rather than the context failing: retry once
+      // without MSAA before giving up on the scene.
+      if (attempt == 0) {
+        std::printf("No multisampled visual (%s) - retrying without MSAA\n",
+                    SDL_GetError());
+        std::fflush(stdout);
+        msaa = false;
+        continue;
+      }
       std::fprintf(stderr, "Window could not be created! SDL_Error: %s\n", SDL_GetError());
       return EXIT_FAILURE;
     }
