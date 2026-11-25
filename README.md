@@ -46,6 +46,10 @@ The lain scene:
 
 ![ElectroBench scene 3](docs/screenshots/lain_lines.png)
 
+Further down the run, past the kerbside weeds, gutters and storm drains:
+
+![ElectroBench scene 3, further down the corridor](docs/screenshots/lain_lines_t24.png)
+
 **In motion - but very slow**: the auto-dolly walking the corridor (four positions down the run): the cable web sweeping overhead pole after pole, slack coils swinging past, guy wires pulling into their anchor blocks, and the telecom bundles peeling off toward the eaves:
 
 ![Scene 3 in motion](docs/screenshots/lain_lines.gif)
