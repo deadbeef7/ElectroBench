@@ -369,7 +369,8 @@ static Vec3 WirePoint(const Vec3 &a, const Vec3 &b, float sag, float t) {
 static std::vector<Vec3> gDropAnchors;
 static void AddTelecomBundle(const Vec3 &a, const Vec3 &b, int seed,
                              float radius, int samples, const Vec3 &color) {
-  float sag = 0.55f + 0.10f * ((seed * 7) % 3);
+  // Bundles run level pole to pole, like the conductors above them.
+  const float sag = 0.0f;
   AddWire(a, b, sag, radius, samples, color, kMatCable);
   int drops = 2 + (seed % 2);                    
   for (int i = 0; i < drops; i++) {
@@ -477,30 +478,43 @@ static float TrunkRadius(const PoleSpec &p, float h) {
   float f = h / p.height;
   return kShaftRBase + (kShaftRTop - kShaftRBase) * f;
 }
-static Vec3 TelecomBracketTop(const PoleSpec &p, float off) {
+static std::vector<PoleSpec> gLineA, gLineB;
+// Each pole's hardware reaches out to one side only, over the road. Every
+// function below takes a reach measured from the shaft toward that side, so
+// the arm geometry and the wire attachment cannot drift apart.
+static float PoleRoadSide(const PoleSpec &p) { return p.x < kRoadX ? 1.0f : -1.0f; }
+// How far each bracket reaches from the shaft, and where the pins sit along it.
+// The spans below read the same numbers, so hardware and conductor stay put
+// together.
+static const float kArmReach = 1.25f;
+static const float kArmPins[3] = {0.45f, 0.82f, 1.14f};
+static const float kArm2Reach = 0.95f;
+static const float kArm2Pins[2] = {0.32f, 0.78f};
+static const float kTopBracketReach = 0.68f;
+static const float kTopSpools[2] = {0.26f, 0.60f};
+static const float kTelecomReach = 0.95f;
+static const float kTelecomPins[3] = {0.14f, 0.48f, 0.82f};
+static Vec3 TelecomBracketTop(const PoleSpec &p, float reach) {
   float telY = p.height - 0.55f - 1.30f;
   Vec3 a = PoleAxisAt(p, telY);
-  return {a.x + off, telY + 0.15f, a.z};
+  return {a.x + PoleRoadSide(p) * reach, telY + 0.15f, a.z};
 }
-static Vec3 ArmInsulatorTop(const PoleSpec &p, float off) {
+static Vec3 ArmInsulatorTop(const PoleSpec &p, float reach) {
   Vec3 a = PoleAxisAt(p, p.height - 0.25f);
-  return {a.x + off, p.height - 0.25f, a.z};
+  return {a.x + PoleRoadSide(p) * reach, p.height - 0.25f, a.z};
 }
 static Vec3 PoleTopInsulatorTop(const PoleSpec &p) {
   Vec3 a = PoleAxisAt(p, p.height + 0.24f);
   return {a.x, p.height + 0.24f, a.z};
 }
-static Vec3 TopBracketInsulatorTop(const PoleSpec &p, float off) {
+static Vec3 TopBracketInsulatorTop(const PoleSpec &p, float reach) {
   Vec3 a = PoleAxisAt(p, p.height + 0.24f);
-  return {a.x + off, p.height + 0.24f, a.z};
+  return {a.x + PoleRoadSide(p) * reach, p.height + 0.24f, a.z};
 }
-static Vec3 Arm2InsulatorTop(const PoleSpec &p, float off) {
+static Vec3 Arm2InsulatorTop(const PoleSpec &p, float reach) {
   Vec3 a = PoleAxisAt(p, p.height - 0.87f);
-  return {a.x + off, p.height - 0.87f, a.z};
+  return {a.x + PoleRoadSide(p) * reach, p.height - 0.87f, a.z};
 }
-
-static std::vector<PoleSpec> gLineA, gLineB;  
-static float PoleRoadSide(const PoleSpec &p) { return p.x < kRoadX ? 1.0f : -1.0f; }
 
 
 // geometry and the wire attachment cannot drift apart again.
@@ -809,9 +823,9 @@ static void AddCutoutBank(const PoleSpec &p, float armY, float side) {
                 0.048f, 8, kCeramic, kMatCeramic);
     AddCylinder({ct.x, ct.y - 0.40f, ct.z}, {ct.x, ct.y - 0.36f, ct.z}, 0.026f,
                 0.026f, 6, kMetal, kMatMetal);
-    float off = dz < -0.1f ? -0.55f : (dz > 0.1f ? 0.55f : 0.0f);
-    AddWire({ct.x, ct.y + 0.12f, ct.z}, ArmInsulatorTop(p, off), 0.02f, 0.008f,
-            5, kCable, kMatCable);
+    float reach = kArmPins[dz < -0.1f ? 0 : (dz > 0.1f ? 2 : 1)];
+    AddWire({ct.x, ct.y + 0.12f, ct.z}, ArmInsulatorTop(p, reach), 0.02f,
+            0.008f, 5, kCable, kMatCable);
   }
 }
 
@@ -865,8 +879,8 @@ static void AddTransformerBank(const PoleSpec &p, const Vec3 &armC, float armY,
       AddCylinder({bt.x, bt.y + 0.10f, bt.z}, {bt.x, bt.y + 0.16f, bt.z},
                   0.030f, 0.024f, 6, kMetal, kMatMetal);
       AddWire({bt.x, bt.y + 0.17f, bt.z},
-              ArmInsulatorTop(p, bz < 0.0f ? -0.55f : 0.55f), 0.04f, 0.009f, 6,
-              kCable, kMatCable);
+              ArmInsulatorTop(p, bz < 0.0f ? kArmPins[1] : kArmPins[2]), 0.04f,
+              0.009f, 6, kCable, kMatCable);
     }
     // LV bushings and the service leads on the street side
     for (float bz : {-0.11f, 0.11f}) {
@@ -905,37 +919,37 @@ static void AddPole(const PoleSpec &p, bool concrete = false) {
   float armY = p.height - 0.55f;
   Vec3 armC = PoleAxisAt(p, armY);
   // Slim channel steel: a tall slab read as a timber crossarm from the road.
-  AddBox({armC.x, armY, armC.z}, {1.25f, 0.052f, 0.011f}, kSteelArm, kMatSteel);
-  AddBox({armC.x, armY + 0.050f, armC.z}, {1.25f, 0.011f, 0.050f}, kSteelArm,
-         kMatSteel);
-  AddBox({armC.x, armY - 0.050f, armC.z}, {1.25f, 0.011f, 0.050f}, kSteelArm,
-         kMatSteel);
+  // The arm is bolted on one side of the shaft only, so the pole reads as a
+  // bracket rather than a symmetrical T.
+  const float armMid = side * kArmReach * 0.5f;
+  AddBox({armC.x + armMid, armY, armC.z}, {kArmReach * 0.5f, 0.052f, 0.011f},
+         kSteelArm, kMatSteel);
+  AddBox({armC.x + armMid, armY + 0.050f, armC.z},
+         {kArmReach * 0.5f, 0.011f, 0.050f}, kSteelArm, kMatSteel);
+  AddBox({armC.x + armMid, armY - 0.050f, armC.z},
+         {kArmReach * 0.5f, 0.011f, 0.050f}, kSteelArm, kMatSteel);
   float arm2Y = armY - 0.62f;
   Vec3 arm2C = PoleAxisAt(p, arm2Y);
-  AddBox({arm2C.x, arm2Y, arm2C.z}, {0.85f, 0.052f, 0.011f}, kSteelArm, kMatSteel);
-  AddBox({arm2C.x, arm2Y + 0.050f, arm2C.z}, {0.85f, 0.011f, 0.046f}, kSteelArm,
-         kMatSteel);
-  AddBox({arm2C.x, arm2Y - 0.050f, arm2C.z}, {0.85f, 0.011f, 0.046f}, kSteelArm,
-         kMatSteel);
-  // diagonal knee braces, flat bar this time
+  const float arm2Mid = side * kArm2Reach * 0.5f;
+  AddBox({arm2C.x + arm2Mid, arm2Y, arm2C.z},
+         {kArm2Reach * 0.5f, 0.052f, 0.011f}, kSteelArm, kMatSteel);
+  AddBox({arm2C.x + arm2Mid, arm2Y + 0.050f, arm2C.z},
+         {kArm2Reach * 0.5f, 0.011f, 0.046f}, kSteelArm, kMatSteel);
+  AddBox({arm2C.x + arm2Mid, arm2Y - 0.050f, arm2C.z},
+         {kArm2Reach * 0.5f, 0.011f, 0.046f}, kSteelArm, kMatSteel);
+  // a diagonal knee brace under the arm, flat bar this time
   Vec3 brT = PoleAxisAt(p, armY - 0.05f);
   Vec3 brB = PoleAxisAt(p, armY - 0.57f);
-  AddCylinder({brT.x - 0.34f, brT.y, brT.z + 0.05f},
-              {brB.x - 0.94f, brB.y, brB.z + 0.05f}, 0.028f, 0.028f, 6,
+  AddCylinder({brT.x + side * 0.30f, brT.y, brT.z + 0.05f},
+              {brB.x + side * 0.92f, brB.y, brB.z + 0.05f}, 0.028f, 0.028f, 6,
               kSteelArm, kMatSteel);
-  AddCylinder({brT.x + 0.34f, brT.y, brT.z + 0.05f},
-              {brB.x + 0.94f, brB.y, brB.z + 0.05f}, 0.028f, 0.028f, 6,
-              kSteelArm, kMatSteel);
-  // closed arm ends and the U-bolt clamps that hold the channel steel on
-  for (float ex : {-1.25f, 1.25f})
-    AddBox({armC.x + ex, armY, armC.z}, {0.032f, 0.092f, 0.064f}, kSteelArm,
-           kMatSteel);
-  for (float ex : {-0.85f, 0.85f})
-    AddBox({armC.x + ex, armY, armC.z}, {0.030f, 0.098f, 0.070f}, kMetal,
-           kMatMetal);
-  for (float ex : {-0.85f, 0.85f})
-    AddBox({arm2C.x + ex, arm2Y, arm2C.z}, {0.028f, 0.098f, 0.062f}, kMetal,
-           kMatMetal);
+  // closed arm end and the U-bolt clamps that hold the channel steel on
+  AddBox({armC.x + side * kArmReach, armY, armC.z}, {0.032f, 0.092f, 0.064f},
+         kSteelArm, kMatSteel);
+  AddBox({armC.x + side * 0.16f, armY, armC.z}, {0.030f, 0.098f, 0.070f},
+         kMetal, kMatMetal);
+  AddBox({arm2C.x + side * 0.16f, arm2Y, arm2C.z}, {0.028f, 0.098f, 0.062f},
+         kMetal, kMatMetal);
   // bolted arm-to-shaft clamps: two bands and a nut each
   for (float by : {armY + 0.075f, arm2Y + 0.075f}) {
     Vec3 ba = PoleAxisAt(p, by);
@@ -943,30 +957,30 @@ static void AddPole(const PoleSpec &p, bool concrete = false) {
     AddCylinder({ba.x, by - 0.030f, ba.z}, {ba.x, by + 0.030f, ba.z},
                 br2 + 0.035f, br2 + 0.035f, 8, kSteelArm, kMatSteel);
   }
-  for (float off : {-1.05f, 0.0f, 1.05f})
-    AddInsulator({armC.x + off, armY + 0.087f, armC.z});
-  for (float off : {-0.55f, 0.55f})
-    AddInsulator({arm2C.x + off, arm2Y + 0.087f, arm2C.z});
+  for (float reach : kArmPins)
+    AddInsulator({armC.x + side * reach, armY + 0.087f, armC.z});
+  for (float reach : kArm2Pins)
+    AddInsulator({arm2C.x + side * reach, arm2Y + 0.087f, arm2C.z});
   // short top bracket above the primary arm, carrying the two spool insulators
   // the service drops ride, plus the static wire that ties the corridor's
   // pole tops together
   {
     Vec3 tb = PoleAxisAt(p, p.height + 0.02f);
-    AddBox({tb.x, p.height + 0.02f, tb.z}, {0.68f, 0.055f, 0.055f}, kSteelArm,
-           kMatSteel);
-    for (float off : {-0.55f, 0.55f}) {
-      AddBox({tb.x + off, p.height + 0.10f, tb.z}, {0.055f, 0.040f, 0.070f},
-             kMetal, kMatMetal);
-      AddCylinder({tb.x + off, p.height + 0.13f, tb.z},
-                  {tb.x + off, p.height + 0.24f, tb.z}, 0.058f, 0.050f, 8,
-                  kCeramic, kMatCeramic);
+    AddBox({tb.x + side * kTopBracketReach * 0.5f, p.height + 0.02f, tb.z},
+           {kTopBracketReach * 0.5f, 0.055f, 0.055f}, kSteelArm, kMatSteel);
+    for (float reach : kTopSpools) {
+      AddBox({tb.x + side * reach, p.height + 0.10f, tb.z},
+             {0.055f, 0.040f, 0.070f}, kMetal, kMatMetal);
+      AddCylinder({tb.x + side * reach, p.height + 0.13f, tb.z},
+                  {tb.x + side * reach, p.height + 0.24f, tb.z}, 0.058f, 0.050f,
+                  8, kCeramic, kMatCeramic);
     }
     Vec3 stay = PoleAxisAt(p, p.height - 0.32f);
     float sr = TrunkRadius(p, p.height - 0.32f);
-    for (float off : {-0.44f, 0.44f})
-      AddCylinder({tb.x + off, p.height - 0.01f, tb.z},
-                  {stay.x + off * 0.30f, stay.y, stay.z + sr * 0.4f}, 0.022f,
-                  0.022f, 4, kSteelArm, kMatSteel);
+    for (float reach : kTopSpools)
+      AddCylinder({tb.x + side * reach, p.height - 0.01f, tb.z},
+                  {stay.x + side * reach * 0.30f, stay.y, stay.z + sr * 0.4f},
+                  0.022f, 0.022f, 4, kSteelArm, kMatSteel);
   }
   AddCylinder(top, Vec3Add(top, Vec3{0, 0.18f, 0}), 0.05f, 0.058f, 8, kCeramic,
               kMatCeramic);
@@ -1032,13 +1046,14 @@ static void AddPole(const PoleSpec &p, bool concrete = false) {
   }
   float telY = armY - 1.30f;
   Vec3 telC = PoleAxisAt(p, telY);
-  AddBox({telC.x, telY, telC.z}, {0.95f, 0.05f, 0.014f}, kSteelArm, kMatSteel);
-  AddBox({telC.x, telY + 0.045f, telC.z}, {0.95f, 0.012f, 0.048f}, kSteelArm,
-         kMatSteel);
-  for (float off : {-0.70f, 0.0f, 0.70f}) {
-    AddCylinder({telC.x + off, telY + 0.05f, telC.z},
-                {telC.x + off, telY + 0.15f, telC.z}, 0.038f, 0.032f, 6, kMetal,
-                kMatMetal);
+  AddBox({telC.x + side * kTelecomReach * 0.5f, telY, telC.z},
+         {kTelecomReach * 0.5f, 0.05f, 0.014f}, kSteelArm, kMatSteel);
+  AddBox({telC.x + side * kTelecomReach * 0.5f, telY + 0.045f, telC.z},
+         {kTelecomReach * 0.5f, 0.012f, 0.048f}, kSteelArm, kMatSteel);
+  for (float reach : kTelecomPins) {
+    AddCylinder({telC.x + side * reach, telY + 0.05f, telC.z},
+                {telC.x + side * reach, telY + 0.15f, telC.z}, 0.038f, 0.032f,
+                6, kMetal, kMatMetal);
   }
   if (((int(p.z * 7.0f)) % 3) == 0) {
     Vec3 ca = PoleAxisAt(p, 3.9f);
@@ -1318,7 +1333,7 @@ static void AddTreeline() {
 
   std::vector<PoleSpec> lineA;
   for (int i = 0; i < 15; i++)
-    lineA.push_back({-3.4f, 2.0f + 12.4f * i, 8.6f + 0.35f * ((i * 5) % 3),
+    lineA.push_back({-3.4f, 2.0f + 12.4f * i, 9.0f,
                      (i % 4) != 3, i == 3 || i == 9,
                      0.10f * ((i * 7) % 3 - 1), 0.08f * ((i * 5) % 3 - 1)});
   for (const PoleSpec &p : lineA) AddPole(p, true);
@@ -1327,18 +1342,19 @@ static void AddTreeline() {
   for (int i = 0; i + 1 < (int)lineA.size(); i++) {
     const PoleSpec &p = lineA[i];
     const PoleSpec &q = lineA[i + 1];
-    float sag = 0.78f + 0.12f * ((i * 3) % 3);
-    for (float off : {-1.05f, 0.0f, 1.05f})
-      AddWire(ArmInsulatorTop(p, off), ArmInsulatorTop(q, off), sag, 0.032f,
-              14, kCable, kMatCable);
-    AddWire(PoleTopInsulatorTop(p), PoleTopInsulatorTop(q), sag * 0.8f, 0.037f,
-            14, kCableOld, kMatCable);
-    for (float off : {-0.55f, 0.55f})
-      AddWire(Arm2InsulatorTop(p, off), Arm2InsulatorTop(q, off), sag * 0.74f,
+    // Conductors run level from pole to pole: same attachment height at both
+    // ends, no catenary dip between them.
+    for (float reach : kArmPins)
+      AddWire(ArmInsulatorTop(p, reach), ArmInsulatorTop(q, reach), 0.0f,
+              0.032f, 14, kCable, kMatCable);
+    AddWire(PoleTopInsulatorTop(p), PoleTopInsulatorTop(q), 0.0f, 0.037f, 14,
+            kCableOld, kMatCable);
+    for (float reach : kArm2Pins)
+      AddWire(Arm2InsulatorTop(p, reach), Arm2InsulatorTop(q, reach), 0.0f,
               0.028f, 12, kCable, kMatCable);
-    for (float off : {-0.55f, 0.55f})
-      AddWire(TopBracketInsulatorTop(p, off), TopBracketInsulatorTop(q, off),
-              sag * 0.62f, 0.024f, 12, kCable, kMatCable);
+    for (float reach : kTopSpools)
+      AddWire(TopBracketInsulatorTop(p, reach), TopBracketInsulatorTop(q, reach),
+              0.0f, 0.024f, 12, kCable, kMatCable);
   }
 
   for (int i = 0; i + 1 < (int)lineA.size(); i++) {
@@ -1350,78 +1366,73 @@ static void AddTreeline() {
       float fk = (float)k;
       float u0 = fk * 0.37f;  u0 -= std::floor(u0);
       float u1 = fk * 0.61f + 0.23f; u1 -= std::floor(u1);
-      float u2 = fk * 0.29f;  u2 -= std::floor(u2);
       float u3 = fk * 0.83f;  u3 -= std::floor(u3);
-      Vec3 a = TelecomBracketTop(p, -0.66f + 1.32f * u0);
-      Vec3 b = TelecomBracketTop(q, -0.66f + 1.32f * u1);
+      Vec3 a = TelecomBracketTop(p, 0.10f + 0.78f * u0);
+      Vec3 b = TelecomBracketTop(q, 0.10f + 0.78f * u1);
       float r = 0.019f + 0.011f * u3;
-      float sag = 0.18f + 0.62f * u2;
-      AddWire(a, b, sag, r, 10, (k % 5 == 0) ? kCable : kCableOld, kMatCable);
+      AddWire(a, b, 0.0f, r, 10, (k % 5 == 0) ? kCable : kCableOld, kMatCable);
     }
     for (int k = 0; k < 5; k++) {
       float fk = (float)k;
       float u0 = fk * 0.53f + 0.11f; u0 -= std::floor(u0);
       float u1 = fk * 0.71f + 0.37f; u1 -= std::floor(u1);
       float u2 = fk * 0.43f; u2 -= std::floor(u2);
-      Vec3 a = TelecomBracketTop(p, -0.50f + 1.00f * u0);
-      Vec3 b = TelecomBracketTop(q, -0.50f + 1.00f * u1);
+      Vec3 a = TelecomBracketTop(p, 0.18f + 0.66f * u0);
+      Vec3 b = TelecomBracketTop(q, 0.18f + 0.66f * u1);
       a.y -= 0.26f; b.y -= 0.26f;
-      AddWire(a, b, 0.30f + 0.55f * u2, 0.013f + 0.008f * u2, 10, kCable,
-              kMatCable);
+      AddWire(a, b, 0.0f, 0.013f + 0.008f * u2, 10, kCable, kMatCable);
     }
-    // Loose, sagging spans strung pole to pole at no particular height: the
+    // Loose spans strung pole to pole at no particular height: the
     // half-abandoned cables that make the skyline above these streets messy.
+    // Each one stays level along its own run.
     for (int k = 0; k < 7; k++) {
       float fk = (float)k;
       float u0 = fk * 0.41f + 0.07f; u0 -= std::floor(u0);
-      float u1 = fk * 0.67f + 0.19f; u1 -= std::floor(u1);
       float u2 = fk * 0.23f + 0.51f; u2 -= std::floor(u2);
       float u3 = fk * 0.89f + 0.31f; u3 -= std::floor(u3);
-      float ha = 5.55f + 1.95f * u0;
-      float hb = 5.55f + 1.95f * u1;
-      Vec3 a = PoleAxisAt(p, ha);
-      Vec3 b = PoleAxisAt(q, hb);
-      a.x += PoleRoadSide(p) * (-1.15f + 0.75f * u2);
-      b.x += PoleRoadSide(q) * (-1.15f + 0.75f * u3);
-      AddWire(a, b, 0.45f + 1.25f * u2, 0.008f + 0.008f * u3, 10, kCableOld,
-              kMatCable);
+      float h = 5.55f + 1.95f * u0;
+      Vec3 a = PoleAxisAt(p, h);
+      Vec3 b = PoleAxisAt(q, h);
+      a.x += PoleRoadSide(p) * (0.30f + 0.70f * u2);
+      b.x += PoleRoadSide(q) * (0.30f + 0.70f * u3);
+      AddWire(a, b, 0.0f, 0.008f + 0.008f * u3, 10, kCableOld, kMatCable);
     }
   }
   AddPylon(48.0f, 140.0f, 26.0f);
   AddPylon(-60.0f, 172.0f, 31.0f);
   std::vector<PoleSpec> lineB;
   for (int i = 0; i < 6; i++)
-    lineB.push_back({8.6f, 6.0f + 15.5f * i, 7.6f, i != 2 && i != 5, i == 1,
+    lineB.push_back({8.6f, 6.0f + 15.5f * i, 8.7f, i != 2 && i != 5, i == 1,
                      0.09f * ((i * 11) % 3 - 1), 0.07f * ((i * 3) % 3 - 1)});
   for (const PoleSpec &p : lineB) AddPole(p, true);
   gLineB = lineB;
   for (int i = 0; i + 1 < (int)lineB.size(); i++) {
     const PoleSpec &p = lineB[i];
     const PoleSpec &q = lineB[i + 1];
-    for (float off : {-1.05f, 1.05f})
-      AddWire(ArmInsulatorTop(p, off), ArmInsulatorTop(q, off), 0.88f, 0.030f,
-              12, kCableOld, kMatCable);
-    AddWire(PoleTopInsulatorTop(p), PoleTopInsulatorTop(q), 0.70f, 0.035f, 12,
+    for (float reach : kArmPins)
+      AddWire(ArmInsulatorTop(p, reach), ArmInsulatorTop(q, reach), 0.0f,
+              0.030f, 12, kCableOld, kMatCable);
+    AddWire(PoleTopInsulatorTop(p), PoleTopInsulatorTop(q), 0.0f, 0.035f, 12,
             kCableOld, kMatCable);
-    for (float off : {-0.55f, 0.55f})
-      AddWire(Arm2InsulatorTop(p, off), Arm2InsulatorTop(q, off), 0.62f, 0.028f,
-              12, kCableOld, kMatCable);
-    for (float off : {-0.55f, 0.55f})
-      AddWire(TopBracketInsulatorTop(p, off), TopBracketInsulatorTop(q, off),
-              0.56f, 0.022f, 12, kCableOld, kMatCable);
+    for (float reach : kArm2Pins)
+      AddWire(Arm2InsulatorTop(p, reach), Arm2InsulatorTop(q, reach), 0.0f,
+              0.028f, 12, kCableOld, kMatCable);
+    for (float reach : kTopSpools)
+      AddWire(TopBracketInsulatorTop(p, reach), TopBracketInsulatorTop(q, reach),
+              0.0f, 0.022f, 12, kCableOld, kMatCable);
   }
   for (int i = 0; i < 4; i++) {
     const PoleSpec &p = lineB[i];
     const PoleSpec &q = lineA[i + 1];
-    AddWire(ArmInsulatorTop(p, 1.05f), ArmInsulatorTop(q, -1.05f), 1.30f,
-            0.028f, 16, kCable, kMatCable);
+    AddWire(ArmInsulatorTop(p, kArmPins[2]), ArmInsulatorTop(q, kArmPins[2]),
+            0.0f, 0.028f, 16, kCable, kMatCable);
   }
-  // a few more spans thrown across the street between the two lines
+  // a few more level spans thrown across the street between the two lines
   for (int i = 0; i < 5; i++) {
     const PoleSpec &p = lineB[i];
     const PoleSpec &q = lineA[(i * 3 + 2) % lineA.size()];
-    for (float off : {-0.40f, 0.40f})
-      AddWire(Arm2InsulatorTop(p, off), Arm2InsulatorTop(q, off), 1.60f,
+    for (float reach : kArm2Pins)
+      AddWire(Arm2InsulatorTop(p, reach), Arm2InsulatorTop(q, reach), 0.0f,
               0.017f, 16, kCableOld, kMatCable);
   }
   for (int i = 0; i < 8; i++) {
@@ -1442,18 +1453,18 @@ static void AddTreeline() {
   for (int i = 0; i + 1 < (int)lineA.size(); i++) {
     const PoleSpec &p = lineA[i];
     const PoleSpec &q = lineA[i + 1];
-    AddTelecomBundle(TelecomBracketTop(p, -0.70f), TelecomBracketTop(q, -0.70f),
+    AddTelecomBundle(TelecomBracketTop(p, 0.20f), TelecomBracketTop(q, 0.20f),
                      i * 2 + 1, 0.027f, 12, kCable);
-    AddTelecomBundle(TelecomBracketTop(p, 0.70f), TelecomBracketTop(q, 0.70f),
+    AddTelecomBundle(TelecomBracketTop(p, 0.85f), TelecomBracketTop(q, 0.85f),
                      i * 2 + 2, 0.027f, 12, kCable);
     if ((i % 2) == 0)
-      AddTelecomBundle(TelecomBracketTop(p, 0.0f), TelecomBracketTop(q, 0.0f),
+      AddTelecomBundle(TelecomBracketTop(p, 0.50f), TelecomBracketTop(q, 0.50f),
                        i * 2 + 13, 0.024f, 12, kCableOld);
   }
   for (int i = 0; i + 1 < (int)lineB.size(); i++) {
     const PoleSpec &p = lineB[i];
     const PoleSpec &q = lineB[i + 1];
-    AddTelecomBundle(TelecomBracketTop(p, 0.0f), TelecomBracketTop(q, 0.0f),
+    AddTelecomBundle(TelecomBracketTop(p, 0.45f), TelecomBracketTop(q, 0.45f),
                      i * 3 + 40, 0.024f, 10, kCableOld);
     // the far line carries its own fat comms bundle
     for (int k = 0; k < 12; k++) {
@@ -1461,15 +1472,15 @@ static void AddTreeline() {
       float u0 = fk * 0.37f + 0.13f; u0 -= std::floor(u0);
       float u1 = fk * 0.61f + 0.29f; u1 -= std::floor(u1);
       float u2 = fk * 0.31f; u2 -= std::floor(u2);
-      AddWire(TelecomBracketTop(p, -0.66f + 1.32f * u0),
-              TelecomBracketTop(q, -0.66f + 1.32f * u1),
-              0.26f + 0.60f * u2, 0.018f + 0.008f * u2, 10, kCableOld, kMatCable);
+      AddWire(TelecomBracketTop(p, 0.10f + 0.78f * u0),
+              TelecomBracketTop(q, 0.10f + 0.78f * u1), 0.0f,
+              0.018f + 0.008f * u2, 10, kCableOld, kMatCable);
     }
   }
   for (int i = 0; i < 5; i++) {
     const PoleSpec &p = lineB[i];
     const PoleSpec &q = lineA[i + 1];
-    AddTelecomBundle(TelecomBracketTop(p, -0.70f), TelecomBracketTop(q, -0.70f),
+    AddTelecomBundle(TelecomBracketTop(p, 0.20f), TelecomBracketTop(q, 0.20f),
                      i * 5 + 77, 0.022f, 14, kCable);
   }
   for (int side = 0; side < 2; side++) {
@@ -1484,8 +1495,8 @@ static void AddTreeline() {
     if (best >= 0) {
       const Vec3 &a = gDropAnchors[best];
       AddWire(PoleAxisAt(p, 5.4f), a, 0.55f, 0.024f, 12, kCableOld, kMatCable);
-      AddWire(ArmInsulatorTop(p, 1.05f), a, 0.48f, 0.024f, 12, kCableOld,
-              kMatCable);
+      AddWire(ArmInsulatorTop(p, kArmPins[2]), a, 0.48f, 0.024f, 12,
+              kCableOld, kMatCable);
     }
     Vec3 ja = PoleAxisAt(p, 3.05f);
     float jr = TrunkRadius(p, 3.05f);
