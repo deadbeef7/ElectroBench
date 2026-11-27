@@ -21,7 +21,7 @@ headless capture pipeline can still pin the framebuffer exactly.
 
 CPU : Any single core CPU @ 500 MHz or more.
 
-RAM : 128MB+
+RAM : 256MB+ (not rly tested)
 
 GPU : Any GPU with OpenGL 3.3 core support (2010 onwards).
 
