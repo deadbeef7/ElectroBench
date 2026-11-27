@@ -167,11 +167,11 @@ Surface makeSurface(float m, vec3 P, float foot) {
         float g3 = octaveRes(foot, 7.5);
         float n3 = g3 > 0.02 ? vnoise(P.xz * 7.5) : 0.5;
 
-        s.albedo *= 0.46 + 0.32 * n0 + 0.44 * n1 + 0.38 * n2
-                  + 0.22 * nMid * gMid + 0.22 * n3 * g3;
-        s.albedo = mix(s.albedo, vec3(0.150, 0.155, 0.082),
+        s.albedo *= 0.42 + 0.42 * n0 + 0.54 * n1 + 0.46 * n2
+                  + 0.24 * nMid * gMid + 0.24 * n3 * g3;
+        s.albedo = mix(s.albedo, vec3(0.115, 0.145, 0.090),
                        smoothstep(0.48, 0.95, n1) * 0.55);
-        s.albedo *= vec3(0.66, 0.60, 0.53);
+        s.albedo *= vec3(0.42, 0.43, 0.45);
 
         float nearRoad = exp(-pow((abs(P.x - uRoadX) - 3.6) / 1.5, 2.0));
         s.albedo = mix(s.albedo, s.albedo * 1.22 + vec3(0.020, 0.016, 0.010),
@@ -206,7 +206,7 @@ Surface makeSurface(float m, vec3 P, float foot) {
 
         // Damp patches and standing water. Water darkens the substrate and
         // drops the roughness; it is not a separate additive sheen.
-        float damp = smoothstep(0.52, 0.86, vnoise(P.xz * 0.30 + 11.0));
+        float damp = smoothstep(0.58, 0.90, vnoise(P.xz * 0.30 + 11.0));
         damp = clamp(damp * 0.62 + wpHalo * 0.44, 0.0, 1.0);
         damp = clamp(damp + 0.55 * exp(-pow((abs(rx) - 2.45) / 0.38, 2.0)), 0.0, 1.0);
         s.albedo *= mix(1.0, 0.46, damp);
@@ -239,8 +239,8 @@ Surface makeSurface(float m, vec3 P, float foot) {
         s.albedo *= 0.88 + 0.24 * vnoise(vec2((P.x + P.z) * 2.2, P.y * 0.9));
         s.albedo *= 0.62;
         s.albedo *= mix(0.55, 1.0, smoothstep(0.0, 0.55, P.y));
-        s.height = 0.0030 * (smoothstep(0.06, 0.34, seam) - 0.5)
-                 + 0.0016 * (vnoise(vec2((P.x + P.z) * 2.2, P.y * 0.9)) - 0.5);
+        s.height = 0.0014 * (smoothstep(0.06, 0.34, seam) - 0.5)
+                 + 0.0008 * (vnoise(vec2((P.x + P.z) * 2.2, P.y * 0.9)) - 0.5);
         s.rough = 0.90;
     } else if (m == kMatRoof) {
         float course = abs(fract(P.z * 0.85) - 0.5) * 2.0;
@@ -336,7 +336,7 @@ Surface makeSurface(float m, vec3 P, float foot) {
         s.rough = 0.84 - 0.06 * wash;
     } else if (m == kMatGlow) {
         s.albedo *= 0.9;
-        s.emission = vColor * 5.0;
+        s.emission = vColor * 3.2;
         s.rough = 0.35;
     }
     return s;
@@ -365,7 +365,7 @@ void main() {
     Surface s = makeSurface(m, P, foot);
     // Relief fades out once a pixel covers more than a few centimetres, so
     // distant surfaces stay smooth instead of boiling with shimmer.
-    float reliefLod = 1.0 - smoothstep(0.015, 0.22, foot);
+    float reliefLod = 1.0 - smoothstep(0.008, 0.10, foot);
     if (s.height != 0.0 && reliefLod > 0.0)
         N = bumpNormal(N, P, s.height * reliefLod);
     vec3 albedo = s.albedo;
@@ -380,8 +380,8 @@ void main() {
 
     // Sun irradiance: the same extinction the sky shader uses, evaluated for
     // the local surface normal's altitude. Warm at this sun elevation.
-    vec3 sunT = vec3(1.0, 0.58, 0.30);       // dusk transmittance, matches sky
-    vec3 sunIrr = sunT * 7.2;                // brighter direct pools
+    vec3 sunT = vec3(1.0, 0.76, 0.55);       // dusk transmittance, matches sky
+    vec3 sunIrr = sunT * 3.4;                // low sun, no clipping on walls
 
     // ---- GGX specular ----
     vec3 H = normalize(L + V);
@@ -406,9 +406,9 @@ void main() {
     vec3 skyAmb = textureLod(uSkyEnvTex, N, max(uEnvMaxLod - 2.0, 0.0)).rgb;
     vec3 groundAmb = textureLod(uSkyEnvTex,
                                 normalize(vec3(N.x, -0.35, N.z)),
-                                max(uEnvMaxLod - 2.0, 0.0)).rgb * vec3(0.30, 0.24, 0.18);
-    vec3 ambient = mix(groundAmb, skyAmb, 0.5 + 0.5 * N.y);
-    ambient = mix(ambient, ambient * vec3(1.22, 1.02, 0.78), 0.45);
+                                max(uEnvMaxLod - 2.0, 0.0)).rgb * vec3(0.20, 0.22, 0.24);
+    vec3 ambient = mix(groundAmb, skyAmb, 0.5 + 0.5 * N.y) * 0.95;
+    ambient = mix(ambient, ambient * vec3(0.88, 1.00, 1.20), 0.45);
     ambient *= mix(1.0, 0.55 + 0.45 * shadow, 0.55); // shadowed areas see less sky
 
     // ---- sky reflection (roughness-matched) ----
@@ -431,21 +431,34 @@ void main() {
     vec3 R = reflect(-V, Nr);
     R.y = abs(R.y);
     vec3 reflCol = textureLod(uSkyEnvTex, R, clamp(rough * uEnvMaxLod, 0.0, uEnvMaxLod)).rgb;
-    vec3 fresV = f0 + (1.0 - f0) * pow(1.0 - NoV, 5.0);
+    // The blurred cube averages the sun's aureole into the horizon band, which
+    // turned every grazing reflection into a white sheet. Clamping keeps the
+    // hue of the horizon without letting that averaged disc blow it out.
+    reflCol = min(reflCol, vec3(2.1));
+    // Roughness-aware Fresnel for the environment lobe. The plain Schlick term
+    // goes to 1 at grazing angles on every surface, so a rough asphalt or a
+    // plaster wall picked up a full mirror of the bright horizon and washed out
+    // to white in the distance. A rough surface scatters that grazing energy
+    // instead of reflecting it, which is what the (1 - rough) cap models.
+    // (1 - rough)^3, not (1 - rough): only a genuinely smooth surface keeps
+    // its grazing reflection. With the linear cap a rough plaster wall still
+    // mirrored a quarter of the bright horizon and read as a lit panel.
+    vec3 envF = f0 + max(vec3(pow(1.0 - rough, 3.0)) - f0, vec3(0.0))
+                        * pow(1.0 - NoV, 5.0);
     if (wet > 0.01)
-        fresV = mix(fresV, vec3(0.020 + 0.98 * pow(1.0 - NoV, 5.0)), wet);
-    vec3 specEnv = reflCol * fresV * mix(1.0, 0.62, wet);
+        envF = mix(envF, vec3(0.020 + 0.98 * pow(1.0 - NoV, 5.0)), wet);
+    vec3 specEnv = reflCol * envF * mix(1.0, 0.62, wet);
 
     vec3 col = diffuse + specSun + specEnv + s.emission;
     col += ambient * albedo * (1.0 - metal) * (0.55 + 0.45 * NoV);
 
     // Metal reflections also carry the sky, tinted by albedo.
     if (metal > 0.01) {
-        col += reflCol * albedo * (0.35 + 0.65 * fresV) * metal * 0.65;
+        col += reflCol * albedo * (0.35 + 0.65 * envF) * metal * 0.65;
     }
 
     // ---- ambient occlusion from contact with the ground ----
-    float groundAO = mix(0.72, 1.0, smoothstep(0.0, 1.4, P.y));
+    float groundAO = mix(0.60, 1.0, smoothstep(0.0, 1.4, P.y));
     if (m == kMatGround || m == kMatRoad || m == kMatKerb) groundAO = 1.0;
     col *= groundAO;
 
@@ -462,7 +475,7 @@ void main() {
 
     // Slight silhouette warmth from the low sun behind the corridor.
     float silh = clamp(1.0 - dot(albedo, vec3(0.333)) * 2.6, 0.0, 1.0);
-    col = mix(col, vec3(0.30, 0.16, 0.075), silh * 0.10);
+    col = mix(col, vec3(0.10, 0.13, 0.18), silh * 0.10);
 
     col = min(col, vec3(4.0));
     if (uHdrOut > 0.5) {

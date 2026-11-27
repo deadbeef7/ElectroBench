@@ -161,7 +161,10 @@ void main() {
 
     // Ambient: hangar sky from above, warm slab bounce from below, plus the
     // amber glow that the wall washers throw onto everything.
-    vec3 amb = mix(uGroundAmb, uSkyAmb, 0.5 + 0.5 * N.y) * ao;
+    // The shadowed side of a gun sees less of the room, matching the floor's
+    // umbra instead of glowing out of it.
+    vec3 amb = mix(uGroundAmb, uSkyAmb, 0.5 + 0.5 * N.y) * ao
+             * mix(0.45, 1.0, shadow);
     col += diff * amb * 1.2;
     // metals keep their body colour under the room's ambient instead of going
     // black between the direct highlights

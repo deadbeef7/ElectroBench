@@ -291,7 +291,7 @@ static const float kMatGlow = 13.0f;
 static const float kMatSteel = 14.0f;
 static const float kMatKerb = 15.0f;
 static const float kMatConcrete = 16.0f;
-static const Vec3 kConcreteGrey{0.300f, 0.299f, 0.289f};
+static const Vec3 kConcreteGrey{0.270f, 0.274f, 0.280f};
 
 static const Vec3 kWoodDark{0.165f, 0.115f, 0.085f};  
 static const Vec3 kWoodOld{0.230f, 0.180f, 0.140f};   
@@ -302,7 +302,7 @@ static const Vec3 kMetal{0.190f, 0.195f, 0.200f};
 static const Vec3 kSteelGalv{0.252f, 0.261f, 0.273f}; 
 static const Vec3 kSteelArm{0.265f, 0.272f, 0.282f};  
 static const Vec3 kSteelPlate{0.560f, 0.545f, 0.505f};
-static const Vec3 kGravel{0.330f, 0.272f, 0.205f};  
+static const Vec3 kGravel{0.158f, 0.156f, 0.153f};  
 static const float kRoadX = 2.6f;    
 static const float kRoadHalf = 2.7f;    
 static const float kRoadY = 0.030f;
@@ -1118,16 +1118,19 @@ static void AddWeedTuft(float x, float z, unsigned int seed) {
     Vec3 p2{tip.x + side.x * w * 0.15f, tip.y, tip.z + side.z * w * 0.15f};
     Vec3 p3{tip.x - side.x * w * 0.15f, tip.y, tip.z - side.z * w * 0.15f};
     AddQuad(p0, p1, p2, p3,
-            {0.075f + 0.05f * rnd(), 0.105f + 0.055f * rnd(), 0.048f},
+            {0.062f + 0.050f * rnd(), 0.100f + 0.055f * rnd(), 0.055f},
             kMatLeaf);
   }
 }
 
+// Blue-hour palette: mortar rendered in cool grey-green and pale plaster,
+// slate and oxide roofs. Nothing here is orange any more - the warm light
+// comes from the sun and the sodium lamps, not from the paint.
 static const Vec3 kWallTints[5] = {
-    {0.235f, 0.208f, 0.178f}, {0.285f, 0.256f, 0.214f}, {0.185f, 0.170f, 0.158f},
-    {0.330f, 0.300f, 0.246f}, {0.160f, 0.152f, 0.148f}};
+    {0.240f, 0.246f, 0.242f}, {0.282f, 0.272f, 0.252f}, {0.188f, 0.200f, 0.208f},
+    {0.296f, 0.288f, 0.266f}, {0.160f, 0.176f, 0.188f}};
 static const Vec3 kRoofTints[3] = {
-    {0.095f, 0.084f, 0.082f}, {0.215f, 0.112f, 0.066f}, {0.125f, 0.118f, 0.115f}};
+    {0.084f, 0.100f, 0.132f}, {0.168f, 0.096f, 0.082f}, {0.112f, 0.126f, 0.150f}};
 
 static void AddHouse(float x, float z, float w, float d, float h, float face) {
   int pick = (int)std::fmod(std::fabs(std::sin(x * 12.9898f + z * 78.233f)) *
@@ -1247,8 +1250,8 @@ static void AddHouse(float x, float z, float w, float d, float h, float face) {
 }
 
 static void AddPropertyLine(float x, float z0, float z1, float mirror) {
-  const Vec3 wall{0.150f, 0.145f, 0.135f};
-  const Vec3 cap{0.190f, 0.176f, 0.158f};
+  const Vec3 wall{0.132f, 0.140f, 0.148f};
+  const Vec3 cap{0.172f, 0.180f, 0.188f};
   float z = z0;
   int i = 0;
   while (z < z1) {
@@ -1264,7 +1267,7 @@ static void AddPropertyLine(float x, float z0, float z1, float mirror) {
     if ((i % 2) == 0) {                     
       float hx = x + mirror * (0.95f + 0.55f * (float)((i * 3) % 3) / 3.0f);
       AddBox({hx, 0.58f, cz}, {0.46f, 0.58f, seg * 0.40f},
-             {0.048f, 0.078f, 0.040f}, kMatLeaf);
+             {0.046f, 0.080f, 0.056f}, kMatLeaf);
     }
     z += seg + 0.35f;
     i++;
@@ -1546,8 +1549,8 @@ static void AddTreeline() {
   {
     Vec3 n{0, 1, 0};
     const float z0 = -200.0f, z1 = 520.0f;
-    Vec3 road{0.195f, 0.190f, 0.198f};
-    Vec3 edge{0.235f, 0.215f, 0.190f};
+    Vec3 road{0.132f, 0.138f, 0.154f};
+    Vec3 edge{0.150f, 0.150f, 0.148f};
     Vec3 paint{0.880f, 0.884f, 0.860f};   // white thermoplastic, not bone
     unsigned int s = (unsigned int)gVerts.size();
     PushVert({kRoadX - kRoadHalf, kRoadY, z0}, n, road, kMatRoad);
@@ -1572,7 +1575,7 @@ static void AddTreeline() {
       float xc = (e ? kRoadX + kRoadHalf : kRoadX - kRoadHalf) + sgn * 0.16f;
       AddBox({xc, kKerbTopY * 0.5f, (z0 + z1) * 0.5f}, {0.16f, kKerbTopY * 0.5f,
              (z1 - z0) * 0.5f},
-             {0.245f, 0.238f, 0.225f}, kMatKerb);
+             {0.200f, 0.202f, 0.204f}, kMatKerb);
     }
     // Cast-iron manhole covers down the crown of the road, set flush with the
     // asphalt, each with a darker recessed centre so the rim catches the sun.
@@ -2513,14 +2516,17 @@ static void Setup() {
   // glazed insulators) seed the bloom, not the whole orange sky.
   // The cables' sun glints were blooming into glowing tubes; a tighter
   // threshold and a lighter bloom keep the glare while staying photographic.
-  gPostSettings.exposure = 0.95f;
-  gPostSettings.bloom = 0.034f;
-  gPostSettings.threshold = 1.28f;
+  gPostSettings.exposure = 1.05f;
+  gPostSettings.bloom = 0.024f;
+  // A grazing reflection of the bright horizon on a wall cap used to cross this
+  // threshold and draw a neon line along every wall top.
+  gPostSettings.threshold = 1.60f;
   gPostSettings.knee = 0.60f;
-  gPostSettings.aberration = 0.0035f;
-  gPostSettings.vignette = 0.20f;
-  gPostSettings.grain = 0.020f;
-  gPostSettings.flare = 1.0f;
+  gPostSettings.aberration = 0.0030f;
+  gPostSettings.vignette = 0.22f;
+  gPostSettings.grain = 0.018f;
+  // The flare ghosts were reading as pale sheets of glass over the sky.
+  gPostSettings.flare = 0.42f;
   if (postproc::Init(gPost, gWindowWidth, gWindowHeight, 4)) {
     std::printf("Camera: HDR RGBA16F, %dx MSAA, %d-level bloom, ACES composite\n",
                 gPost.samples, postproc::Pipeline::kLevels);

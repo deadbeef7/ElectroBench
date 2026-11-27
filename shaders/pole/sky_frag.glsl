@@ -29,7 +29,7 @@ const float kHm = 1200.0;
 const vec3  kBetaR = vec3(5.802e-6, 13.558e-6, 33.1e-6);
 const vec3  kBetaM = vec3(3.996e-6);
 const float kBetaMExt = 4.44e-6;
-const float kSunI = 1.80;
+const float kSunI = 2.90;
 const float kSunAngularRadius = 0.01400; // ~0.8 deg, visibly larger dusk sun
 
 float atmosphereExit(vec3 pos, vec3 dir) {
@@ -189,19 +189,23 @@ void main() {
     vec3 viewT;
     vec3 sky = skyRadiance(eyePos, dir, sun, viewT);
 
-    // Amber dusk grade. The physical single-scattering solution is correct but
-    // at this solar elevation it still leaves a blue zenith; the reference
-    // corridor is a dust-laden orange evening. Grading the whole sky here also
-    // grades the cubemap, so ambient light and reflections stay coherent.
-    float duskW = 0.92;
+    // Blue-hour grade. Grading the whole sky here also grades the cubemap, so
+    // object ambient light and reflections stay coherent with it: cool blue
+    // overhead, sodium-amber only in the horizon band and around the sun. The
+    // scene is lit by this sky, which is what separates warm keys from blue
+    // shadows instead of tinting every surface the same orange.
     float skyLum = dot(sky, vec3(0.2126, 0.7152, 0.0722));
-    vec3 amber = vec3(2.05, 0.82, 0.26) * skyLum + vec3(0.075, 0.022, 0.003);
-    sky = mix(sky, amber, duskW);
+    float up = smoothstep(-0.03, 0.62, h);
+    vec3 zenith = sky * vec3(0.58, 0.84, 1.42);
+    vec3 horizon = vec3(1.80, 0.98, 0.58) * (skyLum * 1.20 + 0.030);
+    sky = mix(horizon, zenith, up);
+    float sunSide = pow(max(dot(dir, sun), 0.0), 3.0) * (1.0 - up);
+    sky = mix(sky, vec3(1.90, 1.06, 0.58) * (skyLum + 0.02), sunSide * 0.50);
 
     // Below the horizon the ground geometry covers the frame; give the dome a
     // dark warm ground colour for the cubemap/reflection fallback.
     if (h < -0.015) {
-        sky = sky * 0.35 + vec3(0.020, 0.012, 0.008);
+        sky = sky * 0.35 + vec3(0.013, 0.015, 0.021);
     }
 
     float mu = dot(dir, sun);
@@ -226,8 +230,8 @@ void main() {
             // Clamp the forward Mie peak (see scene 2's sky): raw g = 0.72
             // phase reaches ~70 and clips the cloud edge to pure white.
             float phM = min(miePhase(mu, 0.72) * 4.0 * PI, 6.0);
-            vec3 sunCol = vec3(1.85, 0.82, 0.34) * viewT * kSunI * 0.20;
-            vec3 ambCol = vec3(0.44, 0.25, 0.135) * (0.55 + 0.45 * hf);
+            vec3 sunCol = vec3(1.80, 1.02, 0.62) * viewT * kSunI * 0.20;
+            vec3 ambCol = vec3(0.26, 0.33, 0.46) * (0.55 + 0.45 * hf);
 
             vec3 cloud = ambCol * (0.55 + 0.45 * hf);
             cloud += sunCol * (0.10 + 0.90 * transmit)
@@ -249,9 +253,9 @@ void main() {
     float veil = cirrus(dir);
     if (veil > 0.002) {
         float fwd = pow(max(mu, 0.0), 5.0);
-        vec3 cirCol = mix(vec3(0.34, 0.22, 0.18), vec3(1.20, 0.56, 0.26),
+        vec3 cirCol = mix(vec3(0.30, 0.34, 0.44), vec3(1.18, 0.72, 0.44),
                           0.18 + 0.82 * fwd);
-        sky = mix(sky, cirCol * (0.55 + 0.45 * viewT.g), veil * 0.22);
+        sky = mix(sky, cirCol * (0.55 + 0.45 * viewT.g), veil * 0.13);
     }
 
     // ---- sun: real angular radius, limb darkening, physical transmittance ----
@@ -272,7 +276,7 @@ void main() {
 
     float aureole = pow(max(mu, 0.0), 260.0) * 0.50
                   + pow(max(mu, 0.0), 1100.0) * 1.0;
-    sunDisc += vec3(1.0, 0.58, 0.28) * viewT * aureole * (1.0 - cover2);
+    sunDisc += vec3(1.0, 0.72, 0.44) * viewT * aureole * (1.0 - cover2);
     sky += sunDisc;
 
     if (uHdrOut > 0.5) {

@@ -788,8 +788,16 @@ static void BuildLayout() {
 static void UpdateFrame(float t) {
   gFrameState.t = t;
 
-  float ka = 0.55f + t * 0.055f;
-  gFrameState.keyDir = V3Norm(V3(std::cos(ka) * 0.52f, 0.84f, std::sin(ka) * 0.52f));
+  // Key light rides with the camera: it sits about 130 degrees off the view
+  // direction, so every shot sees the shadows sweeping across the floor in
+  // front of the guns instead of hiding directly behind them (which is what a
+  // key near the camera's own azimuth produced), and it also rakes lower - 41
+  // degrees up - so the shadows are a couple of metres long.
+  Vec3 camEye, camTarget;
+  float camFov = 40.0f;
+  EvalCamera(t, camEye, camTarget, camFov);
+  float ka = std::atan2(camEye.z, camEye.x) + 2.30f;
+  gFrameState.keyDir = V3Norm(V3(std::cos(ka) * 0.70f, 0.62f, std::sin(ka) * 0.70f));
   gFrameState.keyColor = V3Scale(V3(1.0f, 0.86f, 0.70f), 6.2f);
 
   float ra = 2.45f + t * 0.085f;
@@ -822,8 +830,8 @@ static void UpdateFrame(float t) {
     gFrameState.barColorFlat[i * 3 + 2] = kBaseColor[i].z * 6.0f;
   }
 
-  gFrameState.skyAmb = V3(0.115f, 0.135f, 0.190f);
-  gFrameState.groundAmb = V3(0.105f, 0.080f, 0.062f);
+  gFrameState.skyAmb = V3(0.098f, 0.116f, 0.166f);
+  gFrameState.groundAmb = V3(0.090f, 0.068f, 0.053f);
   gFrameState.glowAmb = V3(0.52f, 0.26f, 0.120f);
 
   Mat4 proj, view;

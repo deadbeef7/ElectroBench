@@ -111,8 +111,10 @@ void main() {
     // ---- wetness: puddles with a crisp edge over a thin damp film ---------
     float puddle = Fbm(p * 0.55 + vec2(3.1, 9.4));
     float film = Fbm(p * 2.3 + vec2(17.0, 4.0));
-    float wet = smoothstep(0.50, 0.60, puddle);
-    wet = max(wet, 0.10 + 0.12 * film);
+    // A damp range floor, not a lake: broad mirror-smooth wetness hid every
+    // cast shadow, so the film is thin and the puddles are isolated.
+    float wet = smoothstep(0.56, 0.68, puddle);
+    wet = max(wet, 0.04 + 0.08 * film);
 
     // ---- concrete base ----------------------------------------------------
     float grain = Noise(p * 34.0) * 0.5 + Noise(p * 90.0) * 0.5;
@@ -165,15 +167,19 @@ void main() {
     // bright sources reflected off the slab compress instead of flooding it, the
     // way a wet surface rolls a highlight off instead of turning milky
     mirror = mirror / (1.0 + mirror * 0.35);
-    mirror *= edge.x * edge.y * 0.92;
+    mirror *= edge.x * edge.y * 0.78;
 
     // ---- lighting ---------------------------------------------------------
     float shadow = ShadowFactor(N);
     vec3 f0 = vec3(0.045);
     vec3 diff = albedo;
 
-    vec3 col = diff * uSkyAmb * (0.55 + 0.45 * N.y);
-    col += diff * uGroundAmb * 0.55;
+    // Ambient is occluded as well, or the umbra stays half-lit and the gun
+    // shadows read as stains rather than shadows. Only the light bars (which
+    // have no shadow map of their own) keep their full pool.
+    float ambShadow = mix(0.42, 1.0, shadow);
+    vec3 col = diff * uSkyAmb * (0.55 + 0.45 * N.y) * ambShadow;
+    col += diff * uGroundAmb * 0.55 * ambShadow;
     col += diff * uKeyColor * shadow * max(dot(N, uKeyDir), 0.0) / kPi;
 
     // the three light bars: visible pools where their haze reaches the slab

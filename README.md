@@ -15,7 +15,7 @@ headless capture pipeline can still pin the framebuffer exactly.
 |---|---|---|
 | **Scene 1 — Electro Range** | OpenGL 3.3 core, GLSL 3.30 | **110 MP5s** standing in five rings on a polished, wet concrete carousel in a dark hangar, drawn with **instanced draws** (one per model part): full PBR from each part's **six maps** (base colour, normal, metallic, height, AO, roughness), shadow-mapped key light, three moving colour-gelled light bars, real **planar reflections** in the slab, HDR bloom and a scripted crane/dolly camera |
 | **Scene 2** | OpenGL 3.3 core, pixel-shader workloads | An ocean at dusk (3DMark2001 SE "Pixel Shader" benchmark recreation): a **Phillips-spectrum wave set** with deep-water dispersion, ray-marched **screen-space sea reflections**, advected whitecap trails and a cloud deck with second-order light transport |
-| **Scene 3** | OpenGL 3.3 core, analytic shaders | A utility corridor at amber dusk under a **physically-based atmosphere** (Rayleigh + Mie, limb-darkened sun disc, wind-blown cumulus): fat **spun-concrete** pole shafts with band clamps, **pole-mounted transformer banks**, cutouts, PVC riser ducts and number plates, wrapped in a **dense web of 26 thin slack telecom cables per bay**, loose half-abandoned spans, **service drops to every house in reach** and **hanging slack coils and fibre closures**, two lattice cell masts for scale, a **damp asphalt road with cast concrete kerbs that mirrors the sunset**, gutters and downpipes on every house, manholes, storm drains and weeds along the gutter, **per-pixel procedural relief** on the concrete, asphalt, timber and roofing, houses with lit windows and everything has 4x MSAA |
+| **Scene 3** | OpenGL 3.3 core, analytic shaders | A utility corridor at blue-hour dusk under a **physically-based atmosphere** (Rayleigh + Mie, limb-darkened sun disc, wind-blown cumulus): fat **spun-concrete** pole shafts with band clamps, **pole-mounted transformer banks**, cutouts, PVC riser ducts and number plates, wrapped in a **dense web of 26 thin slack telecom cables per bay**, loose half-abandoned spans, **service drops to every house in reach** and **hanging slack coils and fibre closures**, two lattice cell masts for scale, a **damp asphalt road with cast concrete kerbs that mirrors the sunset**, gutters and downpipes on every house, manholes, storm drains and weeds along the gutter, **per-pixel procedural relief** on the concrete, asphalt, timber and roofing, houses with lit windows and everything has 4x MSAA |
 
 # System requirements : 
 
@@ -97,9 +97,11 @@ The MP5 A2 model is CC BY 4.0 by Gintoki1234; see `assets/MP5_CREDITS.txt` for t
 the changes made for this project.
 
 The carousel turns slowly under three colour-gelled light bars, with a shadow-mapped key light that
-orbits on its own, wet patches on the slab that mirror the wall's amber slots and the guns through a
-real half-resolution **planar reflection pass**, thin glowing inlay rings running between the gun
-rings, HDR bloom and the shared ACES composite. Every frame is lit, shadowed, reflected and graded
+rides with the camera (about 130 degrees off the view direction, raking in at 41 degrees, so the
+guns throw long shadows across the slab instead of hiding them behind themselves), ambient light
+occluded in the same umbra, wet patches on the slab that mirror the wall's amber slots and the guns
+through a real half-resolution **planar reflection pass**, thin glowing inlay rings running between
+the gun rings, HDR bloom and the shared ACES composite. Every frame is lit, shadowed, reflected and graded
 by hand-written GLSL 3.30;
 
 Controls : `ESC` quits. 
@@ -116,8 +118,13 @@ Controls : the fly-over camera is automatic from launch; `ESC` quits.
 # Scene 3
 
 **Scene 3** lives in the same ElectroBench binary and is also **OpenGL 3.3 core**. The
-utility corridor: warm gravel under an amber dusk, two lines of steel poles marching to the
-horizon, and a wall of wires over your head.
+utility corridor: cool gravel under a blue-hour dusk, two lines of steel poles marching to the
+horizon, and a wall of wires over your head. The sky is a physically integrated Rayleigh + Mie
+atmosphere graded for dusk - blue overhead, sodium-amber only in the horizon band and around the
+sun - and because every object's ambient comes from that same sky cubemap, the shadows read blue
+against the warm key instead of the whole frame sitting in one amber wash. Grazing reflections use
+a roughness-aware Fresnel, so rough plaster and asphalt no longer mirror the bright horizon and
+blow out to white, and the walls stay concrete instead of reading as lit panels.
 
 - `--screenshot FILE --shot-time S` writes a frame straight out of the
   framebuffer, before the buffer swap. This is what the committed screenshots in
@@ -163,6 +170,10 @@ When all scenes have finished, the benchmark shows a results card: the average s
 a **bar per scene** scaled to the fastest one, each scene's score and average FPS, and
 a one-line explanation of the formula. Press `S` to write the card to
 `electrobench-results.png` (useful for sharing a run), or `ESC` to exit.
+
+`--results-only --width 1280 --height 720 --screenshot FILE` renders the card once
+with sample scores and writes it to FILE without running the scenes or waiting for a
+key press - the layout check that the card's geometry is verified with.
 
 ```sh
 Benchmark Results - Time : 45.0s, Average FPS : 12.4, Score : 308
