@@ -1,0 +1,14 @@
+MP5 A2 by Gintoki1234
+https://gintoki1234.itch.io/mp5-a2
+
+Licensed under the Creative Commons Attribution 4.0 International licence:
+https://creativecommons.org/licenses/by/4.0/
+
+Changes made for ElectroBench:
+  * converted from the original FBX to Wavefront OBJ for the scene's loader;
+  * the five material parts are kept separate (Part 1-4 and Mag), each with its
+    own base colour, normal, metallic, roughness and AO maps;
+  * textures downscaled from 4096x4096 to 1024x1024;
+  * the sixth map, Height (used only for the shader's subtle parallax), was
+    derived from the base-colour luminance because the source pack does not
+    ship one.

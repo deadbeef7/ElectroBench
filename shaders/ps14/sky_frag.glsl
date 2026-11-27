@@ -355,6 +355,17 @@ void main() {
         float powder = 1.0 - exp(-tau * 3.0);
         cloud *= 1.0 - 0.32 * powder;
 
+        // Second-order light transport inside the deck. Single scattering
+        // alone leaves a dusk cloud black between its lit rim and its sunlit
+        // top, because every photon is assumed to leave on its first bounce.
+        // These two analytic terms stand in for the multiple-scatter integral:
+        // a flattened second-order sun lobe, and an isotropic ambient fill
+        // that leaks out of the deck's base.
+        float ms = exp(-tau * 0.65);
+        cloud += sunCol * ms * (0.10 + 0.22 * phase / (1.0 + phase))
+               * (1.0 - powder) * 0.55;
+        cloud += vec3(0.085, 0.075, 0.095) * ms * (1.0 - cloudHf) * 0.85;
+
         float silver = pow(max(mu, 0.0), 7.0) * cl * (1.0 - cl)
                      * exp(-tau * 0.55) * 1.7;
         cloud += sunCol * silver;

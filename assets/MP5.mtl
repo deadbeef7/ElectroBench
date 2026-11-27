@@ -1,0 +1,74 @@
+newmtl MP5 Part 3
+Ns 96.0
+Ka 1 1 1
+Kd 1 1 1
+Ks 0.5 0.5 0.5
+Ni 1
+d 1
+illum 2
+map_Kd MP5_Part3_BaseColor.png
+map_Ks MP5_Part3_Normal.png
+map_Kt MP5_Part3_Metallic.png
+map_Kp MP5_Part3_Height.png
+map_Km MP5_Part3_AO.png
+map_Ki MP5_Part3_Roughness.png
+
+newmtl MP5 Part 1
+Ns 96.0
+Ka 1 1 1
+Kd 1 1 1
+Ks 0.5 0.5 0.5
+Ni 1
+d 1
+illum 2
+map_Kd MP5_Part1_BaseColor.png
+map_Ks MP5_Part1_Normal.png
+map_Kt MP5_Part1_Metallic.png
+map_Kp MP5_Part1_Height.png
+map_Km MP5_Part1_AO.png
+map_Ki MP5_Part1_Roughness.png
+
+newmtl MP5 Part 2
+Ns 96.0
+Ka 1 1 1
+Kd 1 1 1
+Ks 0.5 0.5 0.5
+Ni 1
+d 1
+illum 2
+map_Kd MP5_Part2_BaseColor.png
+map_Ks MP5_Part2_Normal.png
+map_Kt MP5_Part2_Metallic.png
+map_Kp MP5_Part2_Height.png
+map_Km MP5_Part2_AO.png
+map_Ki MP5_Part2_Roughness.png
+
+newmtl MP5 Part 4
+Ns 96.0
+Ka 1 1 1
+Kd 1 1 1
+Ks 0.5 0.5 0.5
+Ni 1
+d 1
+illum 2
+map_Kd MP5_Part4_BaseColor.png
+map_Ks MP5_Part4_Normal.png
+map_Kt MP5_Part4_Metallic.png
+map_Kp MP5_Part4_Height.png
+map_Km MP5_Part4_AO.png
+map_Ki MP5_Part4_Roughness.png
+
+newmtl MP5 Mag
+Ns 96.0
+Ka 1 1 1
+Kd 1 1 1
+Ks 0.5 0.5 0.5
+Ni 1
+d 1
+illum 2
+map_Kd MP5_Mag_BaseColor.png
+map_Ks MP5_Mag_Normal.png
+map_Kt MP5_Mag_Metallic.png
+map_Kp MP5_Mag_Height.png
+map_Km MP5_Mag_AO.png
+map_Ki MP5_Mag_Roughness.png

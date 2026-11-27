@@ -64,6 +64,7 @@ void BenchApplyDesktopFullscreen(SDL_Window *win) {
 // ------------------------------------------------------------- scene entry
 int RunGunScene(bool *gaveUpOut);              // scene 1 (GL 3.3 range)
 extern double gFusedOgScore;                   // scene 1's final score
+extern double gFusedOgFps;
 int  GunSceneParseArgs(int argc, char **argv);
 void GunSceneSetScreenshot(const char *path);
 void GunSceneSetShotTime(float t);
@@ -71,6 +72,7 @@ void GunSceneSetStandalone(bool standalone);
 
 int RunOceanScene(bool *gaveUpOut);            // scene 2 (GL 3.3 ocean)
 extern double gFusedTideScore;
+extern double gFusedTideFps;
 int  OceanSceneParseArgs(int argc, char **argv);
 void OceanSceneSetScreenshot(const char *path);
 void OceanSceneSetShotTime(float t);
@@ -78,10 +80,13 @@ void OceanSceneSetStandalone(bool standalone);
 
 int RunPoleScene(bool *gaveUpOut);             // scene 3 (GL 3.3 power lines)
 extern double gFusedPoleScore;
+extern double gFusedPoleFps;
 int  PoleSceneParseArgs(int argc, char **argv);
 void PoleSceneSetScreenshot(const char *path);
 void PoleSceneSetShotTime(float t);
 void PoleSceneSetStandalone(bool standalone);
+
+bool gTimingsVerbose = false; // read by every scene (see lib/framestats.hxx)
 
 static bool gSceneOnly = false;
 static bool gPoleOnly = false;
@@ -152,7 +157,29 @@ static double NowSeconds() {
   return (double)SDL_GetPerformanceCounter() / (double)SDL_GetPerformanceFrequency();
 }
 
-static void RenderResults() {
+static void FillRect(float x, float y, float w, float h, float r, float g,
+                     float b, float a) {
+  glDisable(GL_TEXTURE_2D);
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+  glColor4f(r, g, b, a);
+  glBegin(GL_QUADS);
+  glVertex2f(x, y);
+  glVertex2f(x + w, y);
+  glVertex2f(x + w, y + h);
+  glVertex2f(x, y + h);
+  glEnd();
+}
+
+struct ResultsRow {
+  const char *label;
+  double score;
+  double fps;
+  bool ran;
+  float r, g, b;
+};
+
+static void RenderResults(bool savedFlash) {
   glUseProgram(0);
   glMatrixMode(GL_PROJECTION);
   glPushMatrix();
@@ -174,44 +201,83 @@ static void RenderResults() {
   glClearColor(0.012f, 0.012f, 0.022f, 1.0f);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-  char big[96], hint[96], line1[96], line2[96], line3[96];
-  int scenesRan = 1 + (gFusedTideRan ? 1 : 0) + (gFusedPoleRan ? 1 : 0);
-  double sum = gFusedOgScore;
-  if (gFusedTideRan) sum += gFusedTideScore;
-  if (gFusedPoleRan) sum += gFusedPoleScore;
+  ResultsRow rows[3] = {
+      {"Scene 1  Range", gFusedOgScore, gFusedOgFps,
+       gFusedOgScore > 0.0, 1.00f, 0.62f, 0.28f},
+      {"Scene 2  Ocean", gFusedTideScore, gFusedTideFps,
+       gFusedTideRan, 0.36f, 0.76f, 1.00f},
+      {"Scene 3  Power Lines", gFusedPoleScore, gFusedPoleFps,
+       gFusedPoleRan, 0.95f, 0.78f, 0.46f},
+  };
+
+  int scenesRan = 0;
+  double sum = 0.0, maxScore = 1.0;
+  for (const ResultsRow &row : rows) {
+    if (!row.ran) continue;
+    scenesRan++;
+    sum += row.score;
+    if (row.score > maxScore) maxScore = row.score;
+  }
+
+  char big[96], hint[128], explain[160], explain2[160];
   if (scenesRan > 1)
     std::snprintf(big, sizeof(big), "AVERAGE SCORE : %.0f", sum / scenesRan);
   else
     std::snprintf(big, sizeof(big), "SCORE : %.0f", gFusedOgScore);
-  std::snprintf(hint, sizeof(hint), "Benchmark complete - ESC to exit");
-
-  std::snprintf(line1, sizeof(line1), "Scene 1 (range)  : %.0f", gFusedOgScore);
-  std::snprintf(line2, sizeof(line2), "Scene 2 (ocean)  : %s",
-                gFusedTideRan ? "" : "skipped (needs GL 3.3)");
-  std::snprintf(line3, sizeof(line3), "Scene 3 (lain)   : %s",
-                gFusedPoleRan ? "" : "skipped (needs GL 3.3)");
-  char score[24];
-  if (gFusedTideRan) {
-    std::snprintf(score, sizeof(score), "%.0f", gFusedTideScore);
-    std::strncat(line2, score, sizeof(line2) - std::strlen(line2) - 1);
-  }
-  if (gFusedPoleRan) {
-    std::snprintf(score, sizeof(score), "%.0f", gFusedPoleScore);
-    std::strncat(line3, score, sizeof(line3) - std::strlen(line3) - 1);
-  }
+  std::snprintf(hint, sizeof(hint), "S  save results image      ESC  exit");
+  std::snprintf(explain, sizeof(explain),
+                "Score = average FPS x average FPS x 2: twice the frames per second, "
+                "squared.");
+  std::snprintf(explain2, sizeof(explain2),
+                "Higher is better. Compare runs only at the same resolution; the "
+                "1%% low and GPU times print to the console.");
 
   const float cx = 0.5f * (float)gWinW;
   const float cy = 0.5f * (float)gWinH;
 
+  glColor4f(0.44f, 0.58f, 0.68f, 1.0f);
+  HudTextScaled(cx - HudTextWidth("ELECTROBENCH", 3.0f) * 0.5f, cy - 250.0f,
+                "ELECTROBENCH", 3.0f);
   glColor4f(0.72f, 0.93f, 1.0f, 1.0f);
-  HudTextScaled(cx - HudTextWidth(big, 6.0f) * 0.5f, cy - 70.0f, big, 6.0f);
+  HudTextScaled(cx - HudTextWidth(big, 5.0f) * 0.5f, cy - 195.0f, big, 5.0f);
 
-  glColor4f(0.60f, 0.78f, 0.88f, 1.0f);
-  HudText(cx - HudTextWidth(line1, 2.0f) * 0.5f, cy + 8.0f, line1);
-  HudText(cx - HudTextWidth(line2, 2.0f) * 0.5f, cy + 34.0f, line2);
-  HudText(cx - HudTextWidth(line3, 2.0f) * 0.5f, cy + 60.0f, line3);
-  glColor4f(0.40f, 0.48f, 0.55f, 1.0f);
-  HudText(cx - HudTextWidth(hint, 2.0f) * 0.5f, cy + 132.0f, hint);
+  glColor4f(0.48f, 0.60f, 0.70f, 1.0f);
+  HudTextScaled(cx - HudTextWidth(explain, 1.3f) * 0.5f, cy - 110.0f, explain, 1.3f);
+  HudTextScaled(cx - HudTextWidth(explain2, 1.3f) * 0.5f, cy - 86.0f, explain2, 1.3f);
+
+  const float labelX = cx - 330.0f;
+  const float barX = cx + 10.0f;
+  const float barW = 220.0f;
+  const float barH = 18.0f;
+  for (int i = 0; i < 3; i++) {
+    const float y = cy - 20.0f + (float)i * 48.0f;
+    const ResultsRow &row = rows[i];
+    glColor4f(0.60f, 0.72f, 0.82f, 1.0f);
+    if (row.ran) HudTextScaled(labelX, y, row.label, 1.6f);
+
+    FillRect(barX, y + 2.0f, barW, barH, 0.10f, 0.13f, 0.17f, 1.0f);
+    if (row.ran) {
+      float fraction = (float)(row.score / maxScore);
+      if (fraction > 1.0f) fraction = 1.0f;
+      FillRect(barX, y + 2.0f, barW * fraction, barH, row.r, row.g, row.b, 0.92f);
+      char value[64];
+      std::snprintf(value, sizeof(value), "%.0f   (%.1f FPS)", row.score, row.fps);
+      glColor4f(0.82f, 0.90f, 0.96f, 1.0f);
+      HudTextScaled(barX + barW + 18.0f, y, value, 1.6f);
+    } else {
+      glColor4f(0.38f, 0.42f, 0.48f, 1.0f);
+      HudTextScaled(barX + 8.0f, y, "skipped (needs GL 3.3)", 1.4f);
+    }
+  }
+
+  glColor4f(savedFlash ? 0.55f : 0.38f, savedFlash ? 0.90f : 0.48f,
+             savedFlash ? 0.55f : 0.55f, 1.0f);
+  HudTextScaled(cx - HudTextWidth(hint, 1.6f) * 0.5f, cy + 185.0f, hint, 1.6f);
+  if (savedFlash) {
+    glColor4f(0.55f, 0.90f, 0.60f, 1.0f);
+    HudTextScaled(cx - HudTextWidth("electrobench-results.png written", 1.4f) * 0.5f,
+                  cy + 212.0f, "electrobench-results.png written", 1.4f);
+  }
 
   glEnable(GL_DEPTH_TEST);
   glMatrixMode(GL_PROJECTION);
@@ -261,18 +327,52 @@ static void OpenResultsWindow() {
   gFontAtlasTex = 0;
 }
 
+// Writes the finished results card to electrobench-results.png. The window is
+// a compatibility-profile context, so the pixels are read straight from the
+// back buffer the card was just drawn into and flipped (GL rows are bottom-up).
+static bool SaveResultsImage() {
+  std::vector<unsigned char> rgb((size_t)gWinW * gWinH * 3);
+  std::vector<unsigned char> flipped((size_t)gWinW * gWinH * 3);
+  glPixelStorei(GL_PACK_ALIGNMENT, 1);
+  glReadBuffer(GL_BACK);
+  glReadPixels(0, 0, gWinW, gWinH, GL_RGB, GL_UNSIGNED_BYTE, rgb.data());
+  const size_t rowBytes = (size_t)gWinW * 3;
+  for (int y = 0; y < gWinH; y++)
+    std::memcpy(&flipped[(size_t)y * rowBytes],
+                &rgb[(size_t)(gWinH - 1 - y) * rowBytes], rowBytes);
+  unsigned err = lodepng_encode24_file("electrobench-results.png",
+                                       flipped.data(), (unsigned)gWinW,
+                                       (unsigned)gWinH);
+  if (err) {
+    std::fprintf(stderr, "Could not save results image: %s\n",
+                 lodepng_error_text(err));
+    return false;
+  }
+  std::printf("Results image written: electrobench-results.png\n");
+  std::fflush(stdout);
+  return true;
+}
+
 static void RunResultsScreen() {
   OpenResultsWindow();
   const double start = NowSeconds();
   SDL_Event event;
   bool quit = false;
+  bool saveRequested = false;
+  bool savedFlash = false;
   while (!quit) {
     while (SDL_PollEvent(&event) != 0) {
       if (event.type == SDL_QUIT) quit = true;
-      if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE)
-        quit = true;
+      if (event.type == SDL_KEYDOWN) {
+        if (event.key.keysym.sym == SDLK_ESCAPE) quit = true;
+        if (event.key.keysym.sym == SDLK_s) saveRequested = true;
+      }
     }
-    RenderResults();
+    RenderResults(savedFlash);
+    if (saveRequested) {
+      saveRequested = false;
+      savedFlash = SaveResultsImage();
+    }
     SDL_GL_SwapWindow(window);
     if (NowSeconds() - start >= 10.0) quit = true;
   }
@@ -302,6 +402,8 @@ int main(int argc, char **argv) {
       gPoleOnly = true;
     } else if (arg == "--trace-assets") {
       assetTraceFlag() = true;
+    } else if (arg == "--timings") {
+      gTimingsVerbose = true;
     }
   }
 

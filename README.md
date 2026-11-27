@@ -13,8 +13,8 @@ headless capture pipeline can still pin the framebuffer exactly.
 
 | Scene | Renderer | Contents |
 |---|---|---|
-| **Scene 1 — Electro Range** | OpenGL 3.3 core, GLSL 3.30 | **110 UZIs** standing in five rings on a polished, wet concrete carousel in a dark hangar: full PBR from the model's **six maps** (base colour, normal, metallic, height, AO, roughness), shadow-mapped key light, three moving colour-gelled light bars, real **planar reflections** in the slab, HDR bloom and a scripted crane/dolly camera |
-| **Scene 2** | OpenGL 3.3 core, pixel-shader workloads | A ocean at dusk (3DMark2001 SE "Pixel Shader" benchmark recreation) |
+| **Scene 1 — Electro Range** | OpenGL 3.3 core, GLSL 3.30 | **110 MP5s** standing in five rings on a polished, wet concrete carousel in a dark hangar, drawn with **instanced draws** (one per model part): full PBR from each part's **six maps** (base colour, normal, metallic, height, AO, roughness), shadow-mapped key light, three moving colour-gelled light bars, real **planar reflections** in the slab, HDR bloom and a scripted crane/dolly camera |
+| **Scene 2** | OpenGL 3.3 core, pixel-shader workloads | An ocean at dusk (3DMark2001 SE "Pixel Shader" benchmark recreation): a **Phillips-spectrum wave set** with deep-water dispersion, ray-marched **screen-space sea reflections**, advected whitecap trails and a cloud deck with second-order light transport |
 | **Scene 3** | OpenGL 3.3 core, analytic shaders | A utility corridor at amber dusk under a **physically-based atmosphere** (Rayleigh + Mie, limb-darkened sun disc, wind-blown cumulus): fat **spun-concrete** pole shafts with band clamps, **pole-mounted transformer banks**, cutouts, PVC riser ducts and number plates, wrapped in a **dense web of 26 thin slack telecom cables per bay**, loose half-abandoned spans, **service drops to every house in reach** and **hanging slack coils and fibre closures**, two lattice cell masts for scale, a **damp asphalt road with cast concrete kerbs that mirrors the sunset**, gutters and downpipes on every house, manholes, storm drains and weeds along the gutter, **per-pixel procedural relief** on the concrete, asphalt, timber and roofing, houses with lit windows and everything has 4x MSAA |
 
 # System requirements : 
@@ -30,13 +30,13 @@ OS : Any.
 
 # Screenshots
 
-Scene 1, the electro range: 110 UZIs standing in five rings on a wet, polished carousel in a dark hangar.
+Scene 1, the electro range: 110 MP5s standing in five rings on a wet, polished carousel in a dark hangar.
 
-![Scene 1](docs/screenshots/uzi_range.png)
+![Scene 1](docs/screenshots/mp5_range.png)
 
 Looking down the rings:
 
-![Scene 1 from above](docs/screenshots/uzi_range_top.png)
+![Scene 1 from above](docs/screenshots/mp5_range_top.png)
 
 The dusk ocean scene:
 
@@ -87,12 +87,14 @@ static build also defines `GLEW_STATIC` and uses the static GLEW archive, so its
 `pkg-config --static` dependency flags) — no DLLs are needed next to the exe. The static build keeps
 its objects under `build/static/`, separate from the normal DLL-linked objects.
 
-# Scene 1 — the Electro Range (110 UZIs)
+# Scene 1 — the Electro Range (110 MP5s)
 
-Renders **110 UZIs** standing in five concentric rings on a polished concrete carousel inside a dark
+Renders **110 MP5s** standing in five concentric rings on a polished concrete carousel inside a dark
 hangar, on **OpenGL 3.3 core**. The guns are the only assets in the scene and the only textures it
-uses: all six of the model's maps are used for what they are, base colour (sRGB), tangent-space
-normal, metallic, height (parallax), ambient occlusion and roughness.
+uses: the model's five parts (Part 1-4 and Mag) each use their own six maps for what they are, base
+colour (sRGB), tangent-space normal, metallic, height (parallax), ambient occlusion and roughness.
+The MP5 A2 model is CC BY 4.0 by Gintoki1234; see `assets/MP5_CREDITS.txt` for the attribution and
+the changes made for this project.
 
 The carousel turns slowly under three colour-gelled light bars, with a shadow-mapped key light that
 orbits on its own, wet patches on the slab that mirror the wall's amber slots and the guns through a
@@ -122,6 +124,9 @@ horizon, and a wall of wires over your head.
   `docs/screenshots/` were made with, they generate PPM files.
 - `--screenshot FILE --shot-times 6,20,38` writes several frames in one run.
 
+`--timings` prints a live per-second timing line while each scene runs, and every
+scene prints its frame-time statistics and GPU timer totals at the end.
+
 Headless visual-test flags (used to verify the render output in CI-like environments):
 
 ```sh
@@ -138,13 +143,26 @@ All scenes use the same formula, computed from the **average FPS over the whole 
 score = fps² × 2
 ```
 
-The binary prints
-`Time / Average FPS / Score` at the end.
+The binary prints `Time / Average FPS / Score` at the end of each scene, followed by
+the **frame-time statistics** for that scene:
+
+```
+Frame timing (scene 1): 3612 frames | average 60.2 FPS (16.61 ms) | 1% low 41.3 FPS | p99 28.4 ms | p99.9 33.1 ms
+GPU timing (scene 1): average 12.40 ms/frame, CPU submit 4.21 ms/frame
+```
+
+Average FPS hides stutter, so the **1% low** (the FPS a slow frame delivers) and the
+p99/p99.9 frame times are reported alongside it. The GPU figures come from
+`GL_TIME_ELAPSED` timer queries wrapped around the frame; comparing them with the
+wall-clock frame time shows whether a scene is CPU- or GPU-bound. Drivers without
+timer queries simply omit the GPU line.
 
 # The results screen
 
-When a scene's 45/60 second run ends, **the benchmark clears the window and prints that scene's
-score on screen**.
+When all scenes have finished, the benchmark shows a results card: the average score,
+a **bar per scene** scaled to the fastest one, each scene's score and average FPS, and
+a one-line explanation of the formula. Press `S` to write the card to
+`electrobench-results.png` (useful for sharing a run), or `ESC` to exit.
 
 ```sh
 Benchmark Results - Time : 45.0s, Average FPS : 12.4, Score : 308

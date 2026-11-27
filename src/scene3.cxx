@@ -26,6 +26,7 @@
 #endif
 
 #include "../lib/asset_path.hxx"
+#include "../lib/framestats.hxx"
 #include "post.hxx"
 
 extern bool gWindowedMode;
@@ -232,7 +233,10 @@ static double gResultsShownAt = 0.0;
 static bool gResultsShown = false;
 static double gResultsElapsed = 0.0, gResultsFps = 0.0, gResultsScore = 0.0;
 static const double kResultsScreenSeconds = 4.0;
-double gFusedPoleScore = 0.0;      
+double gFusedPoleScore = 0.0;
+double gFusedPoleFps = 0.0;
+static framestats::Stats gStats;
+static framestats::GpuTimer gGpu;
 
 static const char *gScreenshotPath = nullptr;
 static const char *gDumpShadowPath = nullptr; // --dump-shadow-map FILE
@@ -2312,7 +2316,8 @@ static void RenderScene() {
 
   static double lastFrame = -1.0;
   if (lastFrame < 0.0) lastFrame = now;
-  double dt = now - lastFrame;
+  double rawDt = now - lastFrame;
+  double dt = rawDt;
   lastFrame = now;
   if (dt > 0.1) dt = 0.1; // clamp hitches
   gSimTime += dt;
@@ -2331,6 +2336,7 @@ static void RenderScene() {
 
   // Sun shadows and the material-reflection environment are rendered before
   // the camera target is bound. Neither takes the eye as an input.
+  gGpu.Begin();
   RenderShadowMap();
   DumpShadowMap();
   RenderSkyEnv(eye, gSimTime);
@@ -2343,6 +2349,8 @@ static void RenderScene() {
   DrawGroundShadows(view, eye, gSimTime);
   DrawSky(view, eye, gSimTime);
   if (hdr) postproc::End(gPost, gPostSettings, t);
+  gGpu.End();
+  gGpu.Collect();
   RenderHUD();
 
   if (gScreenshotPath && gNextShot < gShotTimes.size() &&
@@ -2359,6 +2367,12 @@ static void RenderScene() {
 
   gFrame++;
   gFrameAccum++;
+  gStats.Add(rawDt);
+  if (gTimingsVerbose && now - gFpsTimer >= 1.0)
+    std::printf("  [timings] scene 3: %d frames in %.2fs, %.2f ms/frame, GPU %.2f ms\n",
+                gFrameAccum, now - gFpsTimer,
+                1000.0 * (now - gFpsTimer) / (gFrameAccum > 0 ? gFrameAccum : 1),
+                gGpu.LastMs());
   if (now - gFpsTimer >= 1.0) {
     double inst = gFrameAccum / (now - gFpsTimer);
     gFps = (int)std::lround(inst);
@@ -2374,8 +2388,14 @@ static void RenderScene() {
     double score = fps * fps * 2.0;
     std::printf("Benchmark Results - Time : %.1fs, Average FPS : %.1f, Score : %.0f\n",
                 elapsed, fps, score);
+    gStats.Print("scene 3");
+    if (gGpu.Samples() > 0)
+      std::printf("GPU timing (scene 3): average %.2f ms/frame, CPU submit %.2f ms/frame\n",
+                  gGpu.AverageMs(),
+                  1000.0 / (fps > 0.0 ? fps : 1.0) - gGpu.AverageMs());
     std::fflush(stdout);
     gFusedPoleScore = score;
+    gFusedPoleFps = fps;
     gResultsElapsed = elapsed;
     gResultsFps = fps;
     gResultsScore = score;
@@ -2453,6 +2473,8 @@ static void WriteScreenshotPPM(const char *path) {
 
 // ------------------------------------------------------------------- setup
 static void Setup() {
+  gStats.Reset();
+  gGpu.Init();
   BuildSkyMesh();
   BuildSceneGeometry();
   BuildFontAtlas();

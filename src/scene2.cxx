@@ -23,6 +23,7 @@
 #include <SDL2/SDL_opengl.h>
 
 #include "../lib/asset_path.hxx"
+#include "../lib/framestats.hxx"
 #include "post.hxx"
 
 extern bool gWindowedMode;
@@ -50,6 +51,74 @@ static const float kCloudElev[MAX_CLOUDS] = {0.190f, 0.300f, 0.250f, 0.380f, 0.2
 static const float kCloudRad[MAX_CLOUDS]  = {0.048f, 0.037f, 0.030f, 0.043f, 0.027f, 0.036f, 0.050f, 0.026f, 0.030f};
 static const float kCloudStretch[MAX_CLOUDS] = {3.3f, 2.4f, 2.1f, 2.8f, 2.2f, 2.3f, 3.6f, 4.6f, 4.2f};
 static const int kFoamSize = 256;        // foam texture size
+
+// ------------------------------------------------------- wave spectrum table
+// One Phillips-spectrum sample set, shared by the vertex displacement and the
+// fragment normals (uploaded as uniforms). 16 components on a jittered polar
+// grid, with deep-water dispersion w = sqrt(g k): the same input an FFT ocean
+// starts from, evaluated analytically so the gradients are exact.
+static const int kWaveCount = 16;
+static float gWaveDir[kWaveCount * 2];
+static float gWaveK[kWaveCount];
+static float gWaveAmp[kWaveCount];
+static float gWaveOmega[kWaveCount];
+static float gWavePhase[kWaveCount];
+
+static unsigned int gWaveSeed = 0x1f2e3d4cu;
+static float WaveRand() {
+  gWaveSeed = gWaveSeed * 1664525u + 1013904223u;
+  return (float)(gWaveSeed >> 8) / 16777216.0f;
+}
+
+static void BuildWaveSpectrum() {
+  const float windSpeed = 14.0f; // m/s
+  const float windAngle = 0.45f; // radians, the swell's dominant direction
+  const float gravity = 9.81f;
+  const float L = windSpeed * windSpeed / gravity;
+  float weights[kWaveCount];
+  float raw[kWaveCount];
+  float peak = 0.0f;
+  for (int i = 0; i < kWaveCount; i++) {
+    const int radial = i % 8;      // eight log-spaced wavelength bands
+    const int spread = i / 8;      // two directions around the wind
+    float k = 0.040f * std::pow(35.0f, (float)radial / 7.0f); // 0.040..1.40
+    // Jitter the direction: eight bands sharing four exact angles interfere
+    // into a visible lattice, which is not what a wind sea looks like.
+    float angle = windAngle + ((float)spread - 0.5f) * 1.10f +
+                  (WaveRand() - 0.5f) * 0.55f;
+    float cosA = std::cos(angle - windAngle);
+    float w = k * L;
+    float p = std::exp(-1.0f / (w * w)) / (k * k * k * k) * (cosA * cosA + 1e-3f);
+    gWaveK[i] = k;
+    gWaveDir[i * 2 + 0] = std::cos(angle);
+    gWaveDir[i * 2 + 1] = std::sin(angle);
+    gWaveOmega[i] = std::sqrt(gravity * k);
+    gWavePhase[i] = WaveRand() * 6.2831853f;
+    raw[i] = p;
+    if (p > peak) peak = p;
+  }
+  float weightSum = 0.0f;
+  for (int i = 0; i < kWaveCount; i++) {
+    // The raw Phillips tail is ~1/k^4, which would leave every metre of
+    // amplitude in the two longest waves. A 2%-of-peak floor keeps some energy
+    // in the short chop without turning the whole set into one periodic grid.
+    weights[i] = std::fmax(raw[i], 0.006f * peak) * (0.70f + 0.60f * WaveRand());
+    weightSum += weights[i];
+  }
+  // Total surface-height variance 5 m^2 (std ~2.2 m), matching the swell the
+  // scene was graded around.
+  const float variance = 3.8f;
+  for (int i = 0; i < kWaveCount; i++)
+    gWaveAmp[i] = std::sqrt(2.0f * variance * weights[i] / weightSum);
+}
+
+static void UploadWaveSpectrum(GLuint prog) {
+  glUniform2fv(glGetUniformLocation(prog, "uWaveDir"), kWaveCount, gWaveDir);
+  glUniform1fv(glGetUniformLocation(prog, "uWaveK"), kWaveCount, gWaveK);
+  glUniform1fv(glGetUniformLocation(prog, "uWaveAmp"), kWaveCount, gWaveAmp);
+  glUniform1fv(glGetUniformLocation(prog, "uWaveOmega"), kWaveCount, gWaveOmega);
+  glUniform1fv(glGetUniformLocation(prog, "uWavePhase"), kWaveCount, gWavePhase);
+}
 
 
 static const float kCloudDrift[MAX_CLOUDS] = {-0.0025f, 0.0032f, -0.0018f, 0.0022f, -0.0027f, 0.0015f, 0.0020f, -0.0015f, 0.0012f};
@@ -417,6 +486,9 @@ static double gResultsShownAt = 0.0;
 static const double kResultsScreenSeconds = 4.0;
 static const char *gSceneName = "Scene 2";
 double gFusedTideScore = 0.0;
+double gFusedTideFps = 0.0;
+static framestats::Stats gStats;
+static framestats::GpuTimer gGpu;
 static bool gFusedDone = false;
 static bool gStandaloneScene = false;
 static int gFrame = 0, gFps = 0, gFrameAccum = 0;
@@ -649,6 +721,9 @@ static void RenderText(float x, float y, const char *text, float scale = 2.0f) {
 
 // ------------------------------------------------------------------- setup
 static void Setup() {
+  BuildWaveSpectrum();
+  gStats.Reset();
+  gGpu.Init();
   BuildSeaMesh();
   BuildDomeMesh();
   BuildFontAtlas();
@@ -721,6 +796,8 @@ static void DrawSea(const Mat4 &view, double timeSec, const Vec3 &eye) {
   glActiveTexture(GL_TEXTURE2);
   glBindTexture(GL_TEXTURE_2D, gFoamTex);
   glUniform1i(gSeaProg.loc("uFoamTex"), 2);
+
+  UploadWaveSpectrum(gSeaProg.handle);
 
   glUniform1i(gSeaProg.loc("uCloudCount"), MAX_CLOUDS);
   glUniform1fv(gSeaProg.loc("uCloudAzim"), MAX_CLOUDS, gCloudAzimDrift);
@@ -825,6 +902,7 @@ static void RenderScene() {
   DumpEnvFacesOnce();
 
   // ---- pass 2: main framebuffer (HDR camera target when available) ----
+  gGpu.Begin();
   const bool hdr = postproc::Begin(gPost, gWindowWidth, gWindowHeight);
   glViewport(0, 0, gWindowWidth, gWindowHeight);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -832,6 +910,8 @@ static void RenderScene() {
   DrawSkyScreen(view, eye);
   DrawSea(view, gSceneTime, eye);
   if (hdr) postproc::End(gPost, gPostSettings, t);
+  gGpu.End();
+  gGpu.Collect();
   RenderHUD();
 
     if (gScreenshotPath && gNextShot < gShotTimes.size() &&
@@ -849,7 +929,15 @@ static void RenderScene() {
   // ---- fps + benchmark timer ----
   gFrame++;
   gFrameAccum++;
+  static double lastFrameTime = -1.0;
+  double frameDt = lastFrameTime < 0.0 ? 0.0 : now - lastFrameTime;
+  lastFrameTime = now;
+  gStats.Add(frameDt);
   double dt = now - gFpsTimer;
+  if (gTimingsVerbose && dt >= 1.0)
+    std::printf("  [timings] scene 2: %d frames in %.2fs, %.2f ms/frame, GPU %.2f ms\n",
+                gFrameAccum, dt, 1000.0 * dt / (gFrameAccum > 0 ? gFrameAccum : 1),
+                gGpu.LastMs());
   if (dt >= 1.0) {
     gFps = (int)std::lround(gFrameAccum / dt);
     double inst = gFrameAccum / dt;
@@ -866,8 +954,14 @@ static void RenderScene() {
     double score = fps * fps * 2.0;
     std::printf("Benchmark Results - Time : %.1fs, Average FPS : %.1f, Score : %.0f\n",
                 elapsed, fps, score);
+    gStats.Print("scene 2");
+    if (gGpu.Samples() > 0)
+      std::printf("GPU timing (scene 2): average %.2f ms/frame, CPU submit %.2f ms/frame\n",
+                  gGpu.AverageMs(),
+                  1000.0 / (fps > 0.0 ? fps : 1.0) - gGpu.AverageMs());
     std::fflush(stdout);
-    gFusedTideScore = score; 
+    gFusedTideScore = score;
+    gFusedTideFps = fps;
     gResultsElapsed = elapsed;
     gResultsFps = fps;
     gResultsScore = score;

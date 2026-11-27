@@ -21,6 +21,7 @@
 #endif
 
 #include "../lib/asset_path.hxx"
+#include "../lib/framestats.hxx"
 #include "post.hxx"
 
 extern bool gWindowedMode;
@@ -266,14 +267,31 @@ struct Mesh {
 };
 
 // Interleaved: position(3), normal(3), tangent(4), uv(2) -- 12 floats.
-// The vertices are welded per (position, uv, normal) corner, so the mesh has to
-// be drawn through the index buffer built alongside them; drawing the array in
-// order would connect corners from unrelated triangles.
+// The vertices are welded per (position, uv, normal, material) corner, so the
+// mesh has to be drawn through the index buffer built alongside them; drawing
+// the array in order would connect corners from unrelated triangles.
+//
+// The MP5 is a multi-material model: five parts, each with its own six maps.
+// Triangles are grouped by material into contiguous index ranges, and each
+// range is drawn with that part's textures (still instanced over the rings).
+struct GunMaterial {
+  GLuint base = 0, normal = 0, metal = 0, height = 0, ao = 0, rough = 0;
+};
+
+struct GunSubMesh {
+  int indexOffset = 0;
+  int indexCount = 0;
+  int material = 0;
+};
+
 struct GunMesh {
   GLuint vao = 0, vbo = 0, ebo = 0;
   int vertexCount = 0;
   int indexCount = 0;
   float length = 0.55f;
+  std::vector<GunSubMesh> submeshes;
+  std::vector<GunMaterial> materials;
+  std::vector<std::string> materialNames;
 };
 
 static GunMesh LoadGunMesh(const char *path, float targetLength) {
@@ -285,8 +303,20 @@ static GunMesh LoadGunMesh(const char *path, float targetLength) {
   std::vector<Vec3> positions;
   std::vector<float> uvs;   // 2 per entry
   std::vector<Vec3> normals;
-  struct Tri { int p[3]; int t[3]; int n[3]; };
+  struct Tri { int p[3]; int t[3]; int n[3]; int mat; };
   std::vector<Tri> tris;
+  std::vector<std::string> materialNames;
+  std::map<std::string, int> materialIndex;
+  std::string currentMaterial;
+
+  auto materialFor = [&](const std::string &name) {
+    auto it = materialIndex.find(name);
+    if (it != materialIndex.end()) return it->second;
+    int index = (int)materialNames.size();
+    materialIndex.emplace(name, index);
+    materialNames.push_back(name);
+    return index;
+  };
 
   char line[1024];
   while (std::fgets(line, sizeof(line), f)) {
@@ -299,6 +329,10 @@ static GunMesh LoadGunMesh(const char *path, float targetLength) {
     } else if (line[0] == 'v' && line[1] == 'n') {
       float x, y, z;
       if (std::sscanf(line, "vn %f %f %f", &x, &y, &z) == 3) normals.push_back(V3(x, y, z));
+    } else if (line[0] == 'u' && std::strncmp(line, "usemtl", 6) == 0) {
+      char name[128] = {0};
+      std::sscanf(line + 6, " %127[^\r\n]", name);
+      currentMaterial = name;
     } else if (line[0] == 'f' && line[1] == ' ') {
       int vi[4] = {0, 0, 0, 0}, ti[4] = {0, 0, 0, 0}, ni[4] = {0, 0, 0, 0};
       int count = 0;
@@ -316,11 +350,16 @@ static GunMesh LoadGunMesh(const char *path, float targetLength) {
         count++;
         while (*p && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r') p++;
       }
+      // Faces before any usemtl still belong somewhere; give them the first
+      // material so the draw loop never sees an unknown index.
+      if (materialNames.empty() && currentMaterial.empty()) currentMaterial = "MP5 Part 1";
+      const int mat = materialFor(currentMaterial);
       for (int k = 1; k + 1 < count; k++) {
         Tri t;
         t.p[0] = vi[0]; t.p[1] = vi[k]; t.p[2] = vi[k + 1];
         t.t[0] = ti[0]; t.t[1] = ti[k]; t.t[2] = ti[k + 1];
         t.n[0] = ni[0]; t.n[1] = ni[k]; t.n[2] = ni[k + 1];
+        t.mat = mat;
         tris.push_back(t);
       }
     }
@@ -337,24 +376,42 @@ static GunMesh LoadGunMesh(const char *path, float targetLength) {
     mx.x = std::fmax(mx.x, p.x); mx.y = std::fmax(mx.y, p.y); mx.z = std::fmax(mx.z, p.z);
   }
   const float cx = (mn.x + mx.x) * 0.5f;
-  const float scale = targetLength / std::fmax(mx.x - mn.x, 1e-5f);
   const float cz = (mn.z + mx.z) * 0.5f;
+  const float scale = targetLength / std::fmax(mx.z - mn.z, 1e-5f);
+  // The MP5 is modelled along Z with the muzzle at -Z. Rotate -90 degrees
+  // about Y ((-z, y, x)) so the barrel points along +X like the old UZI mesh
+  // did, then centre it and sit it on y = 0.
   auto xf = [&](const Vec3 &p) {
-    return V3((p.x - cx) * scale, (p.y - mn.y) * scale, (p.z - cz) * scale);
+    return V3(-(p.z - cz) * scale, (p.y - mn.y) * scale, (p.x - cx) * scale);
   };
-  auto xfN = [](const Vec3 &n) { return V3Norm(V3(-n.x, -n.y, -n.z)); };
+  auto xfN = [](const Vec3 &n) { return V3Norm(V3(-n.z, n.y, n.x)); };
 
   GunMesh mesh;
-  mesh.length = (mx.x - mn.x) * scale;
+  mesh.length = targetLength;
+  mesh.materialNames = materialNames;
+  mesh.materials.resize(materialNames.size());
+
+  // Group by material so each part is one contiguous index range.
+  std::stable_sort(tris.begin(), tris.end(),
+                   [](const Tri &a, const Tri &b) { return a.mat < b.mat; });
 
   std::vector<float> out;
   std::vector<unsigned int> indices;
-  std::map<std::tuple<int, int, int>, int> index;
+  std::map<std::tuple<int, int, int, int>, int> index;
   std::vector<Vec3> tanAccum;
   std::vector<Vec3> bitAccum;
-  std::vector<float> handedness;
+  int lastMaterial = -1;
+  int rangeStart = 0;
 
   for (const Tri &tri : tris) {
+    if (tri.mat != lastMaterial) {
+      if (lastMaterial >= 0)
+        mesh.submeshes.push_back(
+            {rangeStart, (int)indices.size() - rangeStart, lastMaterial});
+      lastMaterial = tri.mat;
+      rangeStart = (int)indices.size();
+    }
+
     Tri c = tri;
     std::swap(c.p[1], c.p[2]);
     std::swap(c.t[1], c.t[2]);
@@ -382,7 +439,10 @@ static GunMesh LoadGunMesh(const char *path, float targetLength) {
     }
 
     for (int i = 0; i < 3; i++) {
-      auto key = std::make_tuple(c.p[i], c.t[i], c.n[i]);
+      // The material is part of the weld key: two parts that share a UV seam
+      // must not share vertices, or one of them would inherit the other's
+      // texture coordinates.
+      auto key = std::make_tuple(c.p[i], c.t[i], c.n[i], c.mat);
       auto it = index.find(key);
       int idx;
       if (it == index.end()) {
@@ -395,7 +455,6 @@ static GunMesh LoadGunMesh(const char *path, float targetLength) {
         out.push_back(uv[i][0]); out.push_back(uv[i][1]);
         tanAccum.push_back(V3(0, 0, 0));
         bitAccum.push_back(V3(0, 0, 0));
-        handedness.push_back(1.0f);
       } else {
         idx = it->second;
       }
@@ -404,6 +463,9 @@ static GunMesh LoadGunMesh(const char *path, float targetLength) {
       indices.push_back((unsigned int)idx);
     }
   }
+  if (lastMaterial >= 0)
+    mesh.submeshes.push_back({rangeStart, (int)indices.size() - rangeStart, lastMaterial});
+
   for (size_t i = 0; i < tanAccum.size(); i++) {
     Vec3 n = V3((out[i * 12 + 3]), out[i * 12 + 4], out[i * 12 + 5]);
     Vec3 t = V3Sub(tanAccum[i], V3Scale(n, V3Dot(n, tanAccum[i])));
@@ -417,7 +479,6 @@ static GunMesh LoadGunMesh(const char *path, float targetLength) {
     out[i * 12 + 7] = t.y;
     out[i * 12 + 8] = t.z;
     out[i * 12 + 9] = w;
-    (void)handedness;
   }
 
   mesh.vertexCount = (int)(out.size() / 12);
@@ -442,6 +503,16 @@ static GunMesh LoadGunMesh(const char *path, float targetLength) {
   glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, stride, (void *)(10 * sizeof(float)));
   glBindVertexArray(0);
   return mesh;
+}
+
+// "MP5 Part 1" -> "Part1", "MP5 Mag" -> "Mag": the texture file stems.
+static std::string MaterialStem(const std::string &name) {
+  std::string s = name;
+  if (s.rfind("MP5 ", 0) == 0) s = s.substr(4);
+  std::string out;
+  for (char c : s)
+    if (c != ' ') out += c;
+  return out;
 }
 
 // position(3), normal(3), uv(2) -- 8 floats.
@@ -577,9 +648,8 @@ static Program gGunProg, gFloorProg, gWallProg, gBeamProg, gEmissiveProg,
     gShadowProg, gHudProg;
 
 static GunMesh gGun;
+static GLuint gGunInstanceVbo = 0; // one model matrix per gun, drawn instanced
 static Mesh gFloor, gWall, gCone, gBar;
-static GLuint gTexBase = 0, gTexNormal = 0, gTexMetal = 0, gTexHeight = 0,
-              gTexAO = 0, gTexRough = 0;
 static GLuint gFontTex = 0;
 static GLuint gShadowFbo = 0, gShadowTex = 0;
 static GLuint gReflectFbo = 0, gReflectTex = 0, gReflectDepth = 0;
@@ -634,6 +704,9 @@ static double gResultsElapsed = 0.0, gResultsFps = 0.0, gResultsScore = 0.0;
 static double gResultsShownAt = 0.0;
 static const double kResultsScreenSeconds = 4.0;
 double gFusedOgScore = 0.0; // read by main.cxx for the combined results screen
+double gFusedOgFps = 0.0;
+static framestats::Stats gStats;
+static framestats::GpuTimer gGpu;
 
 static void RenderHUD();
 static void RenderResults();
@@ -779,19 +852,53 @@ static void UploadFrameUniforms(Program &p) {
 }
 
 // --------------------------------------------------------------- render bits
-static void DrawGuns(const Mat4 &viewProj, bool reflection) {
-  float carousel = gFrameState.t * 0.045f;
+// One instance matrix per gun, rebuilt once a frame: the carousel angle moves
+// every gun, but they all share geometry, so the whole ring set is a single
+// instanced draw call instead of 110.
+static void UploadGunInstances() {
+  const float carousel = gFrameState.t * 0.045f;
+  std::vector<float> data;
+  data.reserve(gGuns.size() * 16);
   for (const GunInstance &g : gGuns) {
     float a = g.angle + carousel + g.yawOffset;
     Vec3 pos = V3(std::cos(a) * g.radius, 0.0015f, std::sin(a) * g.radius);
     Mat4 model;
     Mat4Model(model, pos, kPi - a, 0.0f, V3(1, 1, 1));
-    glUseProgram(gGunProg.handle);
-    gGunProg.m4("uModel", model);
-    gGunProg.m4("uViewProj", viewProj);
-    (void)reflection;
-    glBindVertexArray(gGun.vao);
-    glDrawElements(GL_TRIANGLES, gGun.indexCount, GL_UNSIGNED_INT, (void *)0);
+    data.insert(data.end(), model.begin(), model.end());
+  }
+  glBindBuffer(GL_ARRAY_BUFFER, gGunInstanceVbo);
+  glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(data.size() * sizeof(float)),
+               data.data(), GL_DYNAMIC_DRAW);
+}
+
+static void BindGunMaterial(const GunMaterial &mat) {
+  glActiveTexture(GL_TEXTURE0);
+  glBindTexture(GL_TEXTURE_2D, mat.base);
+  glActiveTexture(GL_TEXTURE1);
+  glBindTexture(GL_TEXTURE_2D, mat.normal);
+  glActiveTexture(GL_TEXTURE2);
+  glBindTexture(GL_TEXTURE_2D, mat.metal);
+  glActiveTexture(GL_TEXTURE3);
+  glBindTexture(GL_TEXTURE_2D, mat.height);
+  glActiveTexture(GL_TEXTURE4);
+  glBindTexture(GL_TEXTURE_2D, mat.ao);
+  glActiveTexture(GL_TEXTURE5);
+  glBindTexture(GL_TEXTURE_2D, mat.rough);
+  glActiveTexture(GL_TEXTURE0);
+}
+
+static void DrawGuns(const Mat4 &viewProj, bool reflection) {
+  (void)reflection;
+  glUseProgram(gGunProg.handle);
+  gGunProg.m4("uViewProj", viewProj);
+  glBindVertexArray(gGun.vao);
+  // One instanced draw per material part (five for the MP5), not per gun.
+  for (const GunSubMesh &sm : gGun.submeshes) {
+    BindGunMaterial(gGun.materials[sm.material]);
+    glDrawElementsInstanced(
+        GL_TRIANGLES, sm.indexCount, GL_UNSIGNED_INT,
+        (void *)((size_t)sm.indexOffset * sizeof(unsigned int)),
+        (GLsizei)gGuns.size());
   }
   glBindVertexArray(0);
 }
@@ -923,18 +1030,37 @@ static void Setup() {
   BuildLayout();
   BuildFontAtlas();
 
-  gGun = LoadGunMesh(resolveAssetPath("assets/UZI.obj").c_str(), 0.55f);
+  gGun = LoadGunMesh(resolveAssetPath("assets/MP5.obj").c_str(), 0.62f);
+  // Each material part carries its own six-map set (base colour, normal,
+  // metallic, height, AO, roughness). The stems come from the MTL's material
+  // names: "MP5 Part 1" -> MP5_Part1_*.png.
+  for (size_t i = 0; i < gGun.materialNames.size(); i++) {
+    const std::string stem = MaterialStem(gGun.materialNames[i]);
+    const std::string prefix = "assets/MP5_" + stem + "_";
+    GunMaterial &mat = gGun.materials[i];
+    mat.base = LoadPngTexture(resolveAssetPath((prefix + "BaseColor.png").c_str()).c_str(), true);
+    mat.normal = LoadPngTexture(resolveAssetPath((prefix + "Normal.png").c_str()).c_str(), false);
+    mat.metal = LoadPngTexture(resolveAssetPath((prefix + "Metallic.png").c_str()).c_str(), false);
+    mat.height = LoadPngTexture(resolveAssetPath((prefix + "Height.png").c_str()).c_str(), false);
+    mat.ao = LoadPngTexture(resolveAssetPath((prefix + "AO.png").c_str()).c_str(), false);
+    mat.rough = LoadPngTexture(resolveAssetPath((prefix + "Roughness.png").c_str()).c_str(), false);
+  }
+  glGenBuffers(1, &gGunInstanceVbo);
+  glBindVertexArray(gGun.vao);
+  glBindBuffer(GL_ARRAY_BUFFER, gGunInstanceVbo);
+  glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(gGuns.size() * 16 * sizeof(float)),
+               nullptr, GL_DYNAMIC_DRAW);
+  for (int i = 0; i < 4; i++) {
+    glEnableVertexAttribArray(4 + i);
+    glVertexAttribPointer(4 + i, 4, GL_FLOAT, GL_FALSE, 16 * sizeof(float),
+                          (void *)(i * 4 * sizeof(float)));
+    glVertexAttribDivisor(4 + i, 1);
+  }
+  glBindVertexArray(0);
   gFloor = BuildDisc(40.0f, 40, 192);
   gWall = BuildCylinderWall(26.0f, 18.0f, 192, 10);
   gCone = BuildCone(64);
   gBar = BuildBox();
-
-  gTexBase = LoadPngTexture(resolveAssetPath("assets/UZI_BaseColor.png").c_str(), true);
-  gTexNormal = LoadPngTexture(resolveAssetPath("assets/UZI_Normal.png").c_str(), false);
-  gTexMetal = LoadPngTexture(resolveAssetPath("assets/UZI_Metallic.png").c_str(), false);
-  gTexHeight = LoadPngTexture(resolveAssetPath("assets/UZI_Height.png").c_str(), false);
-  gTexAO = LoadPngTexture(resolveAssetPath("assets/UZI_AO.png").c_str(), false);
-  gTexRough = LoadPngTexture(resolveAssetPath("assets/UZI_Roughness.png").c_str(), false);
 
   glGenVertexArrays(1, &gHudVao);
   glGenBuffers(1, &gHudVbo);
@@ -1026,22 +1152,6 @@ static void UpdateCamera(float t) {
   Mat4Multiply(gCam.viewProj, gCam.proj, gCam.view);
 }
 
-static void BindGunTextures() {
-  glActiveTexture(GL_TEXTURE0);
-  glBindTexture(GL_TEXTURE_2D, gTexBase);
-  glActiveTexture(GL_TEXTURE1);
-  glBindTexture(GL_TEXTURE_2D, gTexNormal);
-  glActiveTexture(GL_TEXTURE2);
-  glBindTexture(GL_TEXTURE_2D, gTexMetal);
-  glActiveTexture(GL_TEXTURE3);
-  glBindTexture(GL_TEXTURE_2D, gTexHeight);
-  glActiveTexture(GL_TEXTURE4);
-  glBindTexture(GL_TEXTURE_2D, gTexAO);
-  glActiveTexture(GL_TEXTURE5);
-  glBindTexture(GL_TEXTURE_2D, gTexRough);
-  glActiveTexture(GL_TEXTURE0);
-}
-
 static void RenderShadowMap() {
   glBindFramebuffer(GL_FRAMEBUFFER, gShadowFbo);
   glViewport(0, 0, kShadowSize, kShadowSize);
@@ -1052,17 +1162,10 @@ static void RenderShadowMap() {
   glEnable(GL_POLYGON_OFFSET_FILL);
   glPolygonOffset(2.0f, 4.0f);
 
-  float carousel = gFrameState.t * 0.045f;
-  for (const GunInstance &g : gGuns) {
-    float a = g.angle + carousel + g.yawOffset;
-    Vec3 pos = V3(std::cos(a) * g.radius, 0.0015f, std::sin(a) * g.radius);
-    Mat4 model;
-    Mat4Model(model, pos, kPi - a, 0.0f, V3(1, 1, 1));
-    gShadowProg.m4("uModel", model);
-    gShadowProg.m4("uLightVP", gFrameState.lightVP);
-    glBindVertexArray(gGun.vao);
-    glDrawElements(GL_TRIANGLES, gGun.indexCount, GL_UNSIGNED_INT, (void *)0);
-  }
+  gShadowProg.m4("uLightVP", gFrameState.lightVP);
+  glBindVertexArray(gGun.vao);
+  glDrawElementsInstanced(GL_TRIANGLES, gGun.indexCount, GL_UNSIGNED_INT,
+                          (void *)0, (GLsizei)gGuns.size());
   glBindVertexArray(0);
 
   glDisable(GL_POLYGON_OFFSET_FILL);
@@ -1083,8 +1186,6 @@ static void RenderReflection() {
   glClearColor(0.004f, 0.005f, 0.008f, 1.0f);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
   glClearColor(0.006f, 0.007f, 0.010f, 1.0f);
-
-  BindGunTextures();
 
   // mirroring flips the winding
   glFrontFace(GL_CW);
@@ -1132,7 +1233,8 @@ static void RenderScene() {
 
   static double lastFrame = -1.0;
   if (lastFrame < 0.0) lastFrame = now;
-  double dt = now - lastFrame;
+  double rawDt = now - lastFrame;
+  double dt = rawDt;
   lastFrame = now;
   if (dt > 0.1) dt = 0.1;
   gSimTime += dt;
@@ -1140,8 +1242,10 @@ static void RenderScene() {
   const float t = (float)gSimTime;
   UpdateCamera(t);
   UpdateFrame(t);
+  UploadGunInstances();
 
   // ---- shadow map ------------------------------------------------------
+  gGpu.Begin();
   RenderShadowMap();
 
   // ---- planar reflection ----------------------------------------------
@@ -1157,7 +1261,6 @@ static void RenderScene() {
   glBindTexture(GL_TEXTURE_2D, gShadowTex);
   glActiveTexture(GL_TEXTURE7);
   glBindTexture(GL_TEXTURE_2D, gReflectTex);
-  BindGunTextures();
 
   // wall
   glUseProgram(gWallProg.handle);
@@ -1208,6 +1311,8 @@ static void RenderScene() {
 
   glBindVertexArray(0);
   if (hdr) postproc::End(gPost, gPostSettings, t);
+  gGpu.End();
+  gGpu.Collect();
   RenderHUD();
 
   if (gScreenshotPath && gNextShot < gShotTimes.size() &&
@@ -1224,6 +1329,12 @@ static void RenderScene() {
 
   gFrameCount++;
   gFrameAccum++;
+  gStats.Add(rawDt);
+  if (gTimingsVerbose && now - gFpsTimer >= 1.0)
+    std::printf("  [timings] scene 1: %d frames in %.2fs, %.2f ms/frame, GPU %.2f ms\n",
+                gFrameAccum, now - gFpsTimer,
+                1000.0 * (now - gFpsTimer) / (gFrameAccum > 0 ? gFrameAccum : 1),
+                gGpu.LastMs());
   if (now - gFpsTimer >= 1.0) {
     double inst = gFrameAccum / (now - gFpsTimer);
     gFps = (int)std::lround(inst);
@@ -1242,8 +1353,14 @@ static void RenderScene() {
     double score = fps * fps * 2.0;
     std::printf("Benchmark Results - Time : %.1fs, Average FPS : %.1f, Score : %.0f\n",
                 elapsed, fps, score);
+    gStats.Print("scene 1");
+    if (gGpu.Samples() > 0)
+      std::printf("GPU timing (scene 1): average %.2f ms/frame, CPU submit %.2f ms/frame\n",
+                  gGpu.AverageMs(),
+                  1000.0 / (fps > 0.0 ? fps : 1.0) - gGpu.AverageMs());
     std::fflush(stdout);
     gFusedOgScore = score;
+    gFusedOgFps = fps;
     gResultsElapsed = elapsed;
     gResultsFps = fps;
     gResultsScore = score;
@@ -1421,6 +1538,18 @@ int RunGunScene(bool *gaveUpOut) {
                                    SDL_WINDOW_RESIZABLE |
                                    BenchCreateFullscreenFlag());
     if (!gWindow) {
+      // Some drivers expose no 4x-multisample visual at all, and then the
+      // window never comes up rather than the context failing: retry once
+      // without MSAA before giving up on the scene. (The scene renders into
+      // its own MSAA HDR target anyway, so the window samples are only a
+      // fallback for the direct-to-window path.)
+      if (attempt == 0) {
+        std::printf("No multisampled visual (%s) - retrying without MSAA\n",
+                    SDL_GetError());
+        std::fflush(stdout);
+        msaa = false;
+        continue;
+      }
       std::fprintf(stderr, "Window could not be created! SDL_Error: %s\n",
                    SDL_GetError());
       return EXIT_FAILURE;
@@ -1477,6 +1606,8 @@ int RunGunScene(bool *gaveUpOut) {
   gQuit = false;
   gFrameCount = 0;
   gFrameAccum = 0;
+  gStats.Reset();
+  gGpu.Init();
   gFps = 0;
   gSmoothFps = 0.0;
 

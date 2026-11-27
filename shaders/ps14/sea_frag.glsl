@@ -29,6 +29,15 @@ uniform vec3  uSunDir;
 uniform vec3  uWaterColor;
 uniform float uHdrOut;
 
+// Spectral wave set shared with sea_vert.glsl (Phillips amplitudes, deep-water
+// dispersion, uploaded once from the scene's C++ side).
+#define WAVE_COUNT 16
+uniform vec2  uWaveDir[WAVE_COUNT];
+uniform float uWaveK[WAVE_COUNT];
+uniform float uWaveAmp[WAVE_COUNT];
+uniform float uWaveOmega[WAVE_COUNT];
+uniform float uWavePhase[WAVE_COUNT];
+
 #define MAX_CLOUDS 9
 uniform int   uCloudCount;
 uniform float uCloudAzim[MAX_CLOUDS];
@@ -51,36 +60,62 @@ float bandFade(float k, float dist) {
     return smoothstep(1.5, 4.0, lambda / max(dist * kWavePixelAngle, 1e-3));
 }
 
-// One component: h = A (c + 0.35 c|c|) for sharp=true, plain sine otherwise.
-// dh/dp = A (1 + 0.7|c|) cos(phase) d k for the sharp form.
-void addWave(vec2 p, float t, vec2 d, float k, float a, float s, float fade,
-             bool sharp, inout float h, inout vec2 g) {
-    if (fade <= 0.0) return;
-    float phase = dot(p, d) * k + t * s;
-    float c = sin(phase);
-    if (sharp) {
-        h += a * fade * (c + 0.16 * c * abs(c));
-        g += d * (k * a * fade * (1.0 + 0.32 * abs(c)) * cos(phase));
-    } else {
-        h += a * fade * c;
-        g += d * (k * a * fade * cos(phase));
-    }
-}
-
+// Exact height and gradient of the uploaded spectral field. The crest
+// sharpening term (s + 0.10 s|s|) is monotonic, so no wave saturates into a
+// flat mirror plate.
 vec2 waveGrad(vec2 p, float t, float dist, out float height) {
     vec2 g = vec2(0.0);
     float h = 0.0;
-    addWave(p, t, vec2(0.52, 0.30),  0.045, 2.10, 0.42, 1.0, false, h, g);
-    addWave(p, t, vec2(0.10, -0.49), 0.075, 1.30, 0.55, 1.0, false, h, g);
-    addWave(p, t, vec2(0.98, 0.20),  0.170, 1.45, 1.30, bandFade(0.170, dist), true, h, g);
-    addWave(p, t, vec2(-0.64, 0.77), 0.240, 0.85, 1.60, bandFade(0.240, dist), true, h, g);
-    addWave(p, t, vec2(0.36, -0.93), 0.380, 0.55, 2.10, bandFade(0.380, dist), false, h, g);
-    addWave(p, t, vec2(-0.91, -0.42), 0.540, 0.34, 2.70, bandFade(0.540, dist), false, h, g);
-    addWave(p, t, vec2(0.71, -0.70), 0.620, 0.28, 2.95, bandFade(0.620, dist), false, h, g);
-    addWave(p, t, vec2(0.59, 0.81),  0.860, 0.20, 3.40, bandFade(0.860, dist), false, h, g);
-    addWave(p, t, vec2(-0.20, 0.98), 1.450, 0.11, 4.40, bandFade(1.450, dist), false, h, g);
+    for (int i = 0; i < WAVE_COUNT; i++) {
+        float k = uWaveK[i];
+        float fade = bandFade(k, dist);
+        if (fade <= 0.0) continue;
+        float a = uWaveAmp[i] * fade;
+        float phase = dot(p, uWaveDir[i]) * k + t * uWaveOmega[i] + uWavePhase[i];
+        float s = sin(phase);
+        h += a * (s + 0.10 * s * abs(s));
+        g += uWaveDir[i] * (k * a * (1.0 + 0.20 * abs(s)) * cos(phase));
+    }
     height = h;
     return g;
+}
+
+// The six longest components only: the reflection march evaluates the height
+// field many times per pixel, and the short chop barely changes where a ray
+// strikes the surface.
+vec2 waveGradCheap(vec2 p, float t, out float height) {
+    vec2 g = vec2(0.0);
+    float h = 0.0;
+    for (int i = 0; i < 6; i++) {
+        float k = uWaveK[i];
+        float a = uWaveAmp[i];
+        float phase = dot(p, uWaveDir[i]) * k + t * uWaveOmega[i] + uWavePhase[i];
+        float s = sin(phase);
+        h += a * (s + 0.10 * s * abs(s));
+        g += uWaveDir[i] * (k * a * (1.0 + 0.20 * abs(s)) * cos(phase));
+    }
+    height = h;
+    return g;
+}
+
+// Screen-space sea reflection: march the reflected ray through the analytic
+// height field. A crest that the ray strikes is what the surface reflects,
+// which a sky cubemap on its own can never show. Returns a hit weight and the
+// normal at the hit so the caller can sample the sky about it.
+float marchSea(vec3 origin, vec3 R, float t, out vec3 hitNormal) {
+    hitNormal = vec3(0.0, 1.0, 0.0);
+    float stepLen = 0.55;
+    for (int i = 0; i < 10; i++) {
+        vec3 p = origin + R * stepLen;
+        float h;
+        vec2 g = waveGradCheap(p.xz, t, h);
+        if (p.y <= h) {
+            hitNormal = normalize(vec3(-g.x, 1.0, -g.y));
+            return 1.0 - (float(i) / 10.0) * 0.55;
+        }
+        stepLen *= 1.32;
+    }
+    return 0.0;
 }
 
 // Sub-grid detail: only where the pixel footprint can still resolve it, so it
@@ -230,6 +265,16 @@ void main() {
     reflColor *= reflVis;
     reflColor = min(reflColor, vec3(0.22));
 
+    // ---- screen-space reflection of the sea itself -----------------------
+    vec3 hitNormal;
+    float hit = marchSea(vWorld, R, uTime, hitNormal);
+    if (hit > 0.0) {
+        vec3 R2 = reflect(-V, hitNormal);
+        R2.y = max(R2.y, 0.002);
+        vec3 hitCol = textureLod(uSkyEnvTex, R2, lod + 1.0).rgb * 0.55;
+        reflColor = mix(reflColor, min(hitCol, vec3(0.30)), hit * 0.45);
+    }
+
     float fresnel = kWaterF0 + (1.0 - kWaterF0) * pow(1.0 - NoV, 5.0);
     fresnel = clamp(fresnel, 0.0, 0.80);
 
@@ -273,21 +318,26 @@ void main() {
                                     + pathGlow) * shadow;
     glintCol = min(glintCol, vec3(1.6));
 
-    // ---- foam: only where crests really break ------------------------------
+    // ---- foam: crest tips, and the trail they leave behind ------------------
     // A whitecap is the tip of a sharp crest, not a wash over a whole face:
     // require a high crest AND a steep face, then let the noise thin it to
-    // patches, which is what keeps this from painting the swell.
-    float crest = smoothstep(3.95, 4.75, hC);
-    float steep = smoothstep(0.85, 1.45, length(grad));
+    // patches. The third sample is advected with the dominant swell, so a
+    // breaking crest drags a pale streak behind it instead of stamping a
+    // stationary patch of white onto the water.
+    float crest = smoothstep(4.30, 6.00, hC);
+    float steep = smoothstep(0.95, 1.60, length(grad));
     float chaos = texture(uRippleTex, vUV * 640.0 + vec2(uTime * 0.011, -uTime * 0.007)).g;
-    float foamTex = texture(uFoamTex, vUV * 31.0 + vec2(uTime * 0.010, 0.0)).r;
-    foamTex *= texture(uFoamTex, vUV * 53.0 - vec2(0.0, uTime * 0.013)).g;
+    vec2 adv = vec2(0.52, 0.30) * (uTime * 0.055);
+    float foamTex = texture(uFoamTex, vUV * 31.0 + adv + vec2(uTime * 0.010, 0.0)).r;
+    foamTex *= texture(uFoamTex, vUV * 53.0 + adv * 1.7 - vec2(0.0, uTime * 0.013)).g;
+    float trail = texture(uFoamTex, vUV * 9.0 + adv * 0.35).r;
+    foamTex = clamp(foamTex * 1.25 + trail * 0.55 * crest, 0.0, 1.0);
     float foam = crest * steep * smoothstep(0.20, 0.85, NoL)
                * (0.15 + 0.85 * chaos) * foamTex;
     foam *= mix(0.45, 1.0, shadow) * exp(-dist * 0.0013);
-    vec3 foamColor = vec3(0.55, 0.52, 0.52) * (0.20 + 0.80 * NoL)
-                   + sunTint * 0.06 * NoL;
-    body = mix(body, foamColor, clamp(foam * 0.42, 0.0, 0.30));
+    vec3 foamColor = vec3(0.62, 0.60, 0.60) * (0.20 + 0.80 * NoL)
+                   + sunTint * 0.08 * NoL;
+    body = mix(body, foamColor, clamp(foam * 0.55, 0.0, 0.38));
 
     // ---- combine -----------------------------------------------------------
     vec3 color = mix(body, reflColor, fresnel) + glintCol;
