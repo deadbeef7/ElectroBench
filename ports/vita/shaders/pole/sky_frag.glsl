@@ -185,10 +185,12 @@ void main() {
     vec3 sky = skyRadiance(eyePos, dir, sun, viewT);
 
     // Amber dusk grade. Grading the whole sky here also grades the cubemap,
-    // so ambient light and reflections stay coherent.
-    float duskW = 0.92;
+    // so ambient light and reflections stay coherent. Pushed a little further
+    // than the PC grade: the phones have no MSAA and a smaller frame, so the
+    // lower sky needs to sit clearly in the orange rather than near it.
+    float duskW = 0.96;
     float skyLum = dot(sky, vec3(0.2126, 0.7152, 0.0722));
-    vec3 amber = vec3(2.05, 0.82, 0.26) * skyLum + vec3(0.075, 0.022, 0.003);
+    vec3 amber = vec3(2.18, 0.80, 0.22) * skyLum + vec3(0.085, 0.024, 0.002);
     sky = mix(sky, amber, duskW);
 
     // Below the horizon the ground geometry covers the frame; give the dome a
@@ -217,8 +219,8 @@ void main() {
             float transmit = exp(-tau);
 
             float phM = min(miePhase(mu, 0.72) * 4.0 * PI, 6.0);
-            vec3 sunCol = vec3(1.85, 0.82, 0.34) * viewT * kSunI * 0.20;
-            vec3 ambCol = vec3(0.44, 0.25, 0.135) * (0.55 + 0.45 * hf);
+            vec3 sunCol = vec3(2.00, 0.86, 0.30) * viewT * kSunI * 0.20;
+            vec3 ambCol = vec3(0.46, 0.24, 0.130) * (0.55 + 0.45 * hf);
 
             vec3 cloud = ambCol * (0.55 + 0.45 * hf);
             cloud += sunCol * (0.10 + 0.90 * transmit)
@@ -240,7 +242,7 @@ void main() {
     float veil = cirrus(dir);
     if (veil > 0.002) {
         float fwd = pow(max(mu, 0.0), 5.0);
-        vec3 cirCol = mix(vec3(0.34, 0.22, 0.18), vec3(1.20, 0.56, 0.26),
+        vec3 cirCol = mix(vec3(0.34, 0.21, 0.17), vec3(1.30, 0.54, 0.22),
                           0.18 + 0.82 * fwd);
         sky = mix(sky, cirCol * (0.55 + 0.45 * viewT.g), veil * 0.22);
     }

@@ -213,6 +213,32 @@ static bool gAutoCam = true;
 static Vec3 gCamPos{0.0f, 2.0f, 4.0f};
 static float gCamYaw = 0.0f, gCamPitch = -0.06f, gCamDist = 7.0f;
 
+// The cross street's centreline, measured along the corridor. It sits in the
+// gap between the 6th and 7th poles of both main lines, so no pole ends up
+// standing in the junction itself.
+static const float kCrossZ = 58.5f;
+
+// Looking up the corridor is the shot, except at the cross street: on the way
+// into the junction the eye swings left down the side road, then right down the
+// other arm, then back to the corridor and carries on. The angle is in radians
+// about the camera, positive toward +X (the east side of the run).
+static float CrossLookAngle(float t) {
+  const float kSpeed = 2.6f;
+  const float tMid = (kCrossZ - 4.0f) / kSpeed;   // when the eye reaches the junction
+  const float u = t - (tMid - 4.8f);              // 0 about five seconds before it
+  if (u <= 0.0f || u >= 11.6f) return 0.0f;
+  auto seg = [u](float a, float b) {
+    float f = (u - a) / (b - a);
+    f = std::min(std::max(f, 0.0f), 1.0f);
+    return f * f * (3.0f - 2.0f * f);
+  };
+  const float left = 1.32f;    // ~76 degrees down the far arm
+  const float right = -1.20f;  // and back across to the near one
+  if (u < 4.2f) return left * seg(0.4f, 3.8f);
+  if (u < 7.4f) return left + (right - left) * seg(4.2f, 7.0f);
+  return right * (1.0f - seg(7.6f, 11.2f));
+}
+
 static void UpdateAutoCamera(float t) {
   const float span = 161.0f;   // 13 spans of the 15-pole corridor
   float z = 4.0f + std::fmod(t * 2.6f, span);
@@ -272,9 +298,35 @@ static const float kPaintY = 0.050f;
 static const float kShadowY = 0.075f;
 static const float kKerbTopY = 0.190f;
 
+// The cross street is built in the corridor's own frame (street running along
+// +Z, road centred on local x = 0) and then rotated a quarter turn into place.
+// That way it reuses exactly the same pole hardware, houses, kerbs and span
+// logic as the main run instead of carrying a second rotated copy of all of
+// it - the rotation is applied as the vertices are pushed.
+static bool gXformOn = false;
+static float gXfS = 0.0f, gXfC = 1.0f, gXfPx = 0.0f, gXfPz = 0.0f;
+static void BeginCrossFrame(float px, float pz) {
+  gXformOn = true;
+  gXfS = 1.0f;   // +90 degrees: local +Z becomes world +X
+  gXfC = 0.0f;
+  gXfPx = px;
+  gXfPz = pz;
+}
+static void EndCrossFrame() { gXformOn = false; }
+static Vec3 XformPoint(const Vec3 &v) {
+  if (!gXformOn) return v;
+  return {gXfPx + v.x * gXfC + v.z * gXfS, v.y, gXfPz - v.x * gXfS + v.z * gXfC};
+}
+static Vec3 XformNormal(const Vec3 &n) {
+  if (!gXformOn) return n;
+  return {n.x * gXfC + n.z * gXfS, n.y, -n.x * gXfS + n.z * gXfC};
+}
+
 static void PushVert(const Vec3 &p, const Vec3 &n, const Vec3 &c,
                      float mat = kMatPaint, float alpha = 1.0f) {
-  gVerts.push_back({p.x, p.y, p.z, n.x, n.y, n.z, c.x, c.y, c.z, mat, alpha});
+  const Vec3 pp = XformPoint(p);
+  const Vec3 nn = XformNormal(n);
+  gVerts.push_back({pp.x, pp.y, pp.z, nn.x, nn.y, nn.z, c.x, c.y, c.z, mat, alpha});
 }
 static void AddCylinder(const Vec3 &base, const Vec3 &top, float rBase, float rTop,
                         int segs, const Vec3 &color, float mat = kMatPaint) {
@@ -927,7 +979,7 @@ static void AddHouse(float x, float z, float w, float d, float h, float face) {
   AddCylinder({anchor.x, anchor.y + 0.04f, anchor.z},
               {anchor.x, anchor.y + 0.17f, anchor.z}, 0.030f, 0.026f, 6,
               kCeramic, kMatCeramic);
-  gDropAnchors.push_back({anchor.x, anchor.y + 0.17f, anchor.z});
+  gDropAnchors.push_back(XformPoint({anchor.x, anchor.y + 0.17f, anchor.z}));
 }
 
 static void AddPropertyLine(float x, float z0, float z1, float mirror) {
@@ -1002,7 +1054,186 @@ static void AddTreeline() {
     AddBox({cx, hh * 0.30f, cz}, {hh * 1.7f, hh * 0.30f, hh * 1.2f},
            {0.215f, 0.185f, 0.175f}, kMatLeaf);
   }
-}static void BuildSceneGeometry() {
+}
+// ------------------------------------------------------------ cross street
+// A second street meets the corridor at kCrossZ: a road with its own kerbs and
+// centre line, a line of poles down each footpath, houses on both sides and its
+// own conductors, then spans tying its poles back into the corridor's. It is
+// laid out in the corridor's frame and rotated into place by PushVert.
+static void BuildCrossStreet(const std::vector<PoleSpec> &lineA,
+                             const std::vector<PoleSpec> &lineB) {
+  const float z0 = -62.0f, z1 = 62.0f;
+  std::vector<PoleSpec> nearLine, farLine;
+  BeginCrossFrame(kRoadX, kCrossZ);
+
+  {
+    const Vec3 n{0.0f, 1.0f, 0.0f};
+    const Vec3 road{0.130f, 0.136f, 0.152f};
+    unsigned int s = (unsigned int)gVerts.size();
+    PushVert({-kRoadHalf, kRoadY - 0.004f, z0}, n, road, kMatRoad);
+    PushVert({kRoadHalf, kRoadY - 0.004f, z0}, n, road, kMatRoad);
+    PushVert({kRoadHalf, kRoadY - 0.004f, z1}, n, road, kMatRoad);
+    PushVert({-kRoadHalf, kRoadY - 0.004f, z1}, n, road, kMatRoad);
+    gIdx.push_back(s); gIdx.push_back(s + 1); gIdx.push_back(s + 2);
+    gIdx.push_back(s); gIdx.push_back(s + 2); gIdx.push_back(s + 3);
+    // Kerbs run up to the mouth of the junction and stop, the way the
+    // corridor's own kerbs stop on either side of it.
+    for (int e = 0; e < 2; e++) {
+      float xc = e ? kRoadHalf + 0.16f : -kRoadHalf - 0.16f;
+      for (int seg = 0; seg < 2; seg++) {
+        float a = seg ? 5.0f : z0;
+        float b = seg ? z1 : -5.0f;
+        AddBox({xc, kKerbTopY * 0.5f, (a + b) * 0.5f},
+               {0.16f, kKerbTopY * 0.5f, (b - a) * 0.5f},
+               {0.245f, 0.238f, 0.225f}, kMatKerb);
+      }
+    }
+    const Vec3 paint{0.520f, 0.480f, 0.420f};
+    for (float z = z0; z < z1; z += 7.0f) {
+      if (std::fabs(z + 1.5f) < 5.0f) continue;
+      unsigned int ds = (unsigned int)gVerts.size();
+      PushVert({-0.09f, kPaintY, z}, n, paint, kMatLine);
+      PushVert({0.09f, kPaintY, z}, n, paint, kMatLine);
+      PushVert({0.09f, kPaintY, z + 3.0f}, n, paint, kMatLine);
+      PushVert({-0.09f, kPaintY, z + 3.0f}, n, paint, kMatLine);
+      gIdx.push_back(ds); gIdx.push_back(ds + 1); gIdx.push_back(ds + 2);
+      gIdx.push_back(ds); gIdx.push_back(ds + 2); gIdx.push_back(ds + 3);
+    }
+  }
+
+  for (int i = 0; i <= 8; i++) {
+    float z = -56.0f + 14.0f * i;
+    if (std::fabs(z) < 10.0f) continue;   // leave the junction mouth clear
+    nearLine.push_back({-6.0f, z, 8.6f + 0.3f * (float)(i % 3), (i % 3) != 1,
+                        i == 2, 0.09f * (float)((i * 7) % 3 - 1),
+                        0.07f * (float)((i * 5) % 3 - 1)});
+    farLine.push_back({5.4f, z, 8.3f + 0.2f * (float)((i * 5) % 3), (i % 4) == 2,
+                       i == 6, 0.07f * (float)((i * 3) % 3 - 1),
+                       0.06f * (float)((i * 11) % 3 - 1)});
+  }
+  for (const PoleSpec &p : nearLine) AddPole(p, true);
+  for (const PoleSpec &p : farLine) AddPole(p, true);
+  for (int i = 0; i < (int)nearLine.size(); i += 2)
+    AddStreetLight(nearLine[i], 1.0f);
+
+  // houses down both footpaths, set back behind their own low walls
+  for (int i = 0; i < 7; i++) {
+    float z = -54.0f + 18.0f * i;
+    if (std::fabs(z) < 13.0f) continue;
+    AddHouse(-14.0f - 1.6f * (float)(i % 3), z, 5.0f + 1.2f * (float)(i % 3),
+             5.4f + 1.0f * (float)((i * 5) % 3), 3.2f + 0.8f * (float)((i * 7) % 3),
+             1.0f);
+    AddHouse(15.0f + 1.8f * (float)(i % 2), z + 3.0f,
+             5.2f + 1.1f * (float)((i * 3) % 3),
+             5.6f + 0.9f * (float)((i * 7) % 3),
+             3.0f + 0.9f * (float)((i * 5) % 3), -1.0f);
+  }
+  for (int seg = 0; seg < 2; seg++) {
+    float a = seg ? 14.0f : z0;
+    float b = seg ? z1 : -14.0f;
+    AddPropertyLine(-10.2f, a, b, -1.0f);
+    AddPropertyLine(11.6f, a, b, 1.0f);
+  }
+
+  // its own conductors, comms bundles and loose spans, pole to pole
+  for (const std::vector<PoleSpec> *line : {&nearLine, &farLine}) {
+    for (int i = 0; i + 1 < (int)line->size(); i++) {
+      const PoleSpec &p = (*line)[i];
+      const PoleSpec &q = (*line)[i + 1];
+      for (float off : {-1.05f, 0.0f, 1.05f})
+        AddWire(ArmInsulatorTop(p, off), ArmInsulatorTop(q, off), 0.52f, 0.030f,
+                12, kCable, kMatCable);
+      AddWire(PoleTopInsulatorTop(p), PoleTopInsulatorTop(q), 0.42f, 0.035f, 12,
+              kCableOld, kMatCable);
+      for (float off : {-0.55f, 0.55f})
+        AddWire(Arm2InsulatorTop(p, off), Arm2InsulatorTop(q, off), 0.38f, 0.027f,
+                12, kCableOld, kMatCable);
+      for (int k = 0; k < 14; k++) {
+        float u0 = (float)k * 0.37f;  u0 -= std::floor(u0);
+        float u1 = (float)k * 0.61f + 0.23f; u1 -= std::floor(u1);
+        float u2 = (float)k * 0.83f;  u2 -= std::floor(u2);
+        AddWire(TelecomBracketTop(p, -0.66f + 1.32f * u0),
+                TelecomBracketTop(q, -0.66f + 1.32f * u1), 0.16f + 0.20f * u2,
+                0.019f + 0.010f * u2, 9, (k % 4 == 0) ? kCable : kCableOld,
+                kMatCable);
+      }
+      for (int k = 0; k < 5; k++) {
+        float u0 = (float)k * 0.41f + 0.07f; u0 -= std::floor(u0);
+        float h = 5.4f + 2.1f * u0;
+        Vec3 a = PoleAxisAt(p, h);
+        Vec3 b = PoleAxisAt(q, h);
+        a.x += PoleRoadSide(p) * (0.28f + 0.62f * u0);
+        b.x += PoleRoadSide(q) * (0.28f + 0.62f * u0);
+        AddWire(a, b, 0.22f, 0.009f, 9, kCableOld, kMatCable);
+      }
+    }
+    AddTelecomBundle(TelecomBracketTop((*line)[0], -0.35f),
+                     TelecomBracketTop((*line)[1], -0.35f), 5, 0.024f, 11, kCable);
+  }
+  // horizontal spans straight across the side road between the two lines
+  for (int i = 0; i < (int)nearLine.size(); i++) {
+    const PoleSpec &p = nearLine[i];
+    const PoleSpec &q = farLine[i % farLine.size()];
+    for (int k = 0; k < 6; k++) {
+      float u = (float)k / 6.0f;
+      float h = 4.6f + 4.0f * u;
+      Vec3 a = PoleAxisAt(p, h);
+      Vec3 b = PoleAxisAt(q, h);
+      a.x += 0.30f + 0.55f * u;
+      b.x -= 0.30f + 0.55f * u;
+      AddWire(a, b, 0.12f + 0.05f * (float)(k % 3),
+              0.009f + 0.005f * (float)((k + i) % 3), 10,
+              (k % 2 == 0) ? kCable : kCableOld, kMatCable);
+    }
+  }
+
+  EndCrossFrame();
+
+  // ---- tie the cross street into the corridor itself
+  auto nearestPole = [](const std::vector<PoleSpec> &line, float z) {
+    const PoleSpec *best = &line[0];
+    for (const PoleSpec &p : line)
+      if (std::fabs(p.z - z) < std::fabs(best->z - z)) best = &p;
+    return best;
+  };
+  struct Tie { float lx, lz; const std::vector<PoleSpec> *line; float mz; };
+  const Tie ties[4] = {{-6.0f, -14.0f, &lineA, 51.6f},
+                       {-6.0f, 14.0f, &lineA, 64.0f},
+                       {5.4f, -14.0f, &lineB, 52.5f},
+                       {5.4f, 14.0f, &lineB, 68.0f}};
+  for (const Tie &t : ties) {
+    const PoleSpec &mp = *nearestPole(*t.line, t.mz);
+    for (int k = 0; k < 5; k++) {
+      float h = 4.7f + 0.85f * (float)k;
+      Vec3 a{kRoadX + t.lz, h, kCrossZ - t.lx};
+      Vec3 b = PoleAxisAt(mp, h);
+      AddWire(a, b, 0.28f + 0.06f * (float)(k % 3), 0.013f, 12, kCableOld,
+              kMatCable);
+    }
+  }
+  // and a service drop off every cross pole that has a roof within reach
+  for (const std::vector<PoleSpec> *line : {&nearLine, &farLine}) {
+    for (const PoleSpec &p : *line) {
+      Vec3 from{kRoadX + p.z, 5.35f, kCrossZ - p.x};
+      int best = -1;
+      float bestD = 1e9f;
+      for (size_t k = 0; k < gDropAnchors.size(); k++) {
+        const Vec3 &q = gDropAnchors[k];
+        float d = std::sqrt((q.x - from.x) * (q.x - from.x) +
+                            (q.z - from.z) * (q.z - from.z));
+        if (d > 3.0f && d < bestD) { bestD = d; best = (int)k; }
+      }
+      if (best < 0 || bestD > 20.0f) continue;
+      AddCylinder({from.x, from.y - 0.07f, from.z},
+                  {from.x, from.y + 0.07f, from.z}, 0.026f, 0.026f, 6, kMetal,
+                  kMatMetal);
+      AddWire(from, gDropAnchors[best], 0.50f, 0.017f, 13, kCableOld,
+              kMatCable);
+    }
+  }
+}
+
+static void BuildSceneGeometry() {
   gVerts.clear();
   gIdx.clear();
   gLineA.clear();
@@ -1083,6 +1314,47 @@ static void AddTreeline() {
     AddWire(ArmInsulatorTop(p, 1.05f), ArmInsulatorTop(q, -1.05f), 1.30f,
             0.028f, 16, kCable, kMatCable);
   }
+
+  // ---- the horizontal web above the corridor. Spans strung straight across,
+  // bay after bay, at every height the two lines actually carry: the wires
+  // running away from the eye converge, and it is these cross runs that make
+  // the sky above a street read as wired rather than as two rows of masts.
+  {
+    auto nearestOnB = [&lineB](float z) {
+      const PoleSpec *best = &lineB[0];
+      for (const PoleSpec &p : lineB)
+        if (std::fabs(p.z - z) < std::fabs(best->z - z)) best = &p;
+      return best;
+    };
+    for (int i = 0; i + 1 < (int)lineA.size(); i++) {
+      const PoleSpec &a = lineA[i];
+      const PoleSpec &b = *nearestOnB(a.z);
+      const float topH = std::min(a.height, b.height) - 0.45f;
+      for (int k = 0; k < 9; k++) {
+        const float u = (float)k / 9.0f;
+        float h = 4.15f + 4.6f * u + 0.16f * std::sin((float)i * 1.9f + u * 6.0f);
+        h = std::min(h, topH);
+        Vec3 p = PoleAxisAt(a, h);
+        Vec3 q = PoleAxisAt(b, h);
+        p.x += PoleRoadSide(a) * (0.20f + 0.92f * (float)((k * 3) % 5) / 5.0f);
+        q.x += PoleRoadSide(b) * (0.20f + 0.92f * (float)((k * 7) % 5) / 5.0f);
+        p.z += 0.10f * (float)((k + i) % 5) - 0.20f;
+        q.z -= 0.10f * (float)((k * 2 + i) % 5) - 0.20f;
+        AddWire(p, q, 0.09f + 0.05f * (float)(k % 3),
+                0.008f + 0.006f * (float)((k + i) % 3), 12,
+                (k % 3 == 0) ? kCable : kCableOld, kMatCable);
+      }
+      // a fat static wire right across the tops, every other bay
+      if ((i % 2) == 0) {
+        AddWire(PoleTopInsulatorTop(a), PoleTopInsulatorTop(b), 0.06f, 0.026f,
+                16, kCableOld, kMatCable);
+        AddWire(ArmInsulatorTop(a, 0.45f), ArmInsulatorTop(b, 0.45f), 0.05f,
+                0.021f, 16, kCable, kMatCable);
+      }
+    }
+  }
+
+  BuildCrossStreet(lineA, lineB);
   for (int i = 0; i < 8; i++) {
     float z = -4.0f + 19.0f * i + 3.0f * ((i * 7) % 3);
     AddHouse(-11.5f - 2.0f * (i % 3), z, 4.6f + 1.4f * ((i * 3) % 3),
@@ -1178,12 +1450,19 @@ static void AddTreeline() {
       gIdx.push_back(es); gIdx.push_back(es + 1); gIdx.push_back(es + 2);
       gIdx.push_back(es); gIdx.push_back(es + 2); gIdx.push_back(es + 3);
     }
+    // Kerbs stop at the cross street and pick up again on its far side, so
+    // the junction has an open mouth instead of a kerb running through it.
+    const float kGate = 5.6f;
     for (int e = 0; e < 2; e++) {
       float sgn = e ? 1.0f : -1.0f;
       float xc = (e ? kRoadX + kRoadHalf : kRoadX - kRoadHalf) + sgn * 0.16f;
-      AddBox({xc, kKerbTopY * 0.5f, (z0 + z1) * 0.5f}, {0.16f, kKerbTopY * 0.5f,
-             (z1 - z0) * 0.5f},
-             {0.245f, 0.238f, 0.225f}, kMatKerb);
+      for (int seg = 0; seg < 2; seg++) {
+        float a = seg ? kCrossZ + kGate : z0;
+        float b = seg ? z1 : kCrossZ - kGate;
+        AddBox({xc, kKerbTopY * 0.5f, (a + b) * 0.5f},
+               {0.16f, kKerbTopY * 0.5f, (b - a) * 0.5f},
+               {0.245f, 0.238f, 0.225f}, kMatKerb);
+      }
     }
     for (float z = -60.0f; z < 400.0f; z += 8.0f) {
       unsigned int ds = (unsigned int)gVerts.size();
@@ -1196,13 +1475,17 @@ static void AddTreeline() {
     }
     for (int e = 0; e < 2; e++) {
       float xl = e ? kRoadX + kRoadHalf - 0.40f : kRoadX - kRoadHalf + 0.26f;
-      unsigned int es = (unsigned int)gVerts.size();
-      PushVert({xl, kPaintY, z0}, n, paint, kMatLine);
-      PushVert({xl + 0.14f, kPaintY, z0}, n, paint, kMatLine);
-      PushVert({xl + 0.14f, kPaintY, z1}, n, paint, kMatLine);
-      PushVert({xl, kPaintY, z1}, n, paint, kMatLine);
-      gIdx.push_back(es); gIdx.push_back(es + 1); gIdx.push_back(es + 2);
-      gIdx.push_back(es); gIdx.push_back(es + 2); gIdx.push_back(es + 3);
+      for (int seg = 0; seg < 2; seg++) {
+        float a = seg ? kCrossZ + 5.6f : z0;
+        float b = seg ? z1 : kCrossZ - 5.6f;
+        unsigned int es = (unsigned int)gVerts.size();
+        PushVert({xl, kPaintY, a}, n, paint, kMatLine);
+        PushVert({xl + 0.14f, kPaintY, a}, n, paint, kMatLine);
+        PushVert({xl + 0.14f, kPaintY, b}, n, paint, kMatLine);
+        PushVert({xl, kPaintY, b}, n, paint, kMatLine);
+        gIdx.push_back(es); gIdx.push_back(es + 1); gIdx.push_back(es + 2);
+        gIdx.push_back(es); gIdx.push_back(es + 2); gIdx.push_back(es + 3);
+      }
     }
   }
 
@@ -1542,6 +1825,15 @@ static void RenderScene() {
   Mat4 view;
   {
     Vec3 look{-0.45f, 5.5f, gCamPos.z + 26.0f};
+    // At the cross street the shot turns down each arm of the junction before
+    // the dolly picks the corridor up again.
+    const float lookYaw = gAutoCam ? CrossLookAngle(t) : 0.0f;
+    if (lookYaw != 0.0f) {
+      Vec3 off = Vec3Sub(look, eye);
+      const float c = std::cos(lookYaw), s = std::sin(lookYaw);
+      off = {off.x * c + off.z * s, off.y, -off.x * s + off.z * c};
+      look = Vec3Add(eye, off);
+    }
     Mat4LookAt(view, eye, look, {0, 1, 0});
   }
   float aspect = (float)gWindowWidth / (float)gWindowHeight;
