@@ -254,24 +254,32 @@ static Vec3 gCamPos{0.0f, 2.0f, 4.0f};
 static float gCamYaw = 0.0f, gCamPitch = -0.06f, gCamDist = 7.0f;
 
 // Looking up the corridor is the shot, except at the cross street: on the way
-// into the junction the eye swings left down the side road, then right down the
-// other arm, then back to the corridor and carries on. The angle is in radians
-// about the camera, positive toward +X (the east side of the run).
+// into the junction the eye turns down one arm of the side road, swings across
+// to the other arm while it is standing in the mouth of the junction, then picks
+// the corridor back up and carries on. The angle is a yaw in radians about the
+// camera, positive toward +X (the east side of the run).
+//
+// Both stops aim along the side street's own centreline. The angles are not
+// symmetric because the look point sits 26 m up the corridor and a little to
+// the left of the eye: rotating the corridor's own view vector by +1.674 rad
+// points due +X, and by -1.467 rad due -X. The earlier pair stopped 13 and 16
+// degrees short of the two arms, which on the right-hand look put the near
+// corner's houses across the frame instead of the road.
 static float CrossLookAngle(float t) {
   const float kSpeed = 2.6f;
-  const float tMid = (kCrossZ - 4.0f) / kSpeed;   // when the eye reaches the junction
-  const float u = t - (tMid - 4.8f);              // 0 about five seconds before it
-  if (u <= 0.0f || u >= 11.6f) return 0.0f;
+  const float tJ = (kCrossZ - 4.0f) / kSpeed;   // eye level with the junction
+  const float u = t - tJ;                       // seconds either side of that
+  if (u <= -5.0f || u >= 5.8f) return 0.0f;
   auto seg = [u](float a, float b) {
     float f = (u - a) / (b - a);
     f = std::min(std::max(f, 0.0f), 1.0f);
     return f * f * (3.0f - 2.0f * f);
   };
-  const float left = 1.32f;    // ~76 degrees down the far arm
-  const float right = -1.20f;  // and back across to the near one
-  if (u < 4.2f) return left * seg(0.4f, 3.8f);
-  if (u < 7.4f) return left + (right - left) * seg(4.2f, 7.0f);
-  return right * (1.0f - seg(7.6f, 11.2f));
+  const float east = 1.674f;   // straight down the far arm (+X)
+  const float west = -1.467f;  // straight down the near arm (-X)
+  if (u < -1.6f) return east * seg(-4.4f, -2.4f);
+  if (u < 0.5f) return east + (west - east) * seg(-1.6f, 0.5f);
+  return west * (1.0f - seg(1.6f, 5.4f));
 }
 
 static void UpdateAutoCamera(float t) {
@@ -2815,7 +2823,13 @@ static void Setup() {
   // threshold and draw a neon line along every wall top.
   gPostSettings.threshold = 1.60f;
   gPostSettings.knee = 0.60f;
-  gPostSettings.aberration = 0.0030f;
+  // Lateral chromatic aberration is off here. Every frame of this scene is
+  // full of one-pixel bright lines against near-black - kerb paint, wall caps,
+  // window frames, the wires - and sampling red and blue a fraction of a pixel
+  // either side of a line that thin splits it into separate red and blue
+  // ghosts, which read as coloured confetti scattered along the road and the
+  // foot of the houses. The bloom and the flare still carry the lens.
+  gPostSettings.aberration = 0.0f;
   gPostSettings.vignette = 0.22f;
   gPostSettings.grain = 0.018f;
   // The flare ghosts were reading as pale sheets of glass over the sky.
