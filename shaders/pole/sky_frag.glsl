@@ -195,12 +195,15 @@ void main() {
     // scene is lit by this sky, which is what separates warm keys from blue
     // shadows instead of tinting every surface the same orange.
     float skyLum = dot(sky, vec3(0.2126, 0.7152, 0.0722));
-    float up = smoothstep(-0.03, 0.62, h);
-    vec3 zenith = sky * vec3(0.58, 0.84, 1.42);
-    vec3 horizon = vec3(1.80, 0.98, 0.58) * (skyLum * 1.20 + 0.030);
+    // Amber dusk rather than blue hour: the amber band reaches higher and
+    // carries more red, and the sun side of the sky is graded warmer, so the
+    // lower half of the frame is orange while the zenith stays blue.
+    float up = smoothstep(-0.03, 0.80, h);
+    vec3 zenith = sky * vec3(0.66, 0.86, 1.22);
+    vec3 horizon = vec3(2.15, 1.00, 0.44) * (skyLum * 1.30 + 0.040);
     sky = mix(horizon, zenith, up);
-    float sunSide = pow(max(dot(dir, sun), 0.0), 3.0) * (1.0 - up);
-    sky = mix(sky, vec3(1.90, 1.06, 0.58) * (skyLum + 0.02), sunSide * 0.50);
+    float sunSide = pow(max(dot(dir, sun), 0.0), 2.4) * (1.0 - up * 0.75);
+    sky = mix(sky, vec3(2.30, 1.10, 0.46) * (skyLum + 0.03), sunSide * 0.62);
 
     // Below the horizon the ground geometry covers the frame; give the dome a
     // dark warm ground colour for the cubemap/reflection fallback.
@@ -230,8 +233,8 @@ void main() {
             // Clamp the forward Mie peak (see scene 2's sky): raw g = 0.72
             // phase reaches ~70 and clips the cloud edge to pure white.
             float phM = min(miePhase(mu, 0.72) * 4.0 * PI, 6.0);
-            vec3 sunCol = vec3(1.80, 1.02, 0.62) * viewT * kSunI * 0.20;
-            vec3 ambCol = vec3(0.26, 0.33, 0.46) * (0.55 + 0.45 * hf);
+            vec3 sunCol = vec3(2.00, 1.06, 0.54) * viewT * kSunI * 0.20;
+            vec3 ambCol = vec3(0.30, 0.33, 0.42) * (0.55 + 0.45 * hf);
 
             vec3 cloud = ambCol * (0.55 + 0.45 * hf);
             cloud += sunCol * (0.10 + 0.90 * transmit)
@@ -253,7 +256,7 @@ void main() {
     float veil = cirrus(dir);
     if (veil > 0.002) {
         float fwd = pow(max(mu, 0.0), 5.0);
-        vec3 cirCol = mix(vec3(0.30, 0.34, 0.44), vec3(1.18, 0.72, 0.44),
+        vec3 cirCol = mix(vec3(0.32, 0.33, 0.42), vec3(1.30, 0.74, 0.40),
                           0.18 + 0.82 * fwd);
         sky = mix(sky, cirCol * (0.55 + 0.45 * viewT.g), veil * 0.13);
     }

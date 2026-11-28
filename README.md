@@ -15,7 +15,7 @@ headless capture pipeline can still pin the framebuffer exactly.
 |---|---|---|
 | **Scene 1 — Electro Range** | OpenGL 3.3 core, GLSL 3.30 | **110 MP5s** standing in five rings on a polished, wet concrete carousel in a dark hangar, drawn with **instanced draws** (one per model part): full PBR from each part's **six maps** (base colour, normal, metallic, height, AO, roughness), shadow-mapped key light, three moving colour-gelled light bars, real **planar reflections** in the slab, HDR bloom and a scripted crane/dolly camera |
 | **Scene 2** | OpenGL 3.3 core, pixel-shader workloads | An ocean at dusk (3DMark2001 SE "Pixel Shader" benchmark recreation): a **Phillips-spectrum wave set** with deep-water dispersion, ray-marched **screen-space sea reflections**, advected whitecap trails and a cloud deck with second-order light transport |
-| **Scene 3** | OpenGL 3.3 core, analytic shaders | A utility corridor at blue-hour dusk under a **physically-based atmosphere** (Rayleigh + Mie, limb-darkened sun disc, wind-blown cumulus): fat **spun-concrete** pole shafts with band clamps, **pole-mounted transformer banks**, cutouts, PVC riser ducts and number plates, wrapped in a **dense web of 26 thin slack telecom cables per bay**, loose half-abandoned spans, **service drops to every house in reach** and **hanging slack coils and fibre closures**, two lattice cell masts for scale, a **damp asphalt road with cast concrete kerbs that mirrors the sunset**, gutters and downpipes on every house, manholes, storm drains and weeds along the gutter, **per-pixel procedural relief** on the concrete, asphalt, timber and roofing, houses with lit windows and everything has 4x MSAA |
+| **Scene 3** | OpenGL 3.3 core, analytic shaders | A utility corridor at **amber dusk** under a **physically-based atmosphere** (Rayleigh + Mie, limb-darkened sun disc, wind-blown cumulus): fat **spun-concrete** pole shafts with band clamps, **pole-mounted transformer banks**, cutouts, PVC riser ducts and number plates, wrapped in a **dense web of 26 thin slack telecom cables per bay** plus **cross spans strung straight over the street**, loose half-abandoned spans, **service drops to every house in reach** and **hanging slack coils and fibre closures**, a **second street crossing the corridor** with its own kerbs, concrete poles, houses and conductors tied back into the main lines, two lattice cell masts for scale, a **damp asphalt road with cast concrete kerbs that mirrors the sunset**, gutters and downpipes on every house, manholes, storm drains and weeds along the gutter, **per-pixel procedural relief** on the concrete, asphalt, timber and roofing, houses with lit windows, an auto-dolly that **pans down each arm of the junction** before carrying on, and everything has 4x MSAA |
 
 # System requirements : 
 
@@ -46,11 +46,11 @@ The lain scene:
 
 ![ElectroBench scene 3](docs/screenshots/lain_lines.png)
 
-Further down the run, past the kerbside weeds, gutters and storm drains:
+At the junction, the eye turning down the side street's own line of poles:
 
-![ElectroBench scene 3, further down the corridor](docs/screenshots/lain_lines_t24.png)
+![ElectroBench scene 3, looking down the side street at the junction](docs/screenshots/lain_lines_junction.png)
 
-**In motion - but very slow**: the auto-dolly walking the corridor (four positions down the run): the cable web sweeping overhead pole after pole, slack coils swinging past, guy wires pulling into their anchor blocks, and the telecom bundles peeling off toward the eaves:
+**In motion - but very slow**: the auto-dolly walking the corridor (four positions down the run, through the junction and its look left and right): the cable web sweeping overhead pole after pole, slack coils swinging past, guy wires pulling into their anchor blocks, and the telecom bundles peeling off toward the eaves:
 
 ![Scene 3 in motion](docs/screenshots/lain_lines.gif)
 
@@ -118,13 +118,22 @@ Controls : the fly-over camera is automatic from launch; `ESC` quits.
 # Scene 3
 
 **Scene 3** lives in the same ElectroBench binary and is also **OpenGL 3.3 core**. The
-utility corridor: cool gravel under a blue-hour dusk, two lines of steel poles marching to the
-horizon, and a wall of wires over your head. The sky is a physically integrated Rayleigh + Mie
-atmosphere graded for dusk - blue overhead, sodium-amber only in the horizon band and around the
-sun - and because every object's ambient comes from that same sky cubemap, the shadows read blue
-against the warm key instead of the whole frame sitting in one amber wash. Grazing reflections use
-a roughness-aware Fresnel, so rough plaster and asphalt no longer mirror the bright horizon and
-blow out to white, and the walls stay concrete instead of reading as lit panels.
+utility corridor: cool gravel under an amber dusk, two lines of steel poles marching to the
+horizon, and a wall of wires over your head - including spans strung straight across the street
+bay after bay, which is what makes the sky above a wired street read as wired. The sky is a
+physically integrated Rayleigh + Mie atmosphere graded warm: an amber band reaching well up from
+the horizon and around the sun, with the blue left at the zenith, and because every object's
+ambient comes from that same sky cubemap, the shadows read blue against the warm key instead of
+the whole frame sitting in one flat wash. Grazing reflections use a roughness-aware Fresnel, so
+rough plaster and asphalt no longer mirror the bright horizon and blow out to white, and the
+walls stay concrete instead of reading as lit panels.
+
+About halfway down the run a second street crosses the corridor: its own asphalt with kerbs, a
+line of concrete poles down each footpath, houses behind low walls, its own conductors, comms
+bundles and loose spans, and spans tying its poles back into both main lines. The kerbs and edge
+lines of the corridor stop at the junction mouth and pick up again on the far side. The auto-dolly
+turns the eye down one arm of the junction on the way in, swings across to the other, and then
+picks the corridor back up and keeps walking.
 
 - `--screenshot FILE --shot-time S` writes a frame straight out of the
   framebuffer, before the buffer swap. This is what the committed screenshots in
